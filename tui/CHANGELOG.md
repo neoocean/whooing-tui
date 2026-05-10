@@ -2,6 +2,47 @@
 
 각 항목은 Perforce CL 단위로 끊는다.
 
+## CL #50987 — 0.7.2 — Step 4 MCP 직접 호출 scaffolding (2026-05-10)
+
+후속 권장 1번. 후잉 공식 MCP (https://whooing.com/mcp) 호출 thin bridge.
+같은 monorepo 의 `mcp/` 패키지가 이미 `OfficialMcpClient` 로 HTTP JSON-RPC
+를 구현해 놨으므로 본 모듈은 그 클라이언트를 wrap 해 TUI 컨벤션
+(`ToolError`) 으로 결과를 변환만 한다.
+
+### 추가
+
+- `tui/src/whooing_tui/mcp_bridge.py` — `WhooingMcpBridge` 클래스.
+  * 지연 import (`from whooing_mcp.official_mcp import OfficialMcpClient`).
+    monorepo 외부 환경에서 import 실패 시 `ToolError("INTERNAL", ...)` 로
+    명확한 안내.
+  * `list_tools()` / `call(name, arguments)` 위임.
+  * `_to_tool_error()` — `OfficialMcpError` 의 JSON-RPC code 가 -32600
+    근처면 USER_INPUT, 그 외는 UPSTREAM. 일반 예외 (timeout 등) 도
+    UPSTREAM.
+- `tui/tests/test_mcp_bridge.py` — 6 cases:
+  * monkeypatch 로 `whooing_mcp.official_mcp` 모듈을 fake 로 교체해 실
+    네트워크 없이 검증.
+  * ImportError → `ToolError(INTERNAL)`.
+  * 정상 위임 (list_tools / call_tool 인자 보존).
+  * `OfficialMcpError(code=-32000)` → UPSTREAM, `code=-32600` → USER_INPUT.
+  * `TimeoutError` 같은 일반 예외 → UPSTREAM.
+
+### 수정
+
+- `tui/DESIGN.md` §6 의 6번 (MCP 직접 호출) — ✅ scaffolding 마킹.
+  본격 UI 통합 (보고서 / 예산 / 자주입력 매칭 등) 은 후속 CL.
+- `tui/CHANGELOG.md` / `tui/MEMORY.md` — 본 항목.
+- `tui/pyproject.toml` + `__init__.py` — 0.7.1 → 0.7.2.
+
+### 검증
+
+- `make test-tui` → tui 176 passed (Phase 6 152 + cli 18 + mcp_bridge 6).
+
+### 의도적 누락 (UI 통합)
+
+- HomeScreen / 별도 ReportsScreen 등에서 `WhooingMcpBridge` 호출 노출.
+- 본 CL 은 라이브러리 layer 만 — 후속에서 화면 / 키바인딩 추가.
+
 ## CL #50980 — 0.7.1 — cli.py 헤드리스 dispatch 단위 테스트 (2026-05-10)
 
 권장 후속 4번. 0.5.1 의 `make coverage` 에서 `cli.py` 가 0% 였던 것을

@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "whooing-tui"
-version = "0.7.1"
+version = "0.7.2"
 description = "Textual TUI for Whooing (whooing.com) — sections / accounts / entries 를 터미널에서 빠르게 다룬다."
 readme = "README.md"
 requires-python = ">=3.11"
