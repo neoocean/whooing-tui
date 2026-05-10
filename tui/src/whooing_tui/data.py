@@ -105,14 +105,20 @@ def attachments_root() -> Path:
 
 
 def init_shared_schema() -> Path:
-    """앱 시작 시 1회. db / attachments dir 둘 다 보장 + 스키마 init.
+    """앱 시작 시 1회. db / attachments dir 둘 다 보장 + P4 sync + 스키마
+    init.
 
     CL #51107+: 새 위치 (`<project>/db/`) 진입 시 기존 home 위치
     (`~/.whooing/whooing-data.sqlite`) 의 db 가 있으면 *target 에 db 가
     없을 때만* 1회 복사 — 기존 사용자의 메모/해시태그 보존.
 
-    `WHOOING_DATA_DIR` 가 명시 set 되면 마이그레이션 skip — 테스트가
-    isolated tmp 에 실 사용자의 db 를 끌어오지 않게.
+    CL #51119+ 사용자 요청: 시작 시 P4 환경이 갖춰져 있으면 `p4 sync` 로
+    db 파일을 최신 (head) 으로 갱신 — 다른 환경에서 submit 된 변경분을
+    받아온다. P4 부재면 silent skip. `core_db.init_schema` *이전* 에 sync
+    해야 PRAGMA / schema_meta 쓰기가 새 head 위에 일어남.
+
+    `WHOOING_DATA_DIR` 가 명시 set 되면 마이그레이션 + sync 모두 skip —
+    테스트가 isolated tmp 에 실 사용자 데이터 / P4 상태를 끌어오지 않게.
 
     Returns: db 의 절대 경로 (편의).
     """
@@ -120,6 +126,13 @@ def init_shared_schema() -> Path:
     p.parent.mkdir(parents=True, exist_ok=True)
     if os.getenv("WHOOING_DATA_DIR") is None:
         _maybe_migrate_legacy_db(p.parent)
+        # P4 환경 있을 때만 silent sync — 다음에 init_schema 가 idempotent
+        # 한 PRAGMA / schema_meta 쓰기를 새 head 위에 적용.
+        try:
+            from whooing_tui import p4_sync
+            p4_sync.sync_db_from_p4(p)
+        except Exception:  # pragma: no cover — 절대 실패 표면화 X
+            log.debug("p4 sync at startup failed (silent)", exc_info=True)
     attachments_root().mkdir(parents=True, exist_ok=True)
     core_db.init_schema(p)
     return p

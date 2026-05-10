@@ -2,6 +2,64 @@
 
 각 항목은 Perforce CL 단위로 끊는다.
 
+## CL #51119 — 0.16.3 — 시작 시 db sync (P4 환경 있을 때) + 종료 시 누락 변경 flush submit (사용자 요청) (2026-05-10)
+
+사용자 요청 3건:
+1. 다음부터 앱을 시작할 때 P4 환경이 갖춰져 있으면 db 파일을 업데이트.
+2. 종료할 때, 데이터를 변경할 때마다 서브밋. (#2 의 "변경할 때마다" 는
+   기존 `_persist_local`/`_purge_local` 흐름이 이미 처리 — 본 CL 은
+   "종료할 때" 마지막 안전망 추가).
+3. 다음부터 데이터베이스를 테스트할 때는 반드시 백업 → 테스트 → 정상
+   상태 확인 → 백업 제거 절차. (운영 규칙 — 코드 변경 X).
+
+### 추가
+
+- `tui/src/whooing_tui/p4_sync.py`
+  - `sync_db_from_p4(db_path)` — 시작 시 호출. P4 환경 + 매핑 OK 면
+    `p4 sync <db_path>` 실행. 부재 / 매핑 외 / sync 실패 모두 silent.
+    `init_schema` 의 PRAGMA / `INSERT OR REPLACE schema_meta` 가 새 head
+    위에 적용되도록 *init_schema 이전에* 호출.
+  - `flush_on_exit(db_path, *, description)` — 종료 시 호출.
+    `wait_for_pending()` 으로 진행중 submit join 후, 추가로 blocking
+    `_do_submit` 한 번 더 (마지막 안전망 — race / 누락 케이스 보호).
+    `description` 기본값 `[whooing-tui] session end — flush pending db
+    changes`.
+
+### 수정
+
+- `tui/src/whooing_tui/data.py`
+  - `init_shared_schema()` 가 `WHOOING_DATA_DIR` 미설정 시 (실 사용자
+    환경) `p4_sync.sync_db_from_p4` 를 `core_db.init_schema` 직전에 호출.
+    `WHOOING_DATA_DIR` 설정 시 (테스트 / 명시 override) skip — 테스트가
+    실 P4 상태를 끌어오지 않게.
+- `tui/src/whooing_tui/app.py`
+  - `WhooingTuiApp.on_unmount()` 가 `wait_for_pending` 만 호출하던 것을
+    `flush_on_exit(db_path)` 로 확장. `WHOOING_DATA_DIR` 설정 시는
+    `wait_for_pending` 만 (테스트 격리).
+
+### 테스트
+
+- `tui/tests/test_p4_sync.py` — 4 신규:
+  - `test_sync_silent_when_p4_missing`
+  - `test_sync_silent_when_not_in_p4_workspace`
+  - `test_sync_runs_p4_sync_when_mapped`
+  - `test_flush_on_exit_waits_then_submits`
+- 합계: 455 → **459 통과** (+4).
+
+### 사용자 흐름
+
+```mermaid
+graph LR
+    S[App start] -->|env unset + p4 OK| SY[p4 sync db]
+    SY --> IS[core_db.init_schema]
+    IS --> M[user mutation]
+    M -->|_persist_local| AS[자동 submit Thread]
+    AS -->|_PENDING| W[wait_for_pending at exit]
+    W --> FE[flush_on_exit submit]
+    FE --> X[App quit]
+    S -->|p4 부재| IS
+```
+
 ## CL #51118 — 0.16.2 — p4_sync daemon thread submit 미완료 회귀 fix + 누적 로컬 db 변경분 수동 submit (사용자 보고) (2026-05-10)
 
 사용자 보고: "sqlite 데이터베이스는 퍼포스 서버에 올라가 있습니까"

@@ -141,6 +141,76 @@ def test_wait_for_pending_when_empty_is_noop():
     p4_sync.wait_for_pending()
 
 
+# ---- CL #51119+: sync_db_from_p4 / flush_on_exit ------------------------
+
+
+def test_sync_silent_when_p4_missing(monkeypatch, tmp_path):
+    """`p4` 부재 → 예외 없이 silent return."""
+    monkeypatch.delenv("WHOOING_P4_BIN", raising=False)
+    with patch("whooing_tui.p4_sync.shutil.which", return_value=None):
+        p4_sync.sync_db_from_p4(tmp_path / "db.sqlite")
+
+
+def test_sync_silent_when_not_in_p4_workspace(monkeypatch, tmp_path):
+    """`p4 where` 가 0 이 아닌 경우 (매핑 외) → silent skip, sync 미실행."""
+    log_file = tmp_path / "p4-calls.txt"
+    fake_p4 = tmp_path / "p4"
+    fake_p4.write_text(
+        f"#!/bin/sh\n"
+        f"echo \"$@\" >> {log_file}\n"
+        f"if [ \"$1\" = \"where\" ]; then exit 1; fi\n"
+        f"exit 0\n",
+    )
+    fake_p4.chmod(0o755)
+    monkeypatch.setenv("WHOOING_P4_BIN", str(fake_p4))
+    db = tmp_path / "db.sqlite"
+    db.write_bytes(b"")
+    p4_sync.sync_db_from_p4(db)
+    log = log_file.read_text().splitlines()
+    # where 만 호출되고 sync 는 호출되지 않아야.
+    assert any(line.startswith("where ") for line in log)
+    assert not any(line.startswith("sync ") for line in log)
+
+
+def test_sync_runs_p4_sync_when_mapped(monkeypatch, tmp_path):
+    """매핑 OK → `p4 sync <db>` 실행."""
+    log_file = tmp_path / "p4-calls.txt"
+    fake_p4 = tmp_path / "p4"
+    fake_p4.write_text(
+        f"#!/bin/sh\necho \"$@\" >> {log_file}\nexit 0\n",
+    )
+    fake_p4.chmod(0o755)
+    monkeypatch.setenv("WHOOING_P4_BIN", str(fake_p4))
+    db = tmp_path / "db.sqlite"
+    db.write_bytes(b"")
+    p4_sync.sync_db_from_p4(db)
+    log = log_file.read_text().splitlines()
+    # where + sync 양쪽 호출.
+    assert any(line.startswith("where ") for line in log)
+    sync_calls = [l for l in log if l.startswith("sync ")]
+    assert len(sync_calls) == 1
+    assert str(db) in sync_calls[0]
+
+
+def test_flush_on_exit_waits_then_submits(monkeypatch, tmp_path):
+    """flush_on_exit 가 wait_for_pending → blocking submit 순서로 호출."""
+    log_file = tmp_path / "p4-calls.txt"
+    fake_p4 = tmp_path / "p4"
+    fake_p4.write_text(
+        f"#!/bin/sh\necho \"$@\" >> {log_file}\nexit 0\n",
+    )
+    fake_p4.chmod(0o755)
+    monkeypatch.setenv("WHOOING_P4_BIN", str(fake_p4))
+    db = tmp_path / "db.sqlite"
+    db.write_bytes(b"")
+    p4_sync.flush_on_exit(db)
+    log = log_file.read_text().splitlines()
+    # where + reconcile + submit 모두 호출 (blocking submit 흐름).
+    assert any(l.startswith("where ") for l in log)
+    assert any("reconcile" in l for l in log)
+    assert any("submit -d" in l for l in log)
+
+
 def test_submit_runs_reconcile_and_submit_when_mapped(monkeypatch, tmp_path):
     """매핑돼 있으면 reconcile + submit 까지 도달. 호출 명령을 captured 로 검증."""
     log_file = tmp_path / "p4-calls.txt"

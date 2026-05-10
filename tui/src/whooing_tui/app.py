@@ -83,17 +83,28 @@ class WhooingTuiApp(App):
         self.push_screen(EntriesScreen(self._client))
 
     def on_unmount(self) -> None:
-        """App 종료 직전 — 진행 중인 P4 sync submit 들을 끝까지 기다린다.
+        """App 종료 직전 — 진행 중인 P4 sync submit 들을 끝까지 기다린 뒤,
+        추가로 한 번 더 reconcile + submit (마지막 안전망).
 
-        CL #51118+: 사용자 보고에 따르면 0.15.0~0.15.1 까지의 daemon thread
-        는 main thread 종료 시 같이 죽어 마지막 mutation 의 자동 submit 이
-        미완료로 끝남. `wait_for_pending` 으로 모든 활성 submit 을 join.
+        CL #51118+: 0.15.0~0.15.1 까지의 daemon thread 가 main thread 종료
+        시 같이 죽어 마지막 mutation 의 자동 submit 이 미완료로 끝남.
+        `wait_for_pending` 으로 모든 활성 submit join.
+        CL #51119+ (사용자 요청): 추가로 종료 시점에 `flush_on_exit` 한 번
+        더 — race / 누락 케이스에서도 마지막 변경이 P4 에 반영되도록.
+        `WHOOING_DATA_DIR` env 이 명시 set 이면 (테스트 격리) skip.
         """
         try:
+            import os
+            from whooing_tui import data as tui_data
             from whooing_tui import p4_sync
-            p4_sync.wait_for_pending()
+            if os.getenv("WHOOING_DATA_DIR") is not None:
+                # 테스트 / 명시 override — flush 자체가 사용자 실 db 를
+                # 건드리지 않게 wait 만.
+                p4_sync.wait_for_pending()
+                return
+            p4_sync.flush_on_exit(tui_data.db_path())
         except Exception:  # pragma: no cover — 종료 흐름은 절대 막지 않음
-            log.debug("p4 sync wait failed at unmount", exc_info=True)
+            log.debug("p4 sync flush failed at unmount", exc_info=True)
 
     def action_toggle_theme(self) -> None:
         try:

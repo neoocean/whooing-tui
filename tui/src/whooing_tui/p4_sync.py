@@ -227,6 +227,60 @@ def submit_db_to_p4(
     t.start()
 
 
+def sync_db_from_p4(db_path: Path) -> None:
+    """앱 시작 시 호출. P4 환경 + 워크스페이스 매핑 양쪽 OK 면 `p4 sync`
+    로 db 파일을 최신 (head) 으로 갱신.
+
+    CL #51119+ 사용자 요청: 다른 환경 (다른 머신 / CL) 에서 submit 된
+    db 변경분을 받아오기 위해 매 시작 시점에 동기화.
+
+    실패는 fatal 이 아니다 — `_p4_bin()` 부재 / 매핑 외 / sync 실패 모두
+    silent return (사용자 표면화 X). 호출자는 그 다음에 `init_schema()`
+    같은 idempotent 작업을 그대로 진행.
+    """
+    bin_path = _p4_bin()
+    if bin_path is None:
+        log.debug("p4 bin 부재 — sync skip")
+        return
+    cwd = str(db_path.parent)
+    where = _run_p4(bin_path, ["where", str(db_path)], cwd=cwd, timeout=5)
+    if where.returncode != 0:
+        log.debug("db 가 P4 workspace 매핑 외 — sync skip")
+        return
+    sync = _run_p4(bin_path, ["sync", str(db_path)], cwd=cwd, timeout=30)
+    if sync.returncode != 0:
+        # `file(s) up-to-date` 도 stderr 로 나오는 케이스가 있어 무해 — 디버그 만.
+        log.debug(
+            "p4 sync (rc=%d): %s",
+            sync.returncode, (sync.stderr or sync.stdout or "").strip(),
+        )
+    else:
+        log.info("p4 sync 완료: %s", db_path)
+
+
+def flush_on_exit(
+    db_path: Path,
+    *,
+    description: str = "[whooing-tui] session end — flush pending db changes",
+) -> None:
+    """앱 종료 직전에 호출. 다음 두 가지를 순차 수행:
+
+    1. `wait_for_pending()` — 진행 중이던 submit worker 들 join.
+    2. *추가 안전망*: 그 사이에도 미반영 로컬 변경이 있을 수 있으므로
+       blocking 으로 한 번 더 `_do_submit` (변경 없으면 `p4 submit` 의
+       'no files to submit' 으로 silent skip — `_do_submit` 가 처리).
+
+    사용자 요청 (CL #51119+): "종료할 때, 데이터를 변경할 때마다 서브밋."
+    매 mutation 의 자동 submit 은 이미 `_persist_local`/`_purge_local`
+    경로에 있고, 본 함수는 *마지막 안전망* — race / 누락 케이스 보호.
+    """
+    wait_for_pending()
+    try:
+        _do_submit(db_path, description)
+    except Exception:  # pragma: no cover
+        log.debug("flush_on_exit submit failed (silent)", exc_info=True)
+
+
 def wait_for_pending(timeout_per_thread: float = 30.0) -> None:
     """모든 활성 submit 스레드를 join — App 종료 직전에 호출.
 
