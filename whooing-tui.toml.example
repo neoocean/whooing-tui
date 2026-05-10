@@ -1,0 +1,25 @@
+# whooing-tui 설정 — 템플릿
+#
+# 사용법:
+#   1. 이 파일을 'whooing-tui.toml' 로 복사:
+#        cp whooing-tui.toml.example whooing-tui.toml
+#   2. 필요한 옵션 활성화/조정.
+#   3. 'whooing-tui.toml' 은 .gitignore 가 차단하므로 안전.
+#
+# 탐색 우선순위 (서버가 먼저 발견된 1개를 사용):
+#   1. $WHOOING_TUI_CONFIG (절대 경로 override)
+#   2. <project root>/whooing-tui.toml
+#   3. ~/.config/whooing-tui/config.toml
+
+[ui]
+# 시작 시 사용할 Textual 테마. 빌트인: textual-dark / textual-light.
+# 미지정이면 textual-dark.
+theme = "textual-dark"
+
+# 거래 목록 화면 기본 페이지 크기 (rows). 후잉 API 가 한 번에 최대
+# 100건만 주므로 그보다 큰 값을 줘도 100 으로 cap 된다.
+entries_page_size = 50
+
+[entries]
+# 첫 진입 시 보여줄 거래 기간 (일). 30 = 최근 30일.
+default_window_days = 30

@@ -1,0 +1,16 @@
+/* whooing-tui — Phase 1 placeholder 스타일.
+ *
+ * 본 파일은 단순 자리잡기용. Phase 2 에서 화면별 스타일이 추가된다.
+ */
+
+#main {
+    align: center middle;
+    padding: 1 2;
+}
+
+#placeholder {
+    width: auto;
+    height: auto;
+    padding: 1 2;
+    border: round $accent;
+}

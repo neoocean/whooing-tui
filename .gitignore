@@ -1,0 +1,32 @@
+# Claude Code per-machine settings
+.claude/settings.local.json
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Secrets
+.env
+.env.*
+!.env.example
+
+# 실 사용자 config (P4 only). .example 만 git 으로.
+whooing-tui.toml
+!whooing-tui.toml.example
+
+# 로컬 캐시 / 세션 데이터
+*.sqlite
+*.sqlite3
+*.db-journal
+*.db-wal
+*.db-shm
+.whooing-tui-cache/
+
+# OS
+.DS_Store
