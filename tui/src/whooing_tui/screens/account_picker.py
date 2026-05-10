@@ -179,19 +179,17 @@ class AccountPickerScreen(ModalScreen[tuple[str, str, str] | None]):
         self.dismiss(None)
 
     def on_tree_node_selected(self, event: Tree.NodeSelected) -> None:
-        """leaf 가 선택됐으면 dismiss, branch 면 펼침/접힘 토글.
+        """leaf 가 선택됐으면 dismiss. branch 면 noop — Tree 의 `auto_expand`
+        가 이미 토글을 처리한다 (Textual 8.2.5 의 default).
 
-        Tree 의 default Enter 동작이 select 이벤트를 발사 — 같은 키가 leaf
-        선택과 branch 토글 양쪽을 한 번에 처리.
+        주의 (CL #51087 회귀): 이전에는 본 핸들러가 branch 위에서도
+        `node.expand()` / `node.collapse()` 를 명시적으로 호출했는데,
+        auto_expand 가 먼저 토글한 뒤 본 핸들러가 다시 토글해 결과적으로
+        원래 상태로 복귀하는 버그가 있었다 — 사용자가 Enter 를 눌러도
+        카테고리가 안 펼쳐지는 것처럼 보임.
         """
         node = event.node
         data = node.data
         # leaf 는 data 가 (id, title, type) 튜플. branch 는 type_key 문자열.
         if isinstance(data, tuple) and len(data) == 3:
             self.dismiss(data)
-            return
-        # branch — 펼침/접힘.
-        if node.is_expanded:
-            node.collapse()
-        else:
-            node.expand()

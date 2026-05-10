@@ -158,7 +158,17 @@ class _DateInput(Input):
 
 
 class _MoneyInput(Input):
-    """숫자만 받아 천단위 콤마 자동 포매팅."""
+    """숫자만 받아 천단위 콤마 자동 포매팅.
+
+    CL #51087+: 입력값을 오른쪽 정렬 (회계 컨벤션 + EntriesScreen 의 money
+    컬럼과 시각 일치).
+    """
+
+    DEFAULT_CSS = """
+    _MoneyInput {
+        text-align: right;
+    }
+    """
 
     def __init__(self, value: str = "", **kwargs: Any) -> None:
         digits = _digits_only(value)

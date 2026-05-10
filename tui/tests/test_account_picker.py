@@ -179,7 +179,13 @@ async def test_picker_auto_expands_current_id_category():
 
 @pytest.mark.asyncio
 async def test_picker_branch_enter_toggles_expand():
-    """카테고리 위에서 Enter (NodeSelected) → 펼침/접힘 토글, 모달은 유지."""
+    """카테고리 위에서 Enter (action_select_cursor) → 펼침/접힘 토글, 모달은 유지.
+
+    CL #51087 회귀 방지: 이전에는 본 핸들러가 명시적으로 토글했는데
+    Tree 의 `auto_expand` 와 두 번 토글되어 사용자 Enter 가 무효처럼
+    보였다. 본 테스트는 *실제 키 흐름* (action_select_cursor) 를 통해
+    검증 — 사용자 환경에서 한 번만 토글되는지.
+    """
     fake = FakeClient()
     app = WhooingTuiApp(client=fake)  # type: ignore[arg-type]
     async with app.run_test() as pilot:
@@ -193,11 +199,18 @@ async def test_picker_branch_enter_toggles_expand():
         target = next(c for c in cats if c.data == "expenses")
         # 초기 expansion 기록
         was_expanded = target.is_expanded
-        # NodeSelected event 를 직접 post — 사용자의 Enter 와 같은 효과.
-        app.screen.post_message(Tree.NodeSelected(target))
+        # cursor 를 target 카테고리로 옮기고 select 호출 — 사용자 Enter
+        # 와 동일한 흐름 (auto_expand + on_tree_node_selected 양쪽 통과).
+        tree.move_cursor(target)
+        tree.action_select_cursor()
         await pilot.pause()
         assert target.is_expanded is (not was_expanded)
-        # 모달 그대로
+        # 모달 그대로 — branch 토글 후 dismiss 되지 않음.
+        assert isinstance(app.screen, AccountPickerScreen)
+        # 한 번 더 → 다시 원래 상태 (정확히 1회 토글이 보장되는지).
+        tree.action_select_cursor()
+        await pilot.pause()
+        assert target.is_expanded is was_expanded
         assert isinstance(app.screen, AccountPickerScreen)
 
 

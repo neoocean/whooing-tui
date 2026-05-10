@@ -36,6 +36,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 
+from rich.text import Text
 from textual import work
 from textual.app import ComposeResult
 from textual.binding import Binding
@@ -487,8 +488,15 @@ class EntriesScreen(Screen):
         cur_col = self._active_col
 
         plain_cur = self._format_cell(self._entries[cur_entry_idx], cur_col)
-        marker_text = plain_cur if plain_cur else " "  # 빈 cell 도 보이게
-        marked = f"[{self._ACTIVE_CELL_STYLE}]{marker_text}[/]"
+        # CL #51087+: money 컬럼은 Rich Text (justify="right") 로 와서 markup
+        # 래핑 시 정렬 정보가 보존되지 않는다 — Text 면 stylize 로 같은 색을
+        # 주고, str 이면 markup 그대로.
+        if isinstance(plain_cur, Text):
+            marked: Any = plain_cur.copy()
+            marked.stylize(self._ACTIVE_CELL_STYLE)
+        else:
+            marker_text = plain_cur if plain_cur else " "  # 빈 cell 도 보이게
+            marked = f"[{self._ACTIVE_CELL_STYLE}]{marker_text}[/]"
         try:
             table.update_cell_at(
                 Coordinate(cur_row, cur_col),
@@ -1036,18 +1044,19 @@ class EntriesScreen(Screen):
 
     # ---- render --------------------------------------------------------
 
-    def _format_cell(self, entry: dict[str, Any], col_index: int) -> str:
-        """entry 와 column index 로부터 cell 의 plain text 를 만든다.
+    def _format_cell(self, entry: dict[str, Any], col_index: int) -> Any:
+        """entry 와 column index 로부터 cell 의 표시 값을 만든다.
 
         `_render_table` 의 row 추가 + `_update_active_cell_marker` 의 cell
-        복원 양쪽에서 같은 형식으로 보이도록 단일 helper.
+        복원 양쪽에서 같은 형식으로 보이도록 단일 helper. money 만 Rich
+        `Text` 로 (오른쪽 정렬, CL #51087+) — 나머지는 `str`.
         """
         session = self.app.session  # type: ignore[attr-defined]
         col = self._COLUMN_NAMES[col_index]
         if col == "date":
             return _fmt_date(entry.get("entry_date"))
         if col == "money":
-            return _fmt_money(entry.get("money"))
+            return Text(_fmt_money(entry.get("money")), justify="right")
         if col == "left":
             l_id = entry.get("l_account_id") or ""
             return session.title_of(l_id) if l_id else ""
@@ -1085,8 +1094,16 @@ class EntriesScreen(Screen):
         table.clear()
 
         if self._show_sentinel:
-            empty_cells = [""] * (len(self._COLUMN_NAMES) - 1)
-            table.add_row(self._NEW_ENTRY_SENTINEL_LABEL, *empty_cells)
+            # CL #51087+: 라벨을 시각상 가운데 가까운 컬럼 (index 3 = right)
+            # 에 두고 Rich Text 의 `justify="center"` 로 그 셀 안에서 가운데
+            # 정렬. 다른 컬럼은 빈 셀 — 사용자에게 "전체 행 너비 가운데에
+            # + 새 거래 추가 메뉴" 로 보이도록.
+            mid = len(self._COLUMN_NAMES) // 2
+            cells: list[Any] = [""] * len(self._COLUMN_NAMES)
+            cells[mid] = Text(
+                self._NEW_ENTRY_SENTINEL_LABEL, justify="center",
+            )
+            table.add_row(*cells)
 
         for e in entries:
             cells = [self._format_cell(e, i) for i in range(len(self._COLUMN_NAMES))]

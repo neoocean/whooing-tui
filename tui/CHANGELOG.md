@@ -2,6 +2,87 @@
 
 각 항목은 Perforce CL 단위로 끊는다.
 
+## CL #51087 — 0.13.1 — sentinel 가운데 정렬 + 카테고리 Enter 펼침 버그 + money 오른쪽 정렬 (사용자 요청) (2026-05-10)
+
+사용자 요청 3건 (한 CL 에 모두):
+
+1. **목록 맨 위에 나타나는 새 거래 추가 메뉴(sentinel)를 가운데 정렬로**.
+2. **계정과목 상위 카테고리에서 Enter 키를 눌러도 접힌 카테고리가 안
+   펼쳐지는** 회귀 (CL #51080 도입). 펼침/접힘이 안 되는 것처럼 보임.
+3. **여러 화면의 money 를 오른쪽 정렬로 통일**.
+
+### 동작 변경
+
+- **EntriesScreen sentinel 가운데 정렬**: sentinel row 의 라벨
+  `"[+ 새 거래 추가]"` 가 column 0 (date) 에서 시각상 가운데 column
+  (index = `len(_COLUMN_NAMES) // 2 = 3`, "right") 으로 이동. cell 값은
+  Rich `Text(label, justify="center")` 로 cell 안에서도 가운데 정렬.
+  다른 column 은 빈 cell.
+
+- **AccountPickerScreen 카테고리 Enter 토글 버그 수정**: Tree 의 default
+  `auto_expand=True` 가 NodeSelected 이벤트를 받으면 자동으로 토글하는데,
+  CL #51080 의 `on_tree_node_selected` 핸들러가 다시 한 번 명시적으로
+  토글해 결과적으로 원래 상태로 복귀하던 버그. 핸들러는 이제 leaf 일 때만
+  dismiss, branch 위에서는 noop (Tree 가 자체 토글).
+
+- **money 오른쪽 정렬**:
+  - `EntriesScreen._format_cell` 의 money column: `str` 대신
+    `Rich Text(value, justify="right")` 반환. 표 안에서 숫자가 cell width
+    오른쪽에 정렬.
+  - `EntryEditDialog._MoneyInput`: `text-align: right` CSS — 입력 도중에도
+    숫자가 오른쪽에서 자란다.
+  - `_update_active_cell_marker` 가 Text 객체를 인지: markup 래핑 대신
+    `Text.stylize(self._ACTIVE_CELL_STYLE)` 로 같은 노란 마커를 적용해
+    `justify="right"` 보존.
+
+### 수정
+
+- `tui/src/whooing_tui/screens/entries.py`
+  * `from rich.text import Text` import 추가.
+  * `_format_cell` 의 money branch — `Text(_fmt_money(...), justify="right")`.
+  * `_render_table` 의 sentinel 분기 — middle column 에 `Text(label,
+    justify="center")`, 나머지 빈 cell.
+  * `_update_active_cell_marker` — Text 인지하는 분기 추가.
+- `tui/src/whooing_tui/screens/account_picker.py`
+  * `on_tree_node_selected` — branch 위에서 explicit toggle 호출 제거
+    (auto_expand 가 처리). 회귀 방지 주석.
+- `tui/src/whooing_tui/screens/edit_entry.py`
+  * `_MoneyInput.DEFAULT_CSS` 추가 — `text-align: right`.
+- `tui/tests/test_entries_screen.py`
+  * marker 검사 assertion 12개 — `"[black on yellow]"` → `"black on yellow"`
+    (Text span 의 style 표현은 `'black on yellow'` 라 substring 일치).
+  * money 컬럼 marker 검사 1개 — `repr()` 사용 (Text span 정보는 str 에 안
+    들어감).
+  * sentinel 위치 assertion 1개 — col 0 → middle col.
+  * 신규 3 케이스: sentinel 가운데 column 위치 / Text justify="center"
+    / money 컬럼 Text justify="right".
+- `tui/tests/test_account_picker.py`
+  * `test_picker_branch_enter_toggles_expand` — `post_message(NodeSelected)`
+    대신 `tree.move_cursor + tree.action_select_cursor` (실제 사용자 키
+    흐름). 이중 토글 회귀 방지 위해 두 번 누름까지 검증.
+
+### 테스트
+
+- 기존 399 → **402 통과** (+3 신규).
+
+### 사용자 흐름 다이어그램
+
+```mermaid
+graph LR
+    subgraph 거래 목록
+      U[↑ on row 0] --> S[sentinel 등장]
+      S --> M["middle col Text<br/>(justify=center)"]
+      M --> V[가운데 시각]
+      M2[money col] --> RT["Text<br/>(justify=right)"]
+      RT --> AR[오른쪽 정렬]
+    end
+    subgraph 계정과목 picker
+      E[Enter on 카테고리] --> A[auto_expand 토글]
+      A --> O[펼침 ↔ 접힘]
+      L[Enter on leaf] --> D[dismiss]
+    end
+```
+
 ## CL #51080 — 0.13.0 — 계정과목 picker 트리 + tags picker (사용자 요청) (2026-05-10)
 
 사용자 요청 (2가지, 한 CL 에 모두):

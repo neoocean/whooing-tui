@@ -134,7 +134,7 @@ async def test_entries_screen_is_initial_and_self_bootstraps():
         assert "현금" in row0_joined
         assert "스타벅스" in row0_joined
         # 초기 상태: 컬럼 marker 비활성 — 노란 markup 없음
-        assert "[black on yellow]" not in row0_joined
+        assert "black on yellow" not in row0_joined
 
         # 100-cap 경고 없음
         assert app.screen.last_cap_warning is False
@@ -717,7 +717,7 @@ async def test_initial_state_has_no_column_marker():
         for row in range(table.row_count):
             for col in range(6):
                 cell = str(table.get_cell_at((row, col)))
-                assert "[black on yellow]" not in cell, (
+                assert "black on yellow" not in cell, (
                     f"row={row} col={col} cell={cell!r}"
                 )
 
@@ -744,13 +744,15 @@ async def test_first_arrow_press_activates_column_marker():
         await pilot.pause()
         assert es._column_active is True
         assert es._active_col == 0
-        assert "[black on yellow]" in str(table.get_cell_at((0, 0)))
+        assert "black on yellow" in str(table.get_cell_at((0, 0)))
         # 두번째 → = col 1
         es.action_next_column()
         await pilot.pause()
         assert es._active_col == 1
-        assert "[black on yellow]" not in str(table.get_cell_at((0, 0)))
-        assert "[black on yellow]" in str(table.get_cell_at((0, 1)))
+        assert "black on yellow" not in str(table.get_cell_at((0, 0)))
+        # CL #51087+: money 컬럼은 Rich Text(justify="right") 라 markup 대신
+        # `Span` 으로 스타일이 들어간다 — repr 에서 "black on yellow" 검출.
+        assert "black on yellow" in repr(table.get_cell_at((0, 1)))
 
 
 @pytest.mark.asyncio
@@ -775,14 +777,14 @@ async def test_active_cell_marker_follows_cursor_row():
         assert table.cursor_row == 0
         es.action_next_column()
         await pilot.pause()
-        assert "[black on yellow]" in _cell(0, 0)
+        assert "black on yellow" in _cell(0, 0)
         # cursor 를 row 2 로 이동 (↓ 두 번 — row 0 → 1 → 2)
         await pilot.press("down")
         await pilot.press("down")
         await pilot.pause()
         # row 0 marker 사라지고 row 2 에 marker
-        assert "[black on yellow]" not in _cell(0, 0)
-        assert "[black on yellow]" in _cell(2, 0)
+        assert "black on yellow" not in _cell(0, 0)
+        assert "black on yellow" in _cell(2, 0)
 
 
 # ---- CL #51064+: Enter / Esc 의 column-active 분기 ---------------------
@@ -835,7 +837,7 @@ async def test_escape_when_column_active_deactivates_marker():
         assert isinstance(app.screen, EntriesScreen)
         # marker 사라졌는지
         table = es.query_one("#entries-table", DataTable)
-        assert "[black on yellow]" not in str(table.get_cell_at((0, 0)))
+        assert "black on yellow" not in str(table.get_cell_at((0, 0)))
 
 
 @pytest.mark.asyncio
@@ -896,7 +898,7 @@ async def test_escape_with_active_filter_clears_both_marker_and_filter():
         for row in range(table.row_count):
             for col in range(6):
                 cell = str(table.get_cell_at((row, col)))
-                assert "[black on yellow]" not in cell
+                assert "black on yellow" not in cell
 
 
 @pytest.mark.asyncio
@@ -975,8 +977,10 @@ async def test_up_arrow_at_first_entry_reveals_sentinel():
         await pilot.pause()
         assert es._show_sentinel is True
         assert table.cursor_row == 0
-        # 표에 sentinel 라벨이 row 0 에
-        assert "새 거래 추가" in str(table.get_cell_at((0, 0)))
+        # 표에 sentinel 라벨이 row 0 에 — CL #51087+ 부터 가운데 정렬을
+        # 위해 middle column (index 3) 에 배치.
+        mid = len(es._COLUMN_NAMES) // 2
+        assert "새 거래 추가" in str(table.get_cell_at((0, mid)))
         # 실거래는 row 1 부터
         assert "2026-05-10" in str(table.get_cell_at((1, 0)))
 
@@ -1078,14 +1082,14 @@ async def test_no_marker_on_sentinel_row_even_when_column_active():
         # CL #51074+: 컬럼 활성화 (sentinel 숨김 default — row 0 = 첫 실거래)
         es.action_next_column()
         await pilot.pause()
-        assert "[black on yellow]" in str(table.get_cell_at((0, 0)))
+        assert "black on yellow" in str(table.get_cell_at((0, 0)))
         # ↑ → sentinel 등장 + cursor sentinel. sentinel cell 에 marker 없음
         await pilot.press("up")
         await pilot.pause()
         assert es._show_sentinel is True
         assert table.cursor_row == 0
         for col in range(6):
-            assert "[black on yellow]" not in str(table.get_cell_at((0, col)))
+            assert "black on yellow" not in str(table.get_cell_at((0, col)))
 
 
 @pytest.mark.asyncio
@@ -1155,3 +1159,83 @@ async def test_refresh_clears_active_filter():
             and len(es._entries) == 4,
             timeout=3.0,
         )
+
+
+# ---- CL #51087+: sentinel 가운데 정렬 + money 오른쪽 정렬 ----------------
+
+
+@pytest.mark.asyncio
+async def test_sentinel_label_in_middle_column_centered():
+    """CL #51087+: sentinel 라벨이 시각상 가운데 column (index 3 = right)
+    에 들어가고 다른 column 은 빈 cell — 가운데 정렬된 것처럼 보임."""
+    fake = FakeClient(entries_by_section={"s1": _entries_for_filter()})
+    app = WhooingTuiApp(client=fake)  # type: ignore[arg-type]
+    async with app.run_test() as pilot:
+        from whooing_tui.screens.entries import EntriesScreen
+        await _wait_for(
+            lambda: isinstance(app.screen, EntriesScreen)
+            and app.screen.last_entry_count == 4,
+            timeout=3.0,
+        )
+        es: EntriesScreen = app.screen  # type: ignore[assignment]
+        table = es.query_one("#entries-table", DataTable)
+        # sentinel 등장
+        await pilot.press("up")
+        await pilot.pause()
+        assert es._show_sentinel is True
+        # middle column (index 3) 에 라벨, 다른 column 은 빈 cell.
+        mid = len(es._COLUMN_NAMES) // 2
+        assert "새 거래 추가" in str(table.get_cell_at((0, mid)))
+        for col in range(len(es._COLUMN_NAMES)):
+            if col != mid:
+                assert "새 거래 추가" not in str(table.get_cell_at((0, col)))
+
+
+@pytest.mark.asyncio
+async def test_sentinel_cell_uses_center_justified_text():
+    """CL #51087+: sentinel cell 은 Rich Text 로 justify="center" 가
+    설정되어 있어야 (단순 markup string 이 아니라)."""
+    from rich.text import Text
+
+    fake = FakeClient(entries_by_section={"s1": _entries_for_filter()})
+    app = WhooingTuiApp(client=fake)  # type: ignore[arg-type]
+    async with app.run_test() as pilot:
+        from whooing_tui.screens.entries import EntriesScreen
+        await _wait_for(
+            lambda: isinstance(app.screen, EntriesScreen)
+            and app.screen.last_entry_count == 4,
+            timeout=3.0,
+        )
+        es: EntriesScreen = app.screen  # type: ignore[assignment]
+        table = es.query_one("#entries-table", DataTable)
+        await pilot.press("up")
+        await pilot.pause()
+        mid = len(es._COLUMN_NAMES) // 2
+        cell = table.get_cell_at((0, mid))
+        assert isinstance(cell, Text)
+        assert cell.justify == "center"
+
+
+@pytest.mark.asyncio
+async def test_money_column_uses_right_justified_text():
+    """CL #51087+: money 컬럼의 cell 은 Rich Text(justify="right") — 회계
+    컨벤션에 맞춰 숫자를 오른쪽 정렬."""
+    from rich.text import Text
+
+    fake = FakeClient(entries_by_section={"s1": _sample_entries()})
+    app = WhooingTuiApp(client=fake)  # type: ignore[arg-type]
+    async with app.run_test() as pilot:
+        from whooing_tui.screens.entries import EntriesScreen
+        await _wait_for(
+            lambda: isinstance(app.screen, EntriesScreen)
+            and app.screen.last_entry_count == 2,
+            timeout=3.0,
+        )
+        table = app.screen.query_one("#entries-table", DataTable)
+        # money 는 column index 1.
+        for row in range(table.row_count):
+            cell = table.get_cell_at((row, 1))
+            assert isinstance(cell, Text), (
+                f"money cell row={row} should be Text, got {type(cell)}"
+            )
+            assert cell.justify == "right"
