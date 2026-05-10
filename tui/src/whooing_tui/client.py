@@ -400,6 +400,113 @@ class WhooingClient:
         )
         return _coerce_dict(results)
 
+    # ---- accounts CRUD ---------------------------------------------------
+    #
+    # 후잉 공식 MCP 의 `accounts-create/update/delete/check_deletable` schema
+    # (확인됨 2026-05-10) 가 노출하는 입력 필드를 그대로 body 로 보내고,
+    # RESTful 가정 (POST /accounts.json, PUT /accounts/<id>.json,
+    # DELETE /accounts/<id>.json, GET /accounts/<id>/check_deletable.json)
+    # 으로 호출. 라이브 검증에서 path 가 다르면 _ACCOUNTS_PATH /
+    # _account_path() 만 조정하면 된다.
+
+    _ACCOUNTS_PATH = "/accounts.json"
+
+    @staticmethod
+    def _account_path(account_id: str) -> str:
+        return f"/accounts/{account_id}.json"
+
+    @staticmethod
+    def _account_check_deletable_path(account_id: str) -> str:
+        return f"/accounts/{account_id}/check_deletable.json"
+
+    async def create_account(
+        self,
+        *,
+        section_id: str,
+        account: str,                # assets/liabilities/capital/expenses/income
+        type: str,                   # account / group
+        title: str,
+        open_date: str,              # YYYYMMDD — 거래 기록 시작 기준
+        close_date: str | None = None,   # 미지정 = 무기한 (29991231)
+        category: str | None = None,     # normal/client/creditcard/checkcard/steady/floating
+        memo: str | None = None,
+    ) -> dict[str, Any]:
+        """새 계정과목 추가. open_date 는 거래 기록 시작 기준이라 호출자가 사용자 확인 필수."""
+        body: dict[str, Any] = {
+            "section_id": section_id,
+            "account": account,
+            "type": type,
+            "title": title,
+            "open_date": open_date,
+        }
+        for k, v in [
+            ("close_date", close_date),
+            ("category", category),
+            ("memo", memo),
+        ]:
+            if v is not None:
+                body[k] = v
+        results = await self._post(self._ACCOUNTS_PATH, json_body=body)
+        return _coerce_dict(results)
+
+    async def update_account(
+        self,
+        *,
+        section_id: str,
+        account_id: str,
+        account: str,
+        type: str,
+        title: str,
+        open_date: str,
+        close_date: str,             # 후잉 update 는 전체 필드 전달이 정책 (close 도 필수)
+        category: str | None = None,
+        memo: str | None = None,
+    ) -> dict[str, Any]:
+        """계정과목 수정 — 전체 필드 전달이 후잉 정책 (변경 안 한 필드도 동봉)."""
+        body: dict[str, Any] = {
+            "section_id": section_id,
+            "account": account,
+            "type": type,
+            "title": title,
+            "open_date": open_date,
+            "close_date": close_date,
+        }
+        for k, v in [("category", category), ("memo", memo)]:
+            if v is not None:
+                body[k] = v
+        results = await self._put(self._account_path(account_id), json_body=body)
+        return _coerce_dict(results)
+
+    async def delete_account(
+        self,
+        *,
+        section_id: str,
+        account: str,
+        account_id: str,
+    ) -> dict[str, Any]:
+        """계정과목 강제 삭제. 거래 내역이 있으면 거부될 수 있음 — 호출 전
+        `check_account_deletable` 로 확인하는 것을 권장.
+        """
+        results = await self._delete(
+            self._account_path(account_id),
+            params={"section_id": section_id, "account": account},
+        )
+        return _coerce_dict(results)
+
+    async def check_account_deletable(
+        self,
+        *,
+        section_id: str,
+        account: str,
+        account_id: str,
+    ) -> dict[str, Any]:
+        """삭제 전 사전 검사 — 거래 건수 / 잔액 / 마지막 항목 여부 등."""
+        results = await self._get(
+            self._account_check_deletable_path(account_id),
+            params={"section_id": section_id, "account": account},
+        )
+        return _coerce_dict(results)
+
     @staticmethod
     def _normalize_collection(results: Any, key: str) -> list[dict[str, Any]]:
         """후잉 응답이 list / {key: [...]} / {id: obj} 셋 다 가능하다.
@@ -502,6 +609,32 @@ class CachedWhooingClient:
         out = await self._inner.delete_entry(**kwargs)
         self._store.invalidate_entries(kwargs.get("section_id"))
         return out
+
+    # accounts CRUD — accounts 캐시 + entries 캐시 둘 다 invalidate.
+    # entries 응답이 account 정보 (title 등) 를 포함할 가능성 있어 안전을
+    # 위해 같이 비운다.
+
+    async def create_account(self, **kwargs) -> dict[str, Any]:
+        out = await self._inner.create_account(**kwargs)
+        self._store.invalidate_accounts(kwargs.get("section_id"))
+        self._store.invalidate_entries(kwargs.get("section_id"))
+        return out
+
+    async def update_account(self, **kwargs) -> dict[str, Any]:
+        out = await self._inner.update_account(**kwargs)
+        self._store.invalidate_accounts(kwargs.get("section_id"))
+        self._store.invalidate_entries(kwargs.get("section_id"))
+        return out
+
+    async def delete_account(self, **kwargs) -> dict[str, Any]:
+        out = await self._inner.delete_account(**kwargs)
+        self._store.invalidate_accounts(kwargs.get("section_id"))
+        self._store.invalidate_entries(kwargs.get("section_id"))
+        return out
+
+    async def check_account_deletable(self, **kwargs) -> dict[str, Any]:
+        # 단순 조회라 캐시 영향 없음 — 그대로 위임.
+        return await self._inner.check_account_deletable(**kwargs)
 
     # 사용자가 'r' 누르면 호출 — 화면이 직접 강제 재로드 가능.
     def invalidate_section(self, section_id: str) -> None:

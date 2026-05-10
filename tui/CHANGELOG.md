@@ -2,6 +2,64 @@
 
 각 항목은 Perforce CL 단위로 끊는다.
 
+## CL #51019 — 0.8.0 — `WhooingClient` 에 accounts CRUD (UI 재구성 준비) (2026-05-10)
+
+UI 재구성 (initial = EntriesScreen, 별도 SectionPicker / Accounts 화면)
+의 첫 단계 — 새 화면이 사용할 client API 를 먼저 추가. 후속 CL 에서 화면
++ initial 변경.
+
+### 추가 (1 file)
+
+- `tui/src/whooing_tui/client.py` 의 `WhooingClient` 에 4 메서드:
+  * `create_account(section_id, account, type, title, open_date, ...)`
+    — POST `/accounts.json`. 후잉 공식 MCP 의 `accounts-create` schema 와
+    동일 입력 (account ∈ {assets/liabilities/capital/expenses/income},
+    type ∈ {account, group}, optional category / close_date / memo).
+  * `update_account(...)` — PUT `/accounts/<id>.json`. 후잉 정책상 전체
+    필드 (section_id / account / type / title / open_date / close_date)
+    필수 + optional category / memo.
+  * `delete_account(section_id, account, account_id)` —
+    DELETE `/accounts/<id>.json?section_id=&account=`.
+  * `check_account_deletable(...)` — GET
+    `/accounts/<id>/check_deletable.json` (거래 건수 / 잔액 / 마지막 항목
+    여부).
+- `CachedWhooingClient` 도 위 4 메서드 wrap. create/update/delete 시
+  해당 섹션의 accounts + entries 캐시 양쪽 invalidate (entries 응답이
+  account 정보를 포함할 가능성 안전 처리). check_deletable 은 단순
+  조회라 캐시 영향 없음.
+
+### 추가 (1 file)
+
+- `tui/tests/test_client_accounts_mutations.py` — 10 cases (respx):
+  * create_account: 필수 필드 / optional 포함 / unspecified omit.
+  * update_account: 전체 필수 set / optional category·memo.
+  * delete_account: query params (section_id + account).
+  * check_account_deletable: GET + query.
+  * 400 → USER_INPUT + error_parameters 보존.
+  * `CachedWhooingClient.create_account` 가 양쪽 캐시 invalidate.
+  * `check_account_deletable` 이 캐시 안 건드림.
+
+### 수정
+
+- `tui/CHANGELOG.md` / `tui/MEMORY.md` — 본 항목.
+- `tui/pyproject.toml` + `__init__.py` — 0.7.7 → 0.8.0 (UI 재구성
+  준비라 minor bump).
+
+### 검증
+
+- `pytest -q tui/tests/test_client_accounts_mutations.py` → **10 passed**.
+- `make test-tui` → 회귀 없음 (170 + 10 = **180 passed**).
+
+### 의도적 누락 (다음 CL B 로)
+
+- 초기화면을 EntriesScreen 으로.
+- SectionPickerScreen / AccountsScreen 추가 + EntriesScreen 의 자동
+  부팅 로직.
+- HomeScreen 제거.
+
+라이브 검증은 사용자 수동 (auto-mode classifier 가 mutation 차단). 후잉
+실 path 가 RESTful 가정과 다르면 client.py 의 path 상수만 조정.
+
 ## CL #51013 — 0.7.7 — `whooing.py` 자동 re-exec 패턴 (시스템 python 으로 호출돼도 동작) (2026-05-10)
 
 0.7.6 의 `whooing.py` 가 시스템 `python3` 으로 호출되면 `httpx` /
