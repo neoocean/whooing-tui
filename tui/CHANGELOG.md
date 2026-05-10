@@ -2,6 +2,49 @@
 
 각 항목은 Perforce CL 단위로 끊는다.
 
+## CL #50940 — 0.5.0 — Phase 3 문서 정리 (cache 통합 사실 기록) (2026-05-10)
+
+**경위**: Phase 3 (sqlite 캐시) 의 코드 변경 (cache.py / test_cache.py /
+config.py / app.py / screens 의 invalidate 통합) 은 monorepo 전환 중에
+다른 작업의 CL #50943 (monorepo CL B) 에 흡수되어 submit 됐다 — p4 move
+중 우리 새 파일도 함께 옮겨졌기 때문. 코드는 정상 위치 (`tui/`) 에 들어가
+있고 통합 테스트도 12개 모두 통과하지만, `CHANGELOG.md` / `DESIGN.md` /
+`MEMORY.md` 의 항목 갱신은 빠진 채라 본 CL 이 그 누락분만 보충한다.
+
+### 수정
+
+- `CHANGELOG.md` — 본 항목 (Phase 3) 추가.
+- `DESIGN.md` §6 — sqlite 캐시 (5번) 를 ✅ CL #50943 흡수 표시.
+- `MEMORY.md` §6 / §8 — Phase 3 진행 사실 + monorepo 전환의 영향 기록.
+- `pyproject.toml` + `__init__.py` — 0.4.0 → 0.5.0.
+
+### Phase 3 의 실제 코드 변경 (CL #50943 에 흡수, 2026-05-10)
+
+- `tui/src/whooing_tui/cache.py` — `CacheStore` (sqlite-backed inter-session
+  store). accounts TTL 1시간 / entries TTL 5분, mutation 시 invalidate.
+  `:memory:` 도 지원 (테스트). `default_cache_path()` 가
+  `.whooing-tui-cache/whooing-tui.sqlite` 반환 (gitignore 차단).
+- `tui/src/whooing_tui/client.py::CachedWhooingClient` — `WhooingClient` 와
+  같은 인터페이스의 wrapper. accounts/entries cache, mutation 시
+  invalidate, `invalidate_section(section_id)` public.
+- `tui/src/whooing_tui/config.py` — `[cache]` 섹션 (`enabled` /
+  `accounts_ttl_sec` / `entries_ttl_sec`).
+- `tui/src/whooing_tui/app.py::run_app` — `cfg.cache_enabled` 면 sqlite
+  캐시 wrapper 빌드해 주입.
+- `tui/src/whooing_tui/screens/home.py` / `entries.py` — `r` 액션이
+  `invalidate_section()` 을 callable 로 발견 시 강제 invalidate 후 fetch.
+- `tui/whooing-tui.toml.example` — `[cache]` 옵션 문서화.
+- `tui/tests/test_cache.py` — 12 cases (CacheStore 단위 + CachedWhooingClient
+  통합).
+
+검증: monorepo 전체 `make test` → core 72 + tui 94 = **166 passed**.
+
+### 의도적 누락 (다음 CL 로)
+
+- 자주입력·매월입력 매칭 (`frequent_items` / `monthly_items`).
+- 후잉 공식 MCP 직접 호출 (Phase 4).
+- 화면 도움말 모달 / 콘솔 스크립트 검증 / coverage / `.env` 공통 위치.
+
 ## CL #50939 — 0.4.0 — Phase 2c: EntryEditDialog + WhooingClient CRUD (2026-05-10)
 
 후잉 거래의 추가/수정/삭제. 이 CL 부터 mcp-server-wrapper 와 정책 분기 —
