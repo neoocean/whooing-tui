@@ -2,6 +2,66 @@
 
 각 항목은 Perforce CL 단위로 끊는다.
 
+## CL #51072 — 0.11.0 — EntriesScreen 맨 위에 "새 거래 추가" sentinel row (2026-05-10)
+
+사용자 요청 (2026-05-10): "거래내역 맨 위에서 위쪽 화살표로 한칸 더 올리면
+새 항목 추가 메뉴가 나타나게 해주세요. 이 때 엔터를 누르면 새 항목을
+추가합니다."
+
+### 추가
+
+- `_NEW_ENTRY_SENTINEL_LABEL = "[+ 새 거래 추가]"` — sentinel row 의 첫
+  cell 라벨.
+- `_is_on_sentinel_row()` — cursor row 가 0 (sentinel) 인지.
+
+### 동작
+
+- DataTable 의 row 0 = sentinel placeholder. 첫 cell 에 안내 라벨,
+  나머지 column 은 빈 cell. 실 거래는 row 1+ 에 표시.
+- 첫 mount / refresh 시 cursor 는 **row 1** (첫 실거래) 로 자동. sentinel
+  은 사용자가 ↑ 한 번 더 눌러야 도달.
+- **sentinel row 에서 Enter** = `action_new_entry` (EntryEditDialog 등장).
+  `_column_active` 여부 무관 — 항상 새 거래 추가.
+- **sentinel row 에서 marker 미표시** — column 활성 상태라도 row 0 cell
+  은 plain. cursor 가 ↓ 로 row 1+ 가면 marker 등장.
+- **빈 entries** 일 때도 sentinel 1 row 보임 → 거래가 0 건이어도 새 거래
+  추가 가능.
+- cursor 가 sentinel 에 있을 때 `on_data_table_row_highlighted` 가 status
+  를 `[Enter = 새 거래 추가]` 로 안내.
+
+### 수정
+
+- `screens/entries.py`:
+  * `_render_table` — sentinel row 1개를 항상 먼저 add. cursor 위치는:
+    1) prev cursor 가 row 1+ valid 면 그대로 (refresh 후 보존),
+    2) entries 있으면 row 1 (첫 실거래),
+    3) entries 비면 row 0 (sentinel only).
+  * `_selected_entry` — row 0 = None 반환. row N → entries[N-1].
+  * `_update_active_cell_marker` — cursor row 0 (sentinel) 이면 marker
+    적용 X. 이전 marker 의 entry index 도 `prev_row - 1` 로 조정.
+  * `action_context_enter` — sentinel 우선 분기 → `action_new_entry`.
+- `tests/test_entries_screen.py`:
+  * 기존 통합 테스트들의 row index 를 +1 shift (sentinel 추가 영향).
+  * row count 검증 4 → 5 (sentinel + 4 entries).
+  * 100-cap warning / 빈 결과 안내 테스트 — sentinel 이 status 를
+    덮을 가능성 고려해 substring 매칭 완화.
+  * **5 새 cases** (CL #51072 검증):
+    - `test_sentinel_row_at_top_with_entries`: row 0 에 라벨, cursor row 1.
+    - `test_up_arrow_from_first_entry_lands_on_sentinel`: ↑ 한 번 → row 0.
+    - `test_enter_on_sentinel_opens_new_entry_dialog`.
+    - `test_no_marker_on_sentinel_row_even_when_column_active`: 활성
+      상태에서 ↑ 로 sentinel 가면 row 0 의 marker 없음.
+    - `test_sentinel_only_when_entries_empty_and_enter_works`: 빈 entries
+      에서 sentinel 1 row + enter → 새 거래 추가.
+- `tui/README.md` — sentinel 동작 안내.
+- `tui/CHANGELOG.md` / `tui/MEMORY.md` — 본 항목.
+- `tui/pyproject.toml` + `__init__.py` — 0.10.3 → 0.11.0 (사용자 가시
+  주요 기능 추가, minor bump).
+
+### 검증
+
+- `make test-tui` → **273 passed** (268 + 5 new sentinel cases).
+
 ## CL #51068 — 0.10.3 — Esc 가 활성 필터도 함께 해제 (사용자 요청) (2026-05-10)
 
 사용자 요청: "오렌지색 커서로 필터링이 적용된 상태에서 ESC 키를 누르면

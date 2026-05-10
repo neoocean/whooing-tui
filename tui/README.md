@@ -48,7 +48,12 @@ make run
 
 ## TUI 키 바인딩 요약
 
-### EntriesScreen (초기 화면, 0.10.1+)
+### EntriesScreen (초기 화면, 0.11.0+)
+
+표의 맨 위 row 는 **`[+ 새 거래 추가]` sentinel** (CL #51072+) — 거기서
+Enter 가 새 거래 dialog. 실 거래는 그 아래부터. 첫 mount 시 cursor 는
+**첫 실거래** 에 위치 (sentinel 위가 아닌). 사용자가 ↑ 한 번 더 누르면
+sentinel 도달.
 
 거래 화면은 두 가지 상태를 가집니다 (CL #51064+):
 

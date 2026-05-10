@@ -158,6 +158,12 @@ class EntriesScreen(Screen):
     # 변수 치환되지 않을 수 있어 안전하게 명시 색.
     _ACTIVE_CELL_STYLE = "black on yellow"
 
+    # CL #51072 부터: DataTable 의 row 0 은 "새 거래 추가" sentinel.
+    # cursor 가 row 0 일 때 enter = action_new_entry. 실 거래는 row 1+ 부터.
+    # sentinel 의 첫 column 텍스트 — 사용자가 cursor 를 올렸을 때 무엇을
+    # 하는 자리인지 즉시 알 수 있도록. 다른 column 은 빈 cell.
+    _NEW_ENTRY_SENTINEL_LABEL = "[+ 새 거래 추가]"
+
     # 한 번에 fetch 할 거래는 후잉 server-side hard cap 100건. 단일 일자에
     # 100건 초과는 _list_entries_chunked 가 더 분할할 수 없으므로 footer
     # 에 경고 띄움 (DESIGN §4.3 + MEMORY §7).
@@ -369,30 +375,33 @@ class EntriesScreen(Screen):
     ) -> None:
         """↑/↓ 또는 click 으로 cursor row 가 바뀌면 marker 도 따라 이동.
 
-        `_column_active=False` 이면 _update_active_cell_marker 가 알아서
-        early return — marker 없는 상태 보존.
+        sentinel row (0) 에 cursor 가 가면 marker 가 자동으로 cleanup
+        되고, status 에 "Enter = 새 거래 추가" 안내. `_column_active=False`
+        이면 _update_active_cell_marker 가 알아서 early return.
         """
         self._update_active_cell_marker()
+        if self._is_on_sentinel_row():
+            self.set_status("[Enter = 새 거래 추가]")
 
     def _update_active_cell_marker(self) -> None:
         """marker 상태와 cell content 를 동기화.
 
-        - `_column_active=False`: 기존 marker 가 있으면 plain 복원, 없으면
-          noop. 이후 새 marker 적용 안 함.
-        - `_column_active=True`: 이전 marker cell 이 현재 (cursor_row,
-          _active_col) 와 다르면 복원, 새 위치에 markup 적용.
+        DataTable row 0 은 "새 거래 추가" sentinel (CL #51072+) — entry
+        index 와 1 차이. row N → entries[N-1]. row 0 에는 marker 안 적용.
 
-        cell value 는 `_format_cell` 로 raw entry 에서 다시 format —
-        markup string 이 누적/오염되지 않는다.
+        - `_column_active=False`: 기존 marker 가 있으면 plain 복원, 새 marker X.
+        - `_column_active=True`: 이전 marker cell 복원 + (cursor_row,
+          _active_col) 에 markup 적용. cursor_row 가 0 (sentinel) 이면 새
+          marker 안 적용 (sentinel 은 항상 plain).
         """
         table = self.query_one("#entries-table", DataTable)
 
-        # 이전 marker cell 복원 (있으면). _column_active 와 무관하게 항상
-        # 먼저 처리 — 비활성화 진입 시 cleanup, row/col 변경 시 복원.
+        # 이전 marker cell 복원. _column_active 와 무관하게 항상 먼저.
         if self._marked_cell is not None:
             prev_row, prev_col = self._marked_cell
-            if 0 <= prev_row < len(self._entries) and 0 <= prev_col < len(self._COLUMN_NAMES):
-                plain_prev = self._format_cell(self._entries[prev_row], prev_col)
+            prev_entry_idx = prev_row - 1  # row 1 → entries[0]
+            if 0 <= prev_entry_idx < len(self._entries) and 0 <= prev_col < len(self._COLUMN_NAMES):
+                plain_prev = self._format_cell(self._entries[prev_entry_idx], prev_col)
                 try:
                     table.update_cell_at(
                         Coordinate(prev_row, prev_col),
@@ -403,16 +412,18 @@ class EntriesScreen(Screen):
                     pass
             self._marked_cell = None
 
-        # 비활성이거나 entries 비어있으면 marker 적용 X.
+        # 비활성이거나 entries 비어있으면 새 marker 적용 X.
         if not self._column_active or not self._entries:
             return
 
         cur_row = table.cursor_row
-        if cur_row is None or cur_row < 0 or cur_row >= len(self._entries):
+        # sentinel row (0) 또는 boundary 외이면 marker 안 적용.
+        if cur_row is None or cur_row < 1 or cur_row > len(self._entries):
             return
         cur_col = self._active_col
+        cur_entry_idx = cur_row - 1
 
-        plain_cur = self._format_cell(self._entries[cur_row], cur_col)
+        plain_cur = self._format_cell(self._entries[cur_entry_idx], cur_col)
         marker_text = plain_cur if plain_cur else " "  # 빈 cell 도 보이게
         marked = f"[{self._ACTIVE_CELL_STYLE}]{marker_text}[/]"
         try:
@@ -437,18 +448,24 @@ class EntriesScreen(Screen):
         self.set_status(f"활성 컬럼: {col}    {hint}")
 
     def action_context_enter(self) -> None:
-        """Enter — 컬럼 marker 의 활성 여부에 따라 분기 (CL #51064+).
+        """Enter — sentinel / 컬럼 marker 활성 여부에 따라 분기.
 
-        - **비활성** (파란 row cursor 만): 거래 수정 dialog (EntryEditDialog).
-        - **활성** (파란 + 노란 cell marker):
+        - **sentinel row** (cursor row 0, CL #51072+): 새 거래 추가 dialog.
+        - **실 거래 + 컬럼 비활성** (파란 row cursor 만): 거래 수정 dialog.
+        - **실 거래 + 컬럼 활성** (파란 + 노란 cell marker):
           * date / left / right / item: 같은 값으로 필터.
           * money / memo: 거래 수정 dialog.
         """
+        # Sentinel row 우선 — entry 가 없는 자리.
+        if self._is_on_sentinel_row():
+            self.action_new_entry()
+            return
+
         target = self._selected_entry()
         if target is None:
             self.set_status("선택된 거래가 없습니다.", error=True)
             return
-        # 컬럼 비활성 → 항상 edit (사용자 명시 동작).
+        # 컬럼 비활성 → 항상 edit.
         if not self._column_active:
             self.action_edit_entry()
             return
@@ -521,14 +538,27 @@ class EntriesScreen(Screen):
     # ---- new / edit / delete -----------------------------------------
 
     def _selected_entry(self) -> dict[str, Any] | None:
-        """현재 DataTable cursor 가 가리키는 entry. 없으면 None."""
+        """현재 DataTable cursor 가 가리키는 entry. sentinel row 또는
+        선택 불가 상태면 None.
+
+        DataTable row 0 = "새 거래 추가" sentinel. entry 는 row 1 부터
+        (CL #51072+). row N → entries[N-1].
+        """
         if not self._entries:
             return None
         table = self.query_one("#entries-table", DataTable)
         row = table.cursor_row
-        if row is None or row < 0 or row >= len(self._entries):
+        if row is None or row < 1:
             return None
-        return self._entries[row]
+        idx = row - 1
+        if idx >= len(self._entries):
+            return None
+        return self._entries[idx]
+
+    def _is_on_sentinel_row(self) -> bool:
+        """cursor 가 sentinel row (= 0) 인지."""
+        table = self.query_one("#entries-table", DataTable)
+        return table.cursor_row == 0
 
     def action_new_entry(self) -> None:
         session = self.app.session  # type: ignore[attr-defined]
@@ -828,16 +858,52 @@ class EntriesScreen(Screen):
         return ""
 
     def _render_table(self, entries: list[dict[str, Any]]) -> None:
+        """DataTable 을 sentinel row 1개 + entries N개로 (총 N+1 rows) 렌더.
+
+        CL #51072+: row 0 = "새 거래 추가" sentinel. cursor 가 거기 있을
+        때 enter 가 action_new_entry 호출. 실 거래는 row 1+.
+        """
         table = self.query_one("#entries-table", DataTable)
+        # 사용자 cursor 위치 보존 — render 전 위치를 기억해 entries 가
+        # 그대로일 때 같은 row 로 복귀시킨다.
+        prev_cursor = table.cursor_row
         table.clear()
+
+        # Sentinel row 0 — 첫 cell 만 안내, 나머지 column 은 빈 cell.
+        empty_cells = [""] * (len(self._COLUMN_NAMES) - 1)
+        table.add_row(self._NEW_ENTRY_SENTINEL_LABEL, *empty_cells)
+
         for e in entries:
             cells = [self._format_cell(e, i) for i in range(len(self._COLUMN_NAMES))]
             table.add_row(*cells)
-        # render 후 marker 가 stale 이라 reset + 재적용. cursor row 가 0
-        # 이 default 라 (0, _active_col) 에 marker.
-        self._marked_cell = None
+
+        # 첫 mount 또는 entries 변동 후 cursor 위치 결정:
+        # - prev_cursor 가 row 1+ 의 valid 위치면 그대로 복귀 (사용자가
+        #   의도해서 거기 둔 상태 — refresh / filter / clear 가 발생해도
+        #   비슷한 row 에서 시작).
+        # - prev_cursor 가 sentinel (0) 또는 None / out-of-range 면 첫
+        #   실거래 row 1 로 이동 (사용자 가시적 첫 거래에서 시작).
+        # - entries 가 비어있으면 sentinel (0) 만 가능.
+        max_row = len(entries)  # row 0 = sentinel + entries N → 마지막 row = N
         if entries:
-            self._update_active_cell_marker()
+            if (
+                prev_cursor is not None
+                and 1 <= prev_cursor <= max_row
+            ):
+                target_row = prev_cursor
+            else:
+                target_row = 1
+        else:
+            target_row = 0  # sentinel only
+        try:
+            table.move_cursor(row=target_row, animate=False)
+        except Exception:  # pragma: no cover — coord stale
+            pass
+
+        # render 후 marker 가 stale 이라 reset + 재적용. cursor row 가
+        # sentinel 이면 _update_active_cell_marker 가 알아서 skip.
+        self._marked_cell = None
+        self._update_active_cell_marker()
 
     def _update_window_status(
         self,
