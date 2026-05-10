@@ -519,6 +519,57 @@ class EntriesScreen(Screen):
         eid = str(self._entries[idx].get("entry_id") or "")
         return list(self._entry_tags.get(eid, []))
 
+    # ---- 컴팩트 모드 + 가로 스크롤 (CL #51121+) -------------------------
+
+    def _column_is_visible(self, col_index: int) -> bool:
+        """해당 컬럼이 시각상 보이는지 — `width=0` 인 컬럼은 컴팩트에서 숨김.
+
+        Note: width=0 의 의미는 모드별로 다르다.
+          * 정상 모드: `cols[2].width = 12` (left), `cols[3]`/`cols[5]` 는
+            기본 0 인데 DataTable 의 auto-width 가 작동해 콘텐츠 만큼 자란다.
+          * 컴팩트 모드: `cols[2/3/5]` 모두 강제 0 — 시각상 숨김.
+
+        둘을 구분하려면 `_compact` 도 본다 — 컴팩트에서 col∈{2,3,5} 만 hidden.
+        """
+        if not self._compact:
+            return True
+        return col_index not in (2, 3, 5)  # left / right / memo 가 컴팩트에서 숨김
+
+    def _next_visible_col(self, start: int, step: int) -> int:
+        """`start` 부터 `step` (+1 또는 -1) 방향으로 다음 visible 컬럼 인덱스.
+
+        boundary 도달 시 마지막 visible 컬럼 인덱스 반환 — 사용자가 끝에서
+        한 번 더 ←/→ 누르면 멈춤 (= 그대로 같은 컬럼).
+        """
+        last_visible = start
+        i = start + step
+        while 0 <= i < len(self._COLUMN_NAMES):
+            if self._column_is_visible(i):
+                return i
+            i += step
+        return last_visible
+
+    def _scroll_active_col_into_view(self) -> None:
+        """좁은 터미널에서 활성 컬럼이 화면 밖에 있으면 가로 스크롤.
+
+        CL #51121+ 사용자 보고: blink 터미널 ←/→ 으로 이동하다 화면 밖
+        컬럼을 가리키면 marker 가 보이지 않아 어떤 컬럼이 활성인지 알 수
+        없음. DataTable 내부 `_get_cell_region(coord)` + `scroll_to_region`
+        으로 cell 을 가시 영역으로 끌어옴.
+        """
+        if not self._column_active or not self._entries:
+            return
+        try:
+            table = self.query_one("#entries-table", DataTable)
+        except Exception:  # pragma: no cover
+            return
+        coord = Coordinate(table.cursor_row, self._active_col)
+        try:
+            region = table._get_cell_region(coord)
+            table.scroll_to_region(region, force=True, animate=False)
+        except Exception:  # pragma: no cover — internal API 변경 등
+            log.debug("scroll_to_region failed", exc_info=True)
+
     def action_prev_column(self) -> None:
         """← 키 — marker 비활성이면 활성화만 (_active_col 그대로), 활성이면 -1.
 
@@ -526,11 +577,16 @@ class EntriesScreen(Screen):
         를 선택 (`_active_col=item, _tag_index=N-1`). item 위에서 태그 모드
         인 동안엔 `_tag_index -= 1`; 0 에서 다시 ← 면 태그 모드 종료 (item
         셀 자체 marker 로 복귀).
+
+        CL #51121+: 컴팩트 모드 (`_compact=True`) 에서는 hidden 컬럼 (left
+        /right/memo) 을 자동 skip — 좁은 터미널에서도 visible 한 컬럼만 순
+        회. 이동 후 활성 컬럼을 가로 스크롤로 화면 안에.
         """
         if not self._column_active:
             self._column_active = True
             self._update_active_cell_marker()
             self._announce_active_column()
+            self._scroll_active_col_into_view()
             return
 
         item_idx = self._item_col_index()
@@ -543,6 +599,7 @@ class EntriesScreen(Screen):
                 self._tag_index = len(tags) - 1
                 self._update_active_cell_marker()
                 self._announce_active_column()
+                self._scroll_active_col_into_view()
                 return
         # 태그 모드에서 한 칸 이전 — 0 까지.
         if self._active_col == item_idx and self._tag_index is not None:
@@ -553,24 +610,30 @@ class EntriesScreen(Screen):
                 self._tag_index = None
             self._update_active_cell_marker()
             self._announce_active_column()
+            self._scroll_active_col_into_view()
             return
-        # 일반 컬럼 -1.
+        # 일반 컬럼 -1 (컴팩트 모드 hidden col 은 skip).
         if self._active_col > 0:
-            self._active_col -= 1
-            self._tag_index = None
-            self._update_active_cell_marker()
-            self._announce_active_column()
+            new_col = self._next_visible_col(self._active_col, -1)
+            if new_col != self._active_col:
+                self._active_col = new_col
+                self._tag_index = None
+                self._update_active_cell_marker()
+                self._announce_active_column()
+                self._scroll_active_col_into_view()
 
     def action_next_column(self) -> None:
         """→ 키 — marker 비활성이면 활성화만, 활성이면 +1.
 
         CL #51102+: item 위 + 태그가 있으면 → 한 번 더 누름이 태그 모드 진입
         (`_tag_index=0`). 마지막 태그에서 → 면 태그 모드 종료 + memo 로.
+        CL #51121+: 컴팩트 모드 hidden 컬럼 자동 skip + 가로 스크롤.
         """
         if not self._column_active:
             self._column_active = True
             self._update_active_cell_marker()
             self._announce_active_column()
+            self._scroll_active_col_into_view()
             return
 
         item_idx = self._item_col_index()
@@ -582,6 +645,7 @@ class EntriesScreen(Screen):
                 self._tag_index = 0
                 self._update_active_cell_marker()
                 self._announce_active_column()
+                self._scroll_active_col_into_view()
                 return
         # 태그 모드 → 다음 태그 또는 memo.
         if self._active_col == item_idx and self._tag_index is not None:
@@ -589,18 +653,23 @@ class EntriesScreen(Screen):
             if self._tag_index + 1 < len(tags):
                 self._tag_index += 1
             else:
-                # 태그 모드 종료 + memo 진입.
+                # 태그 모드 종료 + memo 진입 (컴팩트면 visible memo 로 skip).
                 self._tag_index = None
-                self._active_col = memo_idx
+                # memo 가 컴팩트에서 hidden 이므로 next_visible 로 jump.
+                self._active_col = self._next_visible_col(memo_idx - 1, +1)
             self._update_active_cell_marker()
             self._announce_active_column()
+            self._scroll_active_col_into_view()
             return
-        # 일반 컬럼 +1.
+        # 일반 컬럼 +1 (컴팩트 모드 hidden col 은 skip).
         if self._active_col < len(self._COLUMN_NAMES) - 1:
-            self._active_col += 1
-            self._tag_index = None
-            self._update_active_cell_marker()
-            self._announce_active_column()
+            new_col = self._next_visible_col(self._active_col, +1)
+            if new_col != self._active_col:
+                self._active_col = new_col
+                self._tag_index = None
+                self._update_active_cell_marker()
+                self._announce_active_column()
+                self._scroll_active_col_into_view()
 
     def action_deactivate_column(self) -> None:
         """Esc — 활성 컬럼 marker + 활성 필터를 함께 해제. 둘 다 비활성이면

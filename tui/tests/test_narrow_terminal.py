@@ -16,6 +16,7 @@ import asyncio
 from typing import Any
 
 import pytest
+from textual.coordinate import Coordinate
 from textual.widgets import DataTable
 
 from whooing_tui.app import WhooingTuiApp
@@ -204,6 +205,145 @@ async def test_entries_screen_normal_mode_on_wide_terminal():
         table = es.query_one("#entries-table", DataTable)
         cols = list(table.columns.values())
         assert cols[2].width == 12  # left
+
+
+class _ClientWithEntries(_Client):
+    """Phase 3 가로 스크롤 테스트용 — 1건 거래 + 6 컬럼 모두 채움."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.accounts = {
+            "assets": [{"account_id": "x11", "title": "현금"}],
+            "expenses": [{"account_id": "x20", "title": "식비"}],
+        }
+        self._entries = [{
+            "entry_id": "e1", "entry_date": "20260510",
+            "money": 12000, "l_account_id": "x20", "r_account_id": "x11",
+            "item": "스타벅스", "memo": "오후",
+        }]
+
+
+@pytest.mark.asyncio
+async def test_compact_mode_skips_hidden_columns_on_right_arrow():
+    """CL #51121+: 컴팩트에서 → 가 hidden left/right 를 skip — date(0) →
+    money(1) → item(4) (left=2, right=3 건너뜀)."""
+    from whooing_tui.screens.entries import EntriesScreen
+
+    fake = _ClientWithEntries()
+    app = WhooingTuiApp(client=fake)  # type: ignore[arg-type]
+    async with app.run_test(size=(40, 30)) as pilot:
+        await _wait_for(
+            lambda: isinstance(app.screen, EntriesScreen)
+            and app.screen.last_entry_count == 1,
+            timeout=3.0,
+        )
+        es: EntriesScreen = app.screen  # type: ignore[assignment]
+        assert es._compact is True
+        # 첫 → = 활성화 (col 0).
+        es.action_next_column()
+        await pilot.pause()
+        assert es._active_col == 0
+        # 두번째 → = col 1 (money, visible).
+        es.action_next_column()
+        await pilot.pause()
+        assert es._active_col == 1
+        # 세번째 → 가 col 2 (left, hidden) skip 하고 col 4 (item) 으로.
+        es.action_next_column()
+        await pilot.pause()
+        assert es._active_col == 4  # item
+
+
+@pytest.mark.asyncio
+async def test_compact_mode_skips_hidden_columns_on_left_arrow():
+    """← 도 마찬가지 — item(4) → money(1) → date(0) (right/left 건너뜀)."""
+    from whooing_tui.screens.entries import EntriesScreen
+
+    fake = _ClientWithEntries()
+    app = WhooingTuiApp(client=fake)  # type: ignore[arg-type]
+    async with app.run_test(size=(40, 30)) as pilot:
+        await _wait_for(
+            lambda: isinstance(app.screen, EntriesScreen)
+            and app.screen.last_entry_count == 1,
+            timeout=3.0,
+        )
+        es: EntriesScreen = app.screen  # type: ignore[assignment]
+        # 활성화 + item 까지 이동
+        es._column_active = True
+        es._active_col = 4
+        # ← = item(4) → money(1) (left=3,2 skip)
+        es.action_prev_column()
+        await pilot.pause()
+        assert es._active_col == 1
+        # ← = money(1) → date(0)
+        es.action_prev_column()
+        await pilot.pause()
+        assert es._active_col == 0
+        # ← 한 번 더 = 0 boundary, 그대로
+        es.action_prev_column()
+        await pilot.pause()
+        assert es._active_col == 0
+
+
+@pytest.mark.asyncio
+async def test_normal_mode_does_not_skip_columns():
+    """정상 모드 (120-cell) 에서는 hidden skip 동작 안 함 — 6 컬럼 모두 순회."""
+    from whooing_tui.screens.entries import EntriesScreen
+
+    fake = _ClientWithEntries()
+    app = WhooingTuiApp(client=fake)  # type: ignore[arg-type]
+    async with app.run_test(size=(120, 30)) as pilot:
+        await _wait_for(
+            lambda: isinstance(app.screen, EntriesScreen)
+            and app.screen.last_entry_count == 1,
+            timeout=3.0,
+        )
+        es: EntriesScreen = app.screen  # type: ignore[assignment]
+        assert es._compact is False
+        # 활성화 + 차례로 →.
+        es.action_next_column()  # 활성화 col 0
+        await pilot.pause()
+        for expected in range(1, 6):
+            es.action_next_column()
+            await pilot.pause()
+            assert es._active_col == expected, f"expected col {expected}"
+
+
+@pytest.mark.asyncio
+async def test_active_col_scrolls_into_view_on_navigation():
+    """좁은 터미널에서 ←/→ 후 활성 컬럼이 화면 안에. scroll_x 가 변하는지."""
+    from whooing_tui.screens.entries import EntriesScreen
+
+    fake = _ClientWithEntries()
+    app = WhooingTuiApp(client=fake)  # type: ignore[arg-type]
+    async with app.run_test(size=(40, 30)) as pilot:
+        await _wait_for(
+            lambda: isinstance(app.screen, EntriesScreen)
+            and app.screen.last_entry_count == 1,
+            timeout=3.0,
+        )
+        es: EntriesScreen = app.screen  # type: ignore[assignment]
+        table = es.query_one("#entries-table", DataTable)
+        # 초기 scroll_x = 0
+        initial_scroll = table.scroll_x
+        # 활성화 + 오른쪽으로 멀리 (item col 4 — 컴팩트에서도 visible)
+        es.action_next_column()  # 활성화 col 0
+        es.action_next_column()  # money col 1
+        es.action_next_column()  # item col 4 (skip left/right)
+        await pilot.pause()
+        assert es._active_col == 4
+        # item col 이 화면 밖에 있을 만큼 멀어 scroll_x 가 변했어야.
+        # 또는 _scroll_active_col_into_view 가 호출됐어야.
+        # 직접 region 검증: cell region 이 visible 영역 안에 들어와야.
+        coord = Coordinate(table.cursor_row, 4)
+        try:
+            cell_region = table._get_cell_region(coord)
+        except Exception:
+            pytest.skip("DataTable internal API _get_cell_region 미공개")
+        # cell 의 시작 x 가 visible 영역 안에.
+        # (visible: scroll_x ~ scroll_x + viewport_width)
+        viewport = table.scrollable_content_region.width
+        assert cell_region.x >= int(table.scroll_x)
+        assert cell_region.x <= int(table.scroll_x) + viewport
 
 
 @pytest.mark.asyncio

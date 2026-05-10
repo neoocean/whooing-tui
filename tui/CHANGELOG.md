@@ -2,6 +2,66 @@
 
 각 항목은 Perforce CL 단위로 끊는다.
 
+## CL #51121 — 0.17.1 — ←/→ 컬럼 네비 시 가로 스크롤 + 컴팩트 hidden 컬럼 자동 skip (사용자 요청) (2026-05-10)
+
+사용자 보고: "blink 터미널 환경에서 좌우 방향키로 커서를 옮기다가 화면
+밖에 있는 요소를 가리키면 지금은 커서가 화면 밖으로 나가 선택된 칼럼을
+알 수 없습니다. 이 상황에서 좌우 커서를 따라 화면을 스크롤해주세요."
+
+### 동작
+
+- **`_scroll_active_col_into_view()`** — `action_next_column` /
+  `action_prev_column` 에서 `_active_col` 변경 후 호출. DataTable 의 내부
+  `_get_cell_region(coord)` 으로 활성 cell 의 region 회수, `scroll_to_region
+  (region, force=True, animate=False)` 으로 가시 영역으로 끌어옴. 좁은
+  터미널에서도 marker 가 항상 화면 안.
+
+- **컴팩트 모드 hidden 컬럼 자동 skip** — `_compact=True` 인 상태에서
+  width=0 인 left/right/memo 는 네비게이션이 건너뜀:
+  - `_next_visible_col(start, step)` helper — 다음 visible 컬럼 인덱스.
+  - `_column_is_visible(col)` — `_compact` 시 col∉{2,3,5} 만 visible.
+  - 컴팩트에서 →: `date(0) → money(1) → item(4) → memo(5? 컴팩트라 hidden)`
+    의 흐름이 자동 skip 으로 `date(0) → money(1) → item(4)` 만 순회.
+  - 정상 모드는 영향 X (기존 6 컬럼 모두 순회).
+
+### 수정
+
+- `tui/src/whooing_tui/screens/entries.py`
+  - `_column_is_visible(col_index)`, `_next_visible_col(start, step)`,
+    `_scroll_active_col_into_view()` 헬퍼 신설.
+  - `action_prev_column` / `action_next_column` 의 컬럼 +1/-1 분기에
+    `_next_visible_col` 사용 + 매 변경 후 `_scroll_active_col_into_view()`
+    호출. 태그 모드 진입/종료 / memo↔item 점프 / 첫 활성화 모두 같은
+    스크롤 트리거.
+  - 태그 모드 후 memo 진입 분기는 컴팩트에서 visible 컬럼으로 jump:
+    `self._active_col = self._next_visible_col(memo_idx - 1, +1)`.
+
+- `tui/tests/test_narrow_terminal.py` — 4 신규:
+  - `test_compact_mode_skips_hidden_columns_on_right_arrow`
+  - `test_compact_mode_skips_hidden_columns_on_left_arrow`
+  - `test_normal_mode_does_not_skip_columns`
+  - `test_active_col_scrolls_into_view_on_navigation`
+
+### 검증
+
+- 467 → **471 통과** (+4).
+- DB 백업 절차 준수: 작업 전 db.sqlite → .bak 복사. 테스트 후 SHA / 행 수
+  보존 확인 (entry_annotations=8 / entry_hashtags=15 / statement_import_log=68
+  — 모두 일치). 백업 제거.
+
+### 가로 스크롤 흐름
+
+```mermaid
+graph LR
+    K[← / → 키] --> A[_active_col 갱신<br/>compact 면 hidden 컬럼 skip]
+    A --> M[_update_active_cell_marker]
+    M --> N[_announce_active_column]
+    N --> S[_scroll_active_col_into_view]
+    S --> R[_get_cell_region]
+    R --> SR[scroll_to_region<br/>force=True animate=False]
+    SR --> V[활성 cell 화면 안에]
+```
+
 ## CL #51120 — 0.17.0 — 좁은 터미널 (iPhone Blink 등) 대응 — 모달 반응형 width + DataTable 컴팩트 컬럼 (사용자 요청) (2026-05-10)
 
 사용자 질문: "tui 가 아이폰 blink 앱처럼 좁은 터미널 환경에 대응하고
