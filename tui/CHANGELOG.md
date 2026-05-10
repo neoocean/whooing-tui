@@ -2,6 +2,56 @@
 
 각 항목은 Perforce CL 단위로 끊는다.
 
+## CL #50961 — 0.6.1 — `.env` 공통 위치 (Step 10) (2026-05-10)
+
+후잉 토큰을 양쪽 도구 (whooing-tui + whooing-mcp-server-wrapper) 가
+공유하도록 공통 위치 `~/.config/whooing/.env` 채택. backward compatible —
+기존 project root `.env` 도 fallback 으로 계속 동작.
+
+### 수정
+
+- `tui/src/whooing_tui/auth.py`
+  - `_env_candidates()` 함수 분리. 우선순위: ① `$WHOOING_ENV` (절대
+    경로 override) → ② `~/.config/whooing/.env` (공통) → ③ project
+    root 의 `.env` (legacy).
+  - `load_dotenv(c, override=False)` — 셸 export 된 환경변수가 항상
+    최우선.
+  - 첫 발견 후보 1개만 로드 (override=False 라 의미상 동등).
+  - 미설정 시 에러 메시지에 권장 위치 (`~/.config/whooing/.env`) 안내.
+- `.env.example` (monorepo root) — 탐색 우선순위 + 공통 위치 마이그레이션
+  방법 (`mkdir / mv / chmod 600`) 안내 박스 추가.
+- `tui/tests/test_auth.py` — 3 cases 추가:
+  * `_env_candidates()` 후보에 공통 위치 포함.
+  * `$WHOOING_ENV` override 가 첫 후보.
+  * `WHOOING_ENV=<file>` 가 가리키는 토큰 로드.
+- `tui/CHANGELOG.md` / `tui/MEMORY.md` — 본 항목.
+- `tui/pyproject.toml` + `__init__.py` — 0.6.0 → 0.6.1.
+
+### Cross-project (mcp-server-wrapper 측, 별도 CL)
+
+같은 양쪽 정렬을 위해 `whooing-mcp-server-wrapper` 의 `server.py` 에도
+공통 위치 후보 추가 (CL #50962). wrapper 도 `~/.config/whooing/.env` 를
+우선 탐색하고 기존 `~/.config/whooing-mcp/.env` 는 backward compat 으로
+유지.
+
+### 검증
+
+- `make test` (monorepo) → core 72 + tui 102 = **174 passed**.
+- `cd ../whooing-mcp-server && pytest -q` → **188 passed** (wrapper 회귀 없음).
+
+### 사용자 마이그레이션 (선택)
+
+토큰을 한 곳에서 관리하려면:
+
+```bash
+mkdir -p ~/.config/whooing
+mv .env ~/.config/whooing/.env       # whooing-tui 의 .env 또는
+                                     # whooing-mcp-server 의 .env
+chmod 600 ~/.config/whooing/.env     # 권장
+```
+
+하지 않아도 기존 `.env` 가 그대로 동작 — backward compat 보장.
+
 ## CL #50956 — 0.6.0 — 화면 도움말 모달 (Step 7) (2026-05-10)
 
 ### 추가

@@ -57,3 +57,38 @@ def test_load_auth_from_env_real(monkeypatch):
     auth = load_auth_from_env()
     assert auth.token.startswith("__eyJh")
     assert auth.headers()["X-API-Key"].startswith("__eyJh")
+
+
+# ---- _env_candidates / WHOOING_ENV override -----------------------------
+
+
+def test_env_candidates_includes_xdg_common(monkeypatch):
+    """`~/.config/whooing/.env` 가 후보에 포함된다 — mcp-server 와의 공통 위치."""
+    from whooing_tui.auth import _env_candidates
+    monkeypatch.delenv("WHOOING_ENV", raising=False)
+    cands = _env_candidates()
+    assert any(
+        str(c).endswith(".config/whooing/.env") for c in cands
+    ), f"공통 위치 후보 누락: {cands}"
+
+
+def test_env_candidates_explicit_override_first(monkeypatch, tmp_path):
+    """`$WHOOING_ENV` 가 set 이면 첫 번째 후보."""
+    from whooing_tui.auth import _env_candidates
+    target = tmp_path / "custom.env"
+    monkeypatch.setenv("WHOOING_ENV", str(target))
+    cands = _env_candidates()
+    assert cands[0] == target
+
+
+def test_load_auth_uses_explicit_env_path(monkeypatch, tmp_path):
+    """`$WHOOING_ENV` 가 가리키는 파일의 토큰을 로드한다."""
+    custom_env = tmp_path / "common.env"
+    custom_env.write_text(
+        "WHOOING_AI_TOKEN=__eyJhcHBfaWQ_explicit_env_path_token_xx\n",
+        encoding="utf-8",
+    )
+    monkeypatch.delenv("WHOOING_AI_TOKEN", raising=False)
+    monkeypatch.setenv("WHOOING_ENV", str(custom_env))
+    auth = load_auth_from_env()
+    assert auth.token.endswith("token_xx")
