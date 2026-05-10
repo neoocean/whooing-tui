@@ -1,7 +1,10 @@
-# whooing-mcp-server-wrapper — common operator targets.
+# whooing-mcp-server (mcp/) — package-local Makefile.
+#
+# 일반적으로 monorepo 루트의 Makefile 을 통해 호출됩니다 (`make install`,
+# `make test-mcp` 등). 본 Makefile 은 mcp 패키지만 따로 다룰 때 사용.
 #
 # Usage:
-#   make install          venv + editable install + dev deps + Chromium
+#   make install          venv + editable install (sibling core 포함) + Chromium
 #   make test             pytest -q
 #   make tools            registered MCP tool 목록 출력
 #   make smoke            tests/_live_smoke.py — 실 후잉 호출 (자격증명 필요)
@@ -9,9 +12,10 @@
 #   make lint             ruff check (있으면)
 #   make clean            __pycache__ / .pytest_cache 제거
 #
-# venv: .venv/ (project-local). 모든 target 이 source .venv/bin/activate 후 실행.
+# venv: monorepo root 의 .venv 를 우선 사용. 본 디렉터리에서 직접 호출 시
+# .venv/ 신설.
 
-VENV ?= .venv
+VENV ?= ../.venv
 PY := $(VENV)/bin/python
 PIP := $(VENV)/bin/pip
 PYTEST := $(VENV)/bin/pytest
@@ -19,9 +23,9 @@ PYTEST := $(VENV)/bin/pytest
 .PHONY: help install install-dev test test-fast tools smoke probe-s9046 lint clean
 
 help:
-	@echo "make install     venv + editable install + dev deps + Chromium"
+	@echo "make install     monorepo .venv 에 mcp 패키지 editable install"
 	@echo "make test        pytest -q (모든 테스트)"
-	@echo "make test-fast   pytest -q --ignore=tests/test_p4_sync.py (P4 mock 빠짐 — 기본보다 빠름)"
+	@echo "make test-fast   pytest -q --ignore=tests/test_p4_sync.py"
 	@echo "make tools       등록된 MCP 도구 목록"
 	@echo "make smoke       실 후잉 호출 검증 (.env 의 WHOOING_AI_TOKEN 필요)"
 	@echo "make probe-s9046 accounts/entries 구조 탐색 (.env 필요)"
@@ -32,10 +36,10 @@ install:
 	@if [ ! -d $(VENV) ]; then \
 		python3 -m venv $(VENV); \
 	fi
-	# whooing-core 를 sibling monorepo (../whooing-tui/core) 에서 editable
-	# install. 본 머신 dev 우선; pyproject.toml 의 git+https spec 은 CI fallback.
-	@if [ -d ../whooing-tui/core ]; then \
-		$(PIP) install --quiet -e ../whooing-tui/core; \
+	# whooing-core 는 sibling (../core/) — monorepo 루트 Makefile 이 먼저
+	# install 하지만 이 타겟을 단독으로 실행해도 동작하도록 여기서도 처리.
+	@if [ -d ../core ]; then \
+		$(PIP) install --quiet -e ../core; \
 	fi
 	$(PIP) install --quiet -e .[dev]
 	$(VENV)/bin/playwright install chromium

@@ -40,15 +40,26 @@ def test_default_queue_path_uses_env(monkeypatch, tmp_path):
     assert default_queue_path() == tmp_path / "custom.db"
 
 
-def test_default_queue_path_project_root_when_no_env(monkeypatch):
-    """default 는 <project root>/whooing-data.sqlite — cross-machine via P4."""
+def test_default_queue_path_uses_data_dir_env(monkeypatch, tmp_path):
+    """v0.2.0+: WHOOING_DATA_DIR 가 설정되면 그 path/whooing-data.sqlite."""
     monkeypatch.delenv("WHOOING_QUEUE_PATH", raising=False)
+    monkeypatch.setenv("WHOOING_DATA_DIR", str(tmp_path))
+    monkeypatch.setenv("HOME", str(tmp_path / "fake-home"))
     p = default_queue_path()
+    assert p == tmp_path / "whooing-data.sqlite"
+
+
+def test_default_queue_path_falls_back_to_home_default(monkeypatch, tmp_path):
+    """env 모두 없고 ~/.whooing 도 없으면 ~/.whooing/whooing-data.sqlite (새 default)."""
+    monkeypatch.delenv("WHOOING_QUEUE_PATH", raising=False)
+    monkeypatch.delenv("WHOOING_DATA_DIR", raising=False)
+    fake_home = tmp_path / "fake-home"
+    fake_home.mkdir()
+    monkeypatch.setenv("HOME", str(fake_home))
+    p = default_queue_path()
+    # ~/.whooing/whooing-data.sqlite (~ 가 fake_home 으로 expand)
     assert p.name == "whooing-data.sqlite"
-    # project root 는 src/whooing_mcp/queue.py 의 parents[2]
-    from whooing_mcp import queue
-    expected_root = Path(queue.__file__).resolve().parents[2]
-    assert p == expected_root / "whooing-data.sqlite"
+    assert ".whooing" in p.parts
 
 
 def test_open_db_creates_schema_and_directory(tmp_queue):

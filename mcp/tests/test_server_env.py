@@ -45,17 +45,27 @@ def test_finds_cwd_env_when_no_explicit(isolated_env):
 
 
 def test_finds_project_root_env_when_cwd_lacks(isolated_env, monkeypatch):
-    """3순위: cwd 에 .env 없으면 project root (__file__ 기반).
+    """3순위: cwd 에 .env 없으면 project root (mcp/.env 가 _load_env 의
+    parents[2] 후보).
 
-    project root 는 `<this_repo>/.env` — 이미 존재하므로 (사용자 .env)
-    실 토큰이 잡힐 수 있다. 본 테스트는 isolated cwd / HOME 만 격리하고
-    project root 의 실 .env 를 검출하는지만 확인. 토큰 _값_ 은 검사 X.
+    monorepo 흡수 (2026-05-10) 후 project root = `mcp/`. mcp/.env 는 보통
+    존재하지 않음 (.env 는 monorepo root 또는 ~/.config/whooing/.env 에 위치).
+    본 테스트는 mcp/.env 를 임시로 만들어 (3순위) 후보가 잡히는지 확인.
     """
-    # cwd 와 HOME 모두 .env 없음 → project root 의 .env 가 잡혀야
-    _load_env()
-    # 실 토큰의 길이 / prefix 만 확인 (값 노출 X)
-    tok = os.environ.get("WHOOING_AI_TOKEN", "")
-    assert tok.startswith("__"), f"unexpected token shape (len={len(tok)})"
+    from pathlib import Path
+    import whooing_mcp
+    project_root = Path(whooing_mcp.__file__).resolve().parents[2]
+    pr_env = project_root / ".env"
+    pre_existed = pr_env.exists()
+    if not pre_existed:
+        pr_env.write_text("WHOOING_AI_TOKEN=__token_project_root\n")
+    try:
+        _load_env()
+        tok = os.environ.get("WHOOING_AI_TOKEN", "")
+        assert tok.startswith("__"), f"unexpected token shape (len={len(tok)})"
+    finally:
+        if not pre_existed and pr_env.exists():
+            pr_env.unlink()
 
 
 def test_explicit_overrides_cwd(isolated_env, monkeypatch):
