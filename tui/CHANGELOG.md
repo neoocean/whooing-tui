@@ -2,6 +2,61 @@
 
 각 항목은 Perforce CL 단위로 끊는다.
 
+## CL #51003 — 0.7.4 — `mcp_bridge` 자체 HTTP JSON-RPC 클라이언트로 재작성 (archived 의존 제거) (2026-05-10)
+
+archived `whooing-mcp-server-wrapper` 의 `OfficialMcpClient` 에 의존하던
+`mcp_bridge.py` 를 자체 HTTP JSON-RPC 클라이언트로 재작성. archived
+패키지에 대한 잔재 import 가 사라져 본 모듈은 monorepo `mcp/` 가 사라져도
+독립 동작.
+
+### 수정
+
+- `tui/src/whooing_tui/mcp_bridge.py`
+  * `from whooing_mcp.official_mcp import OfficialMcpClient` 제거.
+  * `httpx.AsyncClient` 로 직접 POST + JSON-RPC envelope (`{jsonrpc:
+    "2.0", id, method, params}`).
+  * 헤더: `X-API-Key` + `Content-Type: application/json` +
+    `Accept: application/json, text/event-stream` (MCP spec).
+  * `list_tools()` / `call(name, arguments)` public API 는 동일.
+  * `tools/call` 결과의 `isError: True` → `ToolError(UPSTREAM)` 변환,
+    `content[].text` 메시지 추출.
+  * JSON-RPC error code 매핑: -32700~-32600 (표준 4xx) → USER_INPUT,
+    그 외 / 일반 예외 / non-JSON / `result` 누락 → UPSTREAM.
+  * `_req_id` 카운터로 호출별 id 증가 (1, 2, 3, ...).
+  * 더 이상 `DeprecationWarning` 발사하지 않음 — archived 의존이 없으므로
+    deprecation 명분 변경 (기능 자체는 미래 활용 후보).
+
+- `tui/tests/test_mcp_bridge.py` — 완전 재작성, 12 cases:
+  * `respx` 로 후잉 공식 MCP 응답을 mock — 실 네트워크 없이 검증.
+  * envelope 검증: `tools/list` / `tools/call` 의 method, params,
+    `X-API-Key` 헤더.
+  * `tools/call` 의 `arguments` 보존, `structuredContent` 반환.
+  * `isError: True` → ToolError + content.text 추출.
+  * JSON-RPC error -32600 / -32601 → USER_INPUT, -32000 → UPSTREAM.
+  * non-JSON 응답 (502 + HTML) → UPSTREAM.
+  * `result` 누락 → UPSTREAM.
+  * `httpx.ConnectError` (network) → UPSTREAM.
+  * `_req_id` 가 1씩 증가.
+  * **회귀 방지**: 모듈 source 에 `from whooing_mcp` / `import whooing_mcp`
+    가 없는지 단위 테스트로 영구 검증.
+
+### 수정 (문서)
+
+- `tui/CHANGELOG.md` / `tui/MEMORY.md` — 본 항목.
+- `tui/pyproject.toml` + `__init__.py` — 0.7.3 → 0.7.4.
+
+### 검증
+
+- `make test-tui` → 182 passed (Phase 6 152 + cli 18 + mcp_bridge 12).
+- 기존 6 cases 전부 새 12 cases 로 대체. 부수 효과: `DeprecationWarning`
+  더 이상 발생 X.
+
+### 의도적 누락
+
+- mcp_bridge 의 UI 통합 (HomeScreen / ReportsScreen) 은 여전히 미구현.
+  본 CL 은 라이브러리 layer 의 archived 의존만 제거.
+- archived `mcp/` 디렉토리 자체는 그대로 (CL #50999 결정 유지).
+
 ## CL #50993 — 0.7.3 — whooing-mcp-server-wrapper 종료 반영 (archive 표기) (2026-05-10)
 
 자매 프로젝트 `whooing-mcp-server-wrapper` 가 종료됐다. 코드는 monorepo
