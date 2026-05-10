@@ -2,6 +2,47 @@
 
 각 항목은 Perforce CL 단위로 끊는다.
 
+## CL #51013 — 0.7.7 — `whooing.py` 자동 re-exec 패턴 (시스템 python 으로 호출돼도 동작) (2026-05-10)
+
+0.7.6 의 `whooing.py` 가 시스템 `python3` 으로 호출되면 `httpx` /
+`pydantic` / `dotenv` 가 없다고 실패하던 문제를 해결. **시스템 python 으로
+호출 → 자동으로 monorepo `.venv/bin/python` 으로 re-exec** 하는 패턴.
+
+### 수정
+
+- `whooing.py`
+  * `_can_import_deps()` — 외부 deps 가 현재 인터프리터에서 import
+    가능한지 빠르게 검사 (시스템 python 에 deps 가 의도적으로 깔린
+    환경 포용).
+  * `_reexec_in_venv_if_needed()` — venv 안이 아니고 deps 도 없으면
+    `os.execv(_VENV_PY, ...)` 으로 본 프로세스를 venv python 으로 교체.
+    venv 가 없으면 stderr 에 `make install` 안내 + exit 3.
+  * **`_running_in_venv()` 버그 수정** — 기존 구현은 `sys.executable`
+    의 realpath 를 비교했는데 venv 의 python 이 시스템 python 의
+    symlink 인 macOS / Linux 환경에서 양쪽이 같은 binary 로 풀려 venv
+    구분이 안 됐다. 표준 마커인 `sys.prefix` (venv 활성화 시 venv root
+    을 가리킴) 를 `.venv` 디렉토리와 비교하도록 교체. `pyvenv.cfg` 가
+    설정하는 값이라 신뢰 가능.
+  * 모듈 docstring 에 자동 re-exec 동작 명시.
+- `tui/CHANGELOG.md` / `tui/MEMORY.md` — 본 항목.
+- `tui/pyproject.toml` + `__init__.py` — 0.7.6 → 0.7.7.
+
+### 검증
+
+- `python3 whooing.py --help` (시스템 python3) → 자동 re-exec, help 정상.
+- `python3 whooing.py sections list` (시스템 python3) → 자동 re-exec, 실
+  후잉 응답 정상.
+- `.venv/bin/python whooing.py --help` (이미 venv) → re-exec skip, 그대로 동작.
+- `make smoke-cli` → 진입점 3 종 모두 동작.
+
+### 학습된 함정
+
+`os.path.realpath(sys.executable)` 로 venv 감지하는 패턴은 macOS framework
+build 환경에서 작동 안 함 — `.venv/bin/python` 이 시스템 python 의
+symlink 라 둘 다 `python3.X` 로 풀린다. **표준 venv 마커는 `sys.prefix !=
+sys.base_prefix`** 또는 `sys.prefix == <venv_dir>`. 후속 venv 감지 코드도
+같은 패턴을 따를 것.
+
 ## CL #51009 — 0.7.6 — monorepo 루트 진입점 `whooing.py` 추가 (2026-05-10)
 
 `python whooing.py [args]` 가 `python -m whooing_tui [args]` / 콘솔
