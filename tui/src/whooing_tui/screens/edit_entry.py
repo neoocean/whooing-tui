@@ -286,8 +286,11 @@ class EntryEditDialog(ModalScreen[EntryDraft | None]):
     ) -> None:
         """`existing` 이 주어지면 수정 모드 (값 prefill + entry_id 보존).
 
-        `existing` 에는 후잉 거래 dict 외에 `_local_tags` 키로 사전조회한
-        해시태그 list 를 끼워 넣을 수 있다 (호출자가 sqlite 에서 미리 fetch).
+        `existing` 에는 후잉 거래 dict 외에 두 개의 보조 키를 끼워 넣을 수
+        있다 (호출자가 sqlite 에서 미리 fetch — `EntriesScreen` 참조):
+          - `_local_tags`: 이 entry 의 기존 해시태그 list (prefill 용).
+          - `_all_tags_db`: 섹션 전체에서 본 적 있는 해시태그 사전
+            `{tag: count}` (TagsPickerScreen 의 추천 / 자주 쓰는 태그 출처).
         """
         super().__init__()
         self._session = session
@@ -296,6 +299,12 @@ class EntryEditDialog(ModalScreen[EntryDraft | None]):
         # left/right 의 초기 (account_id, title, type) — _AccountButton 에 set.
         self._initial_left = self._lookup_account(self._existing.get("l_account_id"))
         self._initial_right = self._lookup_account(self._existing.get("r_account_id"))
+        # tags picker 가 사용하는 사전. dict 가 비어있어도 모달은 정상 동작
+        # (추천 / 자주 쓰는 태그 섹션이 비어있을 뿐).
+        raw_db = self._existing.get("_all_tags_db") or {}
+        self._all_tags_db: dict[str, int] = (
+            dict(raw_db) if isinstance(raw_db, dict) else {}
+        )
 
     def _lookup_account(self, aid: str | None) -> tuple[str, str, str]:
         """account_id → (id, title, type). 못 찾으면 (id, "", "")."""
@@ -383,6 +392,16 @@ class EntryEditDialog(ModalScreen[EntryDraft | None]):
             # left/right 버튼 — 계정과목 picker 모달.
             self._open_account_picker(bid)
 
+    def on_input_submitted(self, event: Input.Submitted) -> None:
+        """tags Input 위에서 Enter — TagsPickerScreen push.
+
+        Enter 가 자연스러운 트리거지만 다른 Input (date / money / item /
+        memo) 에서는 default 동작 (focus 이동) 그대로 둬야 하므로 id 분기.
+        """
+        if event.input.id != "f-tags":
+            return
+        self._open_tags_picker()
+
     def _open_account_picker(self, button_id: str) -> None:
         """left/right 버튼 → AccountPickerScreen push, 결과로 버튼 갱신."""
         from whooing_tui.screens.account_picker import AccountPickerScreen
@@ -399,6 +418,42 @@ class EntryEditDialog(ModalScreen[EntryDraft | None]):
         self.app.push_screen(
             AccountPickerScreen(
                 self._session, side=side, current_id=btn.account_id or None,
+            ),
+            _on_pick,
+        )
+
+    def _open_tags_picker(self) -> None:
+        """tags Input Enter → TagsPickerScreen push, 결과 → 입력란 append."""
+        from whooing_tui.screens.tags_picker import TagsPickerScreen
+
+        item_now = self.query_one("#f-item", Input).value
+        memo_now = self.query_one("#f-memo", Input).value
+        tags_input = self.query_one("#f-tags", Input)
+        already = parse_hashtags_input(tags_input.value)
+
+        def _on_pick(result: str | None) -> None:
+            if not result:
+                return
+            tag = result.strip().lstrip("#").strip()
+            if not tag:
+                return
+            # 이미 있는 토큰이면 noop (중복 입력 방지).
+            if tag in already:
+                tags_input.focus()
+                return
+            current = tags_input.value.rstrip()
+            tags_input.value = (
+                f"{current} {tag}" if current else tag
+            )
+            tags_input.cursor_position = len(tags_input.value)
+            tags_input.focus()
+
+        self.app.push_screen(
+            TagsPickerScreen(
+                item=item_now,
+                memo=memo_now,
+                existing=self._all_tags_db,
+                already_selected=already,
             ),
             _on_pick,
         )

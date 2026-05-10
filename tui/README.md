@@ -9,7 +9,7 @@
 > [`mcp/`](../mcp) 에 보존되며, TUI 의 `mcp_bridge.py` 가 그 `OfficialMcpClient`
 > 를 한정적으로 호출 (deprecated, 후속 정리 예정).
 
-**현재 0.12.0 — Phase 6 + EntryEditDialog 폼 전면 개선 (CL #51076)**:
+**현재 0.13.0 — Phase 6 + 계정과목 picker 트리 + tags picker (CL #51080)**:
 
 - Phase 1: 핵심 라이브러리 + 헤드리스 CLI
 - Phase 2a: HomeScreen (섹션 picker + 활성 섹션 계정과목 트리)
@@ -133,14 +133,22 @@ entries 일 때는 sentinel 자동 표시 (진입점 보장).
 - **date** — `YYYY-MM-DD` 형식. 숫자만 입력해도 자동으로 `-` 가 삽입됨
   (예: `20260509` → `2026-05-09`). 사용자가 직접 `-` 를 타이핑해도 무시됨.
 - **money** — 천단위 콤마 자동 포매팅 (`1,234,567`). 입력 중 실시간 갱신.
-- **left / right** — *이름* 으로 표시 (`식비  (x20)`). Enter / 클릭 → 메뉴
-  picker 모달 (`AccountPickerScreen`) 에서 선택. 모달은 OptionList 의
-  type-to-search 로 빠른 검색 가능, 자산→부채→자본→수입→지출→그룹 정렬.
+- **left / right** — *이름* 으로 표시 (`식비  (x20)`). Enter / 클릭 →
+  `AccountPickerScreen` 모달 (Tree widget). **카테고리 헤더** (자산/부채/
+  자본/수입/지출/그룹) + **항목 leaf** 2-level 구조. 0.13.0+ 부터는 사용자가
+  카테고리를 먼저 펼쳐 보고 그 안의 항목을 선택. 현재 선택된 항목의
+  카테고리는 자동 펼침 + cursor 이동.
 - **item** — 적요 (예: `스타벅스`). 후잉의 item 필드와 동일.
 - **memo** — 후잉의 memo + 로컬 sqlite 의 `entry_annotations.note` 에
   동시 저장 (검색·통계용 미러).
-- **tags** — 해시태그 (로컬 sqlite only, 후잉에는 보내지 않음). 공백 / `,`
-  / `#` 모두 분리자 (예: `#식비 #저녁` 또는 `식비, 저녁`). 중복 제거.
+- **tags** — 해시태그 (로컬 sqlite only, 후잉에는 보내지 않음). 직접
+  타이핑 또는 **Enter → `TagsPickerScreen` 모달** (0.13.0+):
+    - **추천**: item / memo 본문에 매칭되는 기존 태그 (예: item=`외식 점심`,
+      memo=`식비 결제` → `식비`, `외식` 가 추천 섹션 상단).
+    - **자주 쓰는 태그**: 사용 빈도 내림차순.
+    - 타이핑 시 prefix/substring 필터, `+ 새 태그 만들기: <input>` 옵션
+      으로 새 태그 즉시 생성.
+  공백 / `,` / `#` 모두 분리자, 중복 제거.
 
 ## 헤드리스 CLI
 

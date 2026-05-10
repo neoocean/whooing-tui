@@ -130,18 +130,99 @@ async def test_picker_cancel_keeps_button():
 
 
 @pytest.mark.asyncio
-async def test_picker_lists_all_accounts_sorted_by_type():
-    """OptionList 가 assets → expenses 순으로 정렬."""
+async def test_picker_lists_categories_with_items_as_leaves():
+    """Tree 가 카테고리(branch) → 항목(leaf) 2-level. 자산→지출 순 + 항목
+    leaf 의 data = (account_id, title, type_key)."""
     fake = FakeClient()
     app = WhooingTuiApp(client=fake)  # type: ignore[arg-type]
     async with app.run_test() as pilot:
         await _open_entries(app)
-        from textual.widgets import OptionList
+        from textual.widgets import Tree
 
-        picker = AccountPickerScreen(app.session, side="left")
-        await app.push_screen(picker)
+        await app.push_screen(AccountPickerScreen(app.session, side="left"))
         await pilot.pause()
-        opt = picker.query_one("#acc-list", OptionList)
-        # 옵션 ID 순 — 첫 항목은 assets (x11), 그 후 expenses (x20, x21).
-        ids = [opt.get_option_at_index(i).id for i in range(opt.option_count)]
-        assert ids == ["x11", "x20", "x21"]
+        tree = app.screen.query_one("#acc-tree", Tree)
+        cats = list(tree.root.children)
+        # 카테고리 데이터 type_key 순 — 자산 (assets) 먼저, expenses 다음.
+        assert [c.data for c in cats] == ["assets", "expenses"]
+        # leaf 의 data 가 (id, title, type_key) 튜플
+        assets_leaves = [g.data for g in cats[0].children]
+        assert assets_leaves == [("x11", "현금", "assets")]
+        expense_leaves = [g.data for g in cats[1].children]
+        assert expense_leaves == [
+            ("x20", "식비", "expenses"),
+            ("x21", "교통비", "expenses"),
+        ]
+
+
+@pytest.mark.asyncio
+async def test_picker_auto_expands_current_id_category():
+    """`current_id` 가 속한 카테고리만 자동 펼침 + cursor 가 그 leaf 위."""
+    fake = FakeClient()
+    app = WhooingTuiApp(client=fake)  # type: ignore[arg-type]
+    async with app.run_test() as pilot:
+        await _open_entries(app)
+        from textual.widgets import Tree
+
+        await app.push_screen(
+            AccountPickerScreen(app.session, side="left", current_id="x20"),
+        )
+        await pilot.pause()
+        tree = app.screen.query_one("#acc-tree", Tree)
+        cats = list(tree.root.children)
+        # 자산은 접혀있어야, 지출은 펼침
+        assets_cat = next(c for c in cats if c.data == "assets")
+        expenses_cat = next(c for c in cats if c.data == "expenses")
+        assert assets_cat.is_expanded is False
+        assert expenses_cat.is_expanded is True
+
+
+@pytest.mark.asyncio
+async def test_picker_branch_enter_toggles_expand():
+    """카테고리 위에서 Enter (NodeSelected) → 펼침/접힘 토글, 모달은 유지."""
+    fake = FakeClient()
+    app = WhooingTuiApp(client=fake)  # type: ignore[arg-type]
+    async with app.run_test() as pilot:
+        await _open_entries(app)
+        from textual.widgets import Tree
+
+        await app.push_screen(AccountPickerScreen(app.session, side="left"))
+        await pilot.pause()
+        tree = app.screen.query_one("#acc-tree", Tree)
+        cats = list(tree.root.children)
+        target = next(c for c in cats if c.data == "expenses")
+        # 초기 expansion 기록
+        was_expanded = target.is_expanded
+        # NodeSelected event 를 직접 post — 사용자의 Enter 와 같은 효과.
+        app.screen.post_message(Tree.NodeSelected(target))
+        await pilot.pause()
+        assert target.is_expanded is (not was_expanded)
+        # 모달 그대로
+        assert isinstance(app.screen, AccountPickerScreen)
+
+
+@pytest.mark.asyncio
+async def test_picker_leaf_enter_dismisses_with_account():
+    """항목 leaf 위에서 Enter → dismiss((aid, title, type_key))."""
+    fake = FakeClient()
+    app = WhooingTuiApp(client=fake)  # type: ignore[arg-type]
+    async with app.run_test() as pilot:
+        await _open_entries(app)
+        from textual.widgets import Tree
+
+        results: list = []
+
+        def _on_pick(r):
+            results.append(r)
+
+        await app.push_screen(
+            AccountPickerScreen(app.session, side="left"),
+            _on_pick,
+        )
+        await pilot.pause()
+        tree = app.screen.query_one("#acc-tree", Tree)
+        cats = list(tree.root.children)
+        leaf = list(cats[1].children)[0]  # expenses → 식비
+        app.screen.post_message(Tree.NodeSelected(leaf))
+        await pilot.pause()
+        assert results == [("x20", "식비", "expenses")]

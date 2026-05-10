@@ -1,11 +1,29 @@
-"""AccountPickerScreen — `EntryEditDialog` 의 left/right 선택 모달.
+"""AccountPickerScreen — `EntryEditDialog` 의 left/right 선택 모달 (트리 형).
 
-거래 입력/수정 폼에서 left/right 버튼에 Enter 를 누르면 본 모달이 push 된다.
-사용자가 OptionList 에서 계정과목을 선택하면 `(account_id, title, type_key)`
-튜플을 dismiss 결과로 반환. 취소(Esc/q) 면 None.
+CL #51076 의 단일 OptionList 가 모든 계정과목을 한꺼번에 펼쳐 보여줘 항목
+수가 많을 때 선택이 어렵다는 사용자 피드백 (CL #51080) 으로 **카테고리
+헤더 + 트리 펼침** 형태로 재작성.
 
-OptionList 의 type-to-search 가 사용자가 식비 / 현금 같은 친숙한 이름을
-빠르게 찾도록 도와준다.
+레이아웃:
+  ▼ 자산
+      현금
+      통장
+  ▶ 부채
+  ▶ 자본
+  ▶ 수입
+  ▼ 지출
+      식비          ← (현재 선택)
+      교통비
+  ▶ 그룹
+
+키 동작:
+  ↑/↓        : 노드 이동
+  Enter/Space: 카테고리 위에서는 펼침/접힘, 항목 위에서는 선택 후 dismiss
+  Esc / q    : dismiss(None)
+
+`current_id` 가 명시되면 해당 항목이 속한 카테고리만 자동 펼침 + cursor 가
+그 항목 위에 위치 — 사용자가 "현재 선택" 을 즉시 확인하고 다른 카테고리
+탐색 비용을 안 치르게.
 """
 
 from __future__ import annotations
@@ -17,8 +35,7 @@ from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Vertical
 from textual.screen import ModalScreen
-from textual.widgets import OptionList, Static
-from textual.widgets.option_list import Option
+from textual.widgets import Static, Tree
 
 from whooing_tui.ime import bind_ko
 from whooing_tui.state import SessionState
@@ -26,8 +43,7 @@ from whooing_tui.state import SessionState
 log = logging.getLogger(__name__)
 
 
-# 후잉 표준 type 표시 순서 — assets → liabilities → capital → income →
-# expenses → group. 같은 type 안에서는 list 받은 순서.
+# 후잉 표준 type 표시 순서 — 자산 → 부채 → 자본 → 수입 → 지출 → 그룹.
 _TYPE_ORDER = ("assets", "liabilities", "capital", "income", "expenses", "group")
 _TYPE_LABEL = {
     "assets": "자산",
@@ -40,7 +56,12 @@ _TYPE_LABEL = {
 
 
 class AccountPickerScreen(ModalScreen[tuple[str, str, str] | None]):
-    """계정과목 선택 모달. dismiss((account_id, title, type_key) | None)."""
+    """계정과목 선택 모달. dismiss((account_id, title, type_key) | None).
+
+    Tree widget 으로 카테고리(branch) → 항목(leaf) 2-level 구조. leaf 의
+    `data` 에 `(account_id, title, type_key)` 튜플을 저장 — `NodeSelected`
+    이벤트에서 그대로 회수.
+    """
 
     DEFAULT_CSS = """
     AccountPickerScreen {
@@ -63,7 +84,7 @@ class AccountPickerScreen(ModalScreen[tuple[str, str, str] | None]):
         content-align: center middle;
         color: $text-muted;
     }
-    OptionList {
+    Tree {
         height: auto;
         max-height: 22;
     }
@@ -81,7 +102,10 @@ class AccountPickerScreen(ModalScreen[tuple[str, str, str] | None]):
         side: str,
         current_id: str | None = None,
     ) -> None:
-        """`side` = "left" / "right" — 모달 타이틀 라벨용."""
+        """`side` = "left" / "right" — 모달 타이틀 라벨용.
+
+        `current_id` 가 주어지면 해당 항목 카테고리만 자동 펼침 + cursor 위치.
+        """
         super().__init__()
         self._session = session
         self._side = side
@@ -93,42 +117,81 @@ class AccountPickerScreen(ModalScreen[tuple[str, str, str] | None]):
             yield Static(
                 f"[bold]계정과목 선택 — {side_label}[/bold]", id="picker-title",
             )
-            yield Static("타이핑으로 검색 / Enter 선택 / Esc 취소", id="picker-hint")
-            yield OptionList(id="acc-list")
+            yield Static(
+                "↑/↓ 이동 / Enter 펼침·선택 / Esc 취소", id="picker-hint",
+            )
+            tree: Tree[tuple[str, str, str] | str] = Tree("계정과목", id="acc-tree")
+            tree.show_root = False  # 가짜 루트 숨김 — 카테고리가 시각상 최상위.
+            tree.guide_depth = 3
+            yield tree
 
     def on_mount(self) -> None:
-        opt = self.query_one("#acc-list", OptionList)
-        accounts = self._sorted_accounts()
-        highlight_idx = 0
-        for i, a in enumerate(accounts):
-            aid = str(a.get("account_id") or "")
-            title = a.get("title") or "(no title)"
-            type_key = a.get("type") or ""
-            type_label = _TYPE_LABEL.get(type_key, type_key)
-            label = f"{title}  [dim]{aid} · {type_label}[/dim]"
-            opt.add_option(Option(label, id=aid))
-            if aid == self._current:
-                highlight_idx = i
-        if accounts:
-            opt.highlighted = highlight_idx
-        opt.focus()
+        tree = self.query_one("#acc-tree", Tree)
+        # 카테고리별로 항목 그루핑.
+        grouped = self._group_accounts()
+        # 사용자가 곧장 cursor 가 닿을 leaf — `current_id` 와 일치하는 leaf.
+        target_leaf = None
+        for type_key in _TYPE_ORDER:
+            entries = grouped.get(type_key) or []
+            if not entries:
+                continue
+            label = f"{_TYPE_LABEL.get(type_key, type_key)}  ({len(entries)})"
+            cat_node = tree.root.add(label, data=type_key, expand=False)
+            for a in entries:
+                aid = str(a.get("account_id") or "")
+                title = a.get("title") or "(no title)"
+                leaf_label = f"{title}  [dim]{aid}[/dim]"
+                leaf = cat_node.add_leaf(
+                    leaf_label, data=(aid, title, type_key),
+                )
+                if aid and aid == self._current:
+                    target_leaf = leaf
+                    cat_node.expand()
+        # 현재 선택이 없거나 못 찾으면 첫 카테고리만 펼침 (시작점 가시화).
+        if target_leaf is None:
+            for child in tree.root.children:
+                if child.children:
+                    child.expand()
+                    break
+        else:
+            # cursor 를 target leaf 로 — `select_node` 는 `NodeSelected`
+            # 이벤트를 발사해 모달이 즉시 dismiss 되므로 `move_cursor`.
+            tree.move_cursor(target_leaf)
+        tree.focus()
 
-    def _sorted_accounts(self) -> list[dict[str, Any]]:
-        """type 표준 순서로 정렬한 flat 계정 list."""
-        flat = list(self._session.accounts_flat)
-        order = {t: i for i, t in enumerate(_TYPE_ORDER)}
-        return sorted(flat, key=lambda a: (order.get(a.get("type", ""), 99),))
+    # ---- helpers ------------------------------------------------------
+
+    def _group_accounts(self) -> dict[str, list[dict[str, Any]]]:
+        """{type_key: [account, ...]} — 같은 type 안에서는 받은 순서 유지."""
+        out: dict[str, list[dict[str, Any]]] = {t: [] for t in _TYPE_ORDER}
+        for a in self._session.accounts_flat:
+            tk = a.get("type") or ""
+            if tk in out:
+                out[tk].append(a)
+            else:
+                # 알려지지 않은 type 은 group 처럼 취급.
+                out.setdefault(tk, []).append(a)
+        return out
+
+    # ---- actions ------------------------------------------------------
 
     def action_cancel(self) -> None:
         self.dismiss(None)
 
-    def on_option_list_option_selected(
-        self, event: OptionList.OptionSelected,
-    ) -> None:
-        sid = event.option.id
-        if not sid:
+    def on_tree_node_selected(self, event: Tree.NodeSelected) -> None:
+        """leaf 가 선택됐으면 dismiss, branch 면 펼침/접힘 토글.
+
+        Tree 의 default Enter 동작이 select 이벤트를 발사 — 같은 키가 leaf
+        선택과 branch 토글 양쪽을 한 번에 처리.
+        """
+        node = event.node
+        data = node.data
+        # leaf 는 data 가 (id, title, type) 튜플. branch 는 type_key 문자열.
+        if isinstance(data, tuple) and len(data) == 3:
+            self.dismiss(data)
             return
-        for a in self._session.accounts_flat:
-            if a.get("account_id") == sid:
-                self.dismiss((sid, a.get("title") or "", a.get("type") or ""))
-                return
+        # branch — 펼침/접힘.
+        if node.is_expanded:
+            node.collapse()
+        else:
+            node.expand()

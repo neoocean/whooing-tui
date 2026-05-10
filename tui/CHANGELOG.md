@@ -2,6 +2,106 @@
 
 각 항목은 Perforce CL 단위로 끊는다.
 
+## CL #51080 — 0.13.0 — 계정과목 picker 트리 + tags picker (사용자 요청) (2026-05-10)
+
+사용자 요청 (2가지, 한 CL 에 모두):
+
+1. **계정과목 picker 가 모든 항목을 한 번에 보여줘 선택이 어려움** —
+   카테고리 (자산/부채/자본/수입/지출/그룹) 를 *먼저* 펼쳐 보고,
+   해당 카테고리 항목만 선택 가능하도록.
+2. **tags 도 Enter 로 picker 모달** — 기존 해시태그 list 에서 선택하거나
+   새 태그 생성. 새 태그 만들 때는 item / memo 를 보고 추천, 타이핑
+   시작하면 기존 태그 이름을 추천.
+
+### 동작 변경
+
+- **AccountPickerScreen**: 단일 OptionList → **Tree widget** 재작성.
+  - 카테고리 헤더 (branch) + 항목 (leaf) 2-level.
+  - `current_id` 가 속한 카테고리만 자동 펼침 + cursor 가 그 leaf 위.
+  - 카테고리 위 Enter / Space → 펼침/접힘 토글. 항목 위 Enter → dismiss.
+  - leaf data = `(account_id, title, type_key)` — `Tree.NodeSelected`
+    이벤트의 `node.data` 로 그대로 회수.
+  - **함정 회피**: `tree.select_node(node)` 가 `NodeSelected` 이벤트를
+    발사해 모달이 즉시 dismiss 되는 회귀 — 대신 `tree.move_cursor(node)`
+    (cursor 이동만, 이벤트 X).
+
+- **TagsPickerScreen** (신규): tags Input 위에서 Enter → 본 모달 push.
+  - Input + OptionList 구성. 두 섹션:
+    1. **추천 (item/memo)**: item·memo 본문에 substring / token 매칭되는
+       기존 태그. 매칭 score (substring=1, token 일치=2, 합산) → 사용 빈도
+       내림차순.
+    2. **자주 쓰는 태그**: 추천에 안 들어간 나머지 기존 태그를 사용 빈도
+       내림차순.
+  - Input 타이핑 → 두 섹션 모두 prefix / substring 필터 (대소문자 무시).
+  - `+ 새 태그 만들기: <input>` 옵션은 입력이 비어있지 않으며 기존에
+    같은 이름이 없을 때만 노출 (정확 일치면 기존 옵션 강조).
+  - Input Enter → highlighted 옵션 선택 또는 (옵션 없으면) 입력값으로
+    새 태그.
+  - dismiss 결과: 태그 string 1개 또는 None. 호출자가 tags Input value
+    에 공백 구분으로 append.
+
+### 추가
+
+- `tui/src/whooing_tui/screens/account_picker.py`
+  - 단일 OptionList → `Tree` widget 으로 전면 재작성. `_TYPE_ORDER` /
+    `_TYPE_LABEL` 상수 그대로. `_group_accounts()` helper 신설.
+  - `on_tree_node_selected` — leaf data 가 튜플이면 dismiss, branch 면
+    토글.
+- `tui/src/whooing_tui/screens/tags_picker.py` (신규)
+  - `TagsPickerScreen(ModalScreen[str | None])`.
+  - helper: `_tokenize_for_recommend`, `recommend_tags`, `filter_tags`.
+- `tui/src/whooing_tui/screens/edit_entry.py`
+  - `EntryEditDialog.__init__` 에 `existing["_all_tags_db"]` (= `{tag:
+    count}`) 인지. `self._all_tags_db` 로 보관.
+  - `on_input_submitted(event)` — `event.input.id == "f-tags"` 면
+    `_open_tags_picker()` 호출.
+  - `_open_tags_picker()` — 현재 item / memo / already_selected 추출 →
+    `TagsPickerScreen` push → 결과를 Input value 에 공백 구분 append.
+- `tui/src/whooing_tui/screens/entries.py`
+  - `_fetch_all_tags_db()` — `core_db.list_hashtags(conn)` 호출, dialog
+    에 `_all_tags_db` 키로 전달.
+  - `action_new_entry` / `action_edit_entry` 모두 dialog push 시점에
+    `_all_tags_db` 채워서 넘김.
+
+### 테스트
+
+- `tui/tests/test_account_picker.py` — Tree 기반으로 갱신 + 신규 케이스:
+  - `test_picker_lists_categories_with_items_as_leaves` (Tree 구조 검증)
+  - `test_picker_auto_expands_current_id_category` (자동 펼침)
+  - `test_picker_branch_enter_toggles_expand` (카테고리 토글)
+  - `test_picker_leaf_enter_dismisses_with_account` (leaf 선택 → dismiss)
+  - 기존 `dismisses_with_account` / `cancel_keeps_button` 통합 보존.
+  - 합계: 3 → 6 케이스.
+- `tui/tests/test_tags_picker.py` (신규) — 18 케이스:
+  - 단위: `_tokenize_for_recommend`, `recommend_tags`, `filter_tags` (대소문자
+    무시 포함).
+  - 통합: 기존 태그 선택 / 새 태그 생성 / 추천 우선 / 입력 필터 / already_selected
+    제외.
+- `tui/tests/test_entries_mutate.py` — 1 추가:
+  - `test_tags_input_enter_pushes_picker_and_appends` — tags Input 에서
+    Enter → TagsPickerScreen push → dismiss(tag) → Input value append.
+  - 7 → 8 케이스.
+- 합계: 377 → **399 통과** (+22).
+
+### 사용자 흐름 다이어그램
+
+```mermaid
+graph TB
+    subgraph 계정과목
+      L[left/right Enter] --> TR[AccountPickerScreen<br/>Tree widget]
+      TR -->|카테고리 위 Enter| EX[펼침/접힘 토글]
+      EX --> TR
+      TR -->|항목 leaf Enter| OK1[dismiss aid title type]
+    end
+    subgraph 해시태그
+      T[tags Enter] --> TP[TagsPickerScreen]
+      TP -->|타이핑| F[필터 + - 새 태그]
+      F --> TP
+      TP -->|기존 선택| OK2[dismiss 식비]
+      TP -->|새 태그| OK3[dismiss new tag]
+    end
+```
+
 ## CL #51076 — 0.12.0 — EntryEditDialog 폼 전면 개선 + 로컬 메모/해시태그 (사용자 요청) (2026-05-10)
 
 사용자 요청 (한 CL 에 모두):

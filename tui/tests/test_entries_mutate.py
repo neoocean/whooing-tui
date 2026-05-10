@@ -302,6 +302,41 @@ async def test_delete_purges_local_annotation_and_tags():
 
 
 @pytest.mark.asyncio
+async def test_tags_input_enter_pushes_picker_and_appends():
+    """CL #51080+: tags Input 에서 Enter → TagsPickerScreen push, 결과를
+    Input value 에 공백 구분으로 append."""
+    from textual.widgets import Input
+
+    from whooing_tui.screens.tags_picker import TagsPickerScreen
+
+    fake = FakeClient()
+    app = WhooingTuiApp(client=fake)  # type: ignore[arg-type]
+    async with app.run_test() as pilot:
+        es = await _open_entries(app, pilot)
+        es.action_edit_entry()
+        await pilot.pause()
+        dialog = app.screen
+        assert isinstance(dialog, EntryEditDialog)
+        tags_input = dialog.query_one("#f-tags", Input)
+        # 사용자가 tags Input 에 focus 한 상태에서 Enter — Submitted 이벤트.
+        dialog.post_message(Input.Submitted(tags_input, ""))
+        await pilot.pause()
+        assert isinstance(app.screen, TagsPickerScreen)
+        # 사용자가 "커피" 를 골라 dismiss.
+        app.screen.dismiss("커피")
+        await pilot.pause()
+        # dialog 로 복귀 + tags Input 에 추가됨.
+        assert isinstance(app.screen, EntryEditDialog)
+        assert "커피" in tags_input.value
+        # 다시 Enter, 다른 태그 추가 — 공백 구분.
+        dialog.post_message(Input.Submitted(tags_input, tags_input.value))
+        await pilot.pause()
+        app.screen.dismiss("회의")
+        await pilot.pause()
+        assert tags_input.value == "커피 회의"
+
+
+@pytest.mark.asyncio
 async def test_delete_with_no_selection_shows_error():
     fake = FakeClient(entries=[])
     app = WhooingTuiApp(client=fake)  # type: ignore[arg-type]

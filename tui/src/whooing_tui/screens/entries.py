@@ -653,7 +653,11 @@ class EntriesScreen(Screen):
                 return
             self._submit_create(draft)
 
-        self.app.push_screen(EntryEditDialog(session), _on_close)
+        # CL #51080+: TagsPickerScreen 의 추천/자주 쓰는 태그 출처.
+        existing = {"_all_tags_db": self._fetch_all_tags_db()}
+        self.app.push_screen(
+            EntryEditDialog(session, existing=existing), _on_close,
+        )
 
     def action_edit_entry(self) -> None:
         session = self.app.session  # type: ignore[attr-defined]
@@ -672,10 +676,12 @@ class EntriesScreen(Screen):
             self._submit_update(draft)
 
         # 로컬 sqlite 의 해시태그를 prefill 해서 dialog 에 넘긴다 — annotation
-        # 자체는 후잉 memo 와 동일하므로 별도 fetch 불필요.
+        # 자체는 후잉 memo 와 동일하므로 별도 fetch 불필요. CL #51080+ 부터는
+        # TagsPickerScreen 의 추천/자주 쓰는 태그 출처도 함께 (`_all_tags_db`).
         local_tags = self._fetch_local_tags(target.get("entry_id") or "")
         existing = dict(target)
         existing["_local_tags"] = local_tags
+        existing["_all_tags_db"] = self._fetch_all_tags_db()
         self.app.push_screen(EntryEditDialog(session, existing=existing), _on_close)
 
     def action_delete_entry(self) -> None:
@@ -841,6 +847,18 @@ class EntriesScreen(Screen):
             return []
         info = rows.get(str(entry_id)) or {}
         return list(info.get("hashtags") or [])
+
+    def _fetch_all_tags_db(self) -> dict[str, int]:
+        """전체 해시태그 사전 — `{tag: count}`. TagsPickerScreen 의 *추천*
+        + *자주 쓰는 태그* 섹션 출처. db 가 비어있으면 빈 사전 (모달은
+        그래도 정상 동작 — 새 태그 만들기만 가능).
+        """
+        try:
+            with tui_data.open_ro() as conn:
+                return core_db.list_hashtags(conn)
+        except Exception:  # pragma: no cover
+            log.exception("fetch_all_tags_db failed")
+            return {}
 
     def _persist_local(
         self,
