@@ -158,89 +158,176 @@ def test_normalize_collection_variants():
     assert WhooingClient._normalize_collection(None, key="rows") == []
 
 
-# ---- CL #51116+: report / budget / goal -----------------------------------
+# ---- CL #51117+: report / budget / goal — 실 endpoint path 검증 ----------
 
 
 @respx.mock
-async def test_get_report_basic():
-    respx.get("https://whooing.com/api/reports.json").mock(
+async def test_get_report_root_path():
+    """`account` 안 주면 `/report.json` (root)."""
+    route = respx.get("https://whooing.com/api/report.json").mock(
         return_value=Response(
             200,
             json={"code": 200, "results": {"total": 12345, "accounts": []}},
         )
     )
     c = _make_client()
-    out = await c.get_report(
-        section_id="s1", type="report", account="all",
-    )
+    out = await c.get_report(section_id="s1")
     assert out == {"total": 12345, "accounts": []}
+    assert route.called
 
 
 @respx.mock
-async def test_get_report_passes_optional_params():
-    """start_date / end_date / rows_type 등 옵션 파라미터가 query 로."""
-    route = respx.get("https://whooing.com/api/reports.json").mock(
+async def test_get_report_account_in_path():
+    """`account` 주면 `/report/<account>.json` (path)."""
+    route = respx.get("https://whooing.com/api/report/expenses,income.json").mock(
         return_value=Response(200, json={"code": 200, "results": {}})
     )
     c = _make_client()
     await c.get_report(
-        section_id="s1", type="report",
-        start_date="20260101", end_date="20260510",
-        rows_type="month",
+        section_id="s1", account="expenses,income",
+        rows_type="month", start_date="20260101", end_date="20260510",
     )
-    request = route.calls.last.request
-    qs = dict(request.url.params)
+    assert route.called
+    qs = dict(route.calls.last.request.url.params)
     assert qs["section_id"] == "s1"
-    assert qs["type"] == "report"
-    assert qs["start_date"] == "20260101"
-    assert qs["end_date"] == "20260510"
     assert qs["rows_type"] == "month"
+    assert qs["start_date"] == "20260101"
 
 
 @respx.mock
-async def test_list_report_customs_returns_list():
-    respx.get("https://whooing.com/api/report_customs.json").mock(
+async def test_get_report_account_id_in_path():
+    """`account` + `account_id` 면 `/report/<account>/<account_id>.json`."""
+    route = respx.get(
+        "https://whooing.com/api/report/expenses/x20.json"
+    ).mock(return_value=Response(200, json={"code": 200, "results": {}}))
+    c = _make_client()
+    await c.get_report(section_id="s1", account="expenses", account_id="x20")
+    assert route.called
+
+
+@respx.mock
+async def test_get_report_summary_path():
+    route = respx.get(
+        "https://whooing.com/api/report_summary/expenses,income.json"
+    ).mock(return_value=Response(200, json={"code": 200, "results": {}}))
+    c = _make_client()
+    await c.get_report_summary(section_id="s1", account="expenses,income")
+    assert route.called
+
+
+@respx.mock
+async def test_get_calendar_path():
+    route = respx.get("https://whooing.com/api/calendar.json").mock(
+        return_value=Response(200, json={"code": 200, "results": {}})
+    )
+    c = _make_client()
+    await c.get_calendar(section_id="s1", start_date="20260501", end_date="20260510")
+    assert route.called
+
+
+@respx.mock
+async def test_list_report_customs_uses_main_path():
+    """`/main/report_customs.json?action=list&report=...`."""
+    route = respx.get("https://whooing.com/api/main/report_customs.json").mock(
         return_value=Response(
             200,
             json={
                 "code": 200,
-                "results": [
-                    {"custom_id": "1", "title": "행1"},
-                    {"custom_id": "2", "title": "행2"},
-                ],
+                "results": {
+                    "rows": [
+                        {"id": "12", "title": "행1"},
+                        {"id": "13", "title": "행2"},
+                    ],
+                },
             },
         )
     )
     c = _make_client()
     out = await c.list_report_customs(section_id="s1", report="report_bs")
     assert len(out) == 2
-    assert out[0]["custom_id"] == "1"
+    assert out[0]["id"] == "12"
+    qs = dict(route.calls.last.request.url.params)
+    assert qs["action"] == "list"
+    assert qs["report"] == "report_bs"
 
 
 @respx.mock
-async def test_get_budget():
-    route = respx.get("https://whooing.com/api/budget.json").mock(
+async def test_get_report_custom_uses_action_info():
+    route = respx.get("https://whooing.com/api/main/report_customs.json").mock(
         return_value=Response(
             200,
-            json={"code": 200, "results": {"budgeted": 500000}},
+            json={"code": 200, "results": {"id": "12", "title": "행1"}},
         )
     )
     c = _make_client()
-    out = await c.get_budget(section_id="s1", pl="expenses")
-    assert out == {"budgeted": 500000}
+    out = await c.get_report_custom(
+        section_id="s1", report="report_bs", custom_id="12",
+    )
+    assert out["id"] == "12"
     qs = dict(route.calls.last.request.url.params)
-    assert qs["pl"] == "expenses"
+    assert qs["action"] == "info"
+    assert qs["customId"] == "12"
 
 
 @respx.mock
-async def test_get_budget_goal():
+async def test_get_budget_uses_account_in_path():
+    """`/budget/<account>.json` — account 가 path 로."""
+    route = respx.get("https://whooing.com/api/budget/expenses.json").mock(
+        return_value=Response(
+            200, json={"code": 200, "results": {"aggregate": {"total": {}}}},
+        )
+    )
+    c = _make_client()
+    out = await c.get_budget(section_id="s1", account="expenses")
+    assert route.called
+    qs = dict(route.calls.last.request.url.params)
+    assert qs["section_id"] == "s1"
+    # 옛날 `pl` query 가 아니라 path 에 들어가야.
+    assert "pl" not in qs
+
+
+@respx.mock
+async def test_get_budget_goal_path():
     respx.get("https://whooing.com/api/budget_goal.json").mock(
         return_value=Response(
-            200,
-            json={"code": 200, "results": {"set_id": 42}},
+            200, json={"code": 200, "results": {"set_id": 42}},
         )
     )
     c = _make_client()
     out = await c.get_budget_goal(section_id="s1")
     assert out == {"set_id": 42}
+
+
+@respx.mock
+async def test_get_goal_path():
+    route = respx.get("https://whooing.com/api/goal.json").mock(
+        return_value=Response(
+            200, json={"code": 200, "results": [{"date": "202601", "money": 100}]},
+        )
+    )
+    c = _make_client()
+    out = await c.get_goal(section_id="s1", start_date="202601", end_date="202612")
+    assert route.called
+
+
+@respx.mock
+async def test_get_in_out_path():
+    route = respx.get("https://whooing.com/api/in_out.json").mock(
+        return_value=Response(200, json={"code": 200, "results": {}})
+    )
+    c = _make_client()
+    await c.get_in_out(section_id="s1")
+    assert route.called
+
+
+@respx.mock
+async def test_get_entries_latest_path():
+    route = respx.get("https://whooing.com/api/entries/latest.json").mock(
+        return_value=Response(200, json={"code": 200, "results": []})
+    )
+    c = _make_client()
+    await c.get_entries_latest(section_id="s1", limit=20)
+    assert route.called
+    qs = dict(route.calls.last.request.url.params)
+    assert qs["limit"] == "20"
 

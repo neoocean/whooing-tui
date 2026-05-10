@@ -75,70 +75,70 @@ MenuItem = tuple[str, str, Callable[..., Any]]
 
 
 def _build_menu() -> list[MenuItem]:
-    """(item_id, display label, fetch coroutine factory) 의 list."""
+    """(item_id, display label, fetch coroutine factory) 의 list.
+
+    CL #51117 부터: WhooingClient 의 endpoint-별 메서드 호출.
+    `cashflow` 은 실 API 에 대응 endpoint 없어 메뉴에서 제외.
+    """
 
     async def fetch_balance_sheet(client, session):
+        # 자산 + 부채 (capital 자동 계산), 현재 시점 (rows_type=none).
         return await client.get_report(
-            section_id=session.section_id, type="report",
-            account="all", rows_type="none",
+            section_id=session.section_id,
+            account="assets,liabilities", rows_type="none",
         )
 
     async def fetch_pl_summary(client, session):
         s, e = _month_start_today()
-        return await client.get_report(
-            section_id=session.section_id, type="report_summary",
-            start_date=s, end_date=e,
+        return await client.get_report_summary(
+            section_id=session.section_id,
+            account="expenses,income",
+            start_date=s, end_date=e, rows_type="none",
         )
 
     async def fetch_monthly_trend(client, session):
         s, e = _ytd()
-        return await client.get_report(
-            section_id=session.section_id, type="report",
-            account="all", rows_type="month",
-            start_date=s, end_date=e,
+        # PL flat 시계열 (수익/지출/순이익 월별).
+        return await client.get_report_summary(
+            section_id=session.section_id, account="expenses,income",
+            rows_type="month", start_date=s, end_date=e,
         )
 
-    async def fetch_cashflow(client, session):
+    async def fetch_in_out(client, session):
         s, e = _month_start_today()
-        return await client.get_report(
-            section_id=session.section_id, type="cashflow",
-            start_date=s, end_date=e,
+        return await client.get_in_out(
+            section_id=session.section_id, start_date=s, end_date=e,
         )
 
     async def fetch_calendar(client, session):
         s, e = _month_start_today()
-        return await client.get_report(
-            section_id=session.section_id, type="calendar",
-            start_date=s, end_date=e,
+        return await client.get_calendar(
+            section_id=session.section_id, start_date=s, end_date=e,
         )
 
     async def fetch_entries_latest(client, session):
-        return await client.get_report(
-            section_id=session.section_id, type="entries_latest", limit=20,
+        return await client.get_entries_latest(
+            section_id=session.section_id, limit=20,
         )
 
     async def fetch_custom_bs(client, session):
-        s, e = _ytd()
         return await client.list_report_customs(
             section_id=session.section_id, report="report_bs",
-            calculated_result="y", start_date=s, end_date=e,
         )
 
     async def fetch_custom_pl(client, session):
-        s, e = _ytd()
         return await client.list_report_customs(
             section_id=session.section_id, report="report_pl",
-            calculated_result="y", start_date=s, end_date=e,
         )
 
     async def fetch_budget_expenses(client, session):
         return await client.get_budget(
-            section_id=session.section_id, pl="expenses",
+            section_id=session.section_id, account="expenses",
         )
 
     async def fetch_budget_income(client, session):
         return await client.get_budget(
-            section_id=session.section_id, pl="income",
+            section_id=session.section_id, account="income",
         )
 
     async def fetch_budget_goal(client, session):
@@ -148,11 +148,11 @@ def _build_menu() -> list[MenuItem]:
         ("balance_sheet", "재무상태표 (자산/부채/자본 — 현재)", fetch_balance_sheet),
         ("pl_summary", "손익 요약 (이번 달)", fetch_pl_summary),
         ("monthly_trend", "월별 추이 (YTD)", fetch_monthly_trend),
-        ("cashflow", "현금흐름표 (이번 달)", fetch_cashflow),
+        ("in_out", "항목별 증감 (이번 달)", fetch_in_out),
         ("calendar", "캘린더 (이번 달)", fetch_calendar),
         ("entries_latest", "최근 거래 20건", fetch_entries_latest),
-        ("custom_bs", "사용자 정의 BS (YTD)", fetch_custom_bs),
-        ("custom_pl", "사용자 정의 PL (YTD)", fetch_custom_pl),
+        ("custom_bs", "사용자 정의 BS", fetch_custom_bs),
+        ("custom_pl", "사용자 정의 PL", fetch_custom_pl),
         ("budget_expenses", "예산 대비 실적 — 지출", fetch_budget_expenses),
         ("budget_income", "예산 대비 실적 — 수입", fetch_budget_income),
         ("budget_goal", "장기목표 설정", fetch_budget_goal),

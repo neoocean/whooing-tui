@@ -88,13 +88,29 @@ class _Client:
         self.last_report_call = {"endpoint": "report", **kwargs}
         return {"total": 12345, "accounts": []}
 
+    async def get_report_summary(self, **kwargs):
+        self.last_report_call = {"endpoint": "report_summary", **kwargs}
+        return {"rows_type": "none", "aggregate": {"expenses": 0}}
+
+    async def get_in_out(self, **kwargs):
+        self.last_report_call = {"endpoint": "in_out", **kwargs}
+        return {"aggregate": {}}
+
+    async def get_calendar(self, **kwargs):
+        self.last_report_call = {"endpoint": "calendar", **kwargs}
+        return {"aggregate": {}, "rows": {}}
+
+    async def get_entries_latest(self, **kwargs):
+        self.last_report_call = {"endpoint": "entries_latest", **kwargs}
+        return [{"entry_id": "e1"}]
+
     async def list_report_customs(self, **kwargs):
         self.last_report_call = {"endpoint": "report_customs", **kwargs}
-        return [{"custom_id": "1", "title": "행1", "money": 100}]
+        return [{"id": "12", "title": "행1", "money": 100}]
 
     async def get_budget(self, **kwargs):
         self.last_report_call = {"endpoint": "budget", **kwargs}
-        return {"budgeted": 500000, "spent": 200000}
+        return {"aggregate": {"total": {"budget": 500000}}}
 
     async def get_budget_goal(self, **kwargs):
         self.last_report_call = {"endpoint": "budget_goal", **kwargs}
@@ -166,7 +182,10 @@ async def test_menu_select_pushes_result_screen_and_fetches():
         assert ok
         assert fake.last_report_call["endpoint"] == "report"
         assert fake.last_report_call["section_id"] == "s1"
-        assert fake.last_report_call["type"] == "report"
+        # CL #51117+: type 파라미터는 제거됐고, balance_sheet 메뉴는
+        # account="assets,liabilities" + rows_type="none" 으로 호출.
+        assert fake.last_report_call["account"] == "assets,liabilities"
+        assert fake.last_report_call["rows_type"] == "none"
 
 
 @pytest.mark.asyncio

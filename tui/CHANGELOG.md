@@ -2,6 +2,83 @@
 
 각 항목은 Perforce CL 단위로 끊는다.
 
+## CL #51117 — 0.16.1 — 보고서 API path 수정 (라이브 응답 unknown method 회귀 fix, 사용자 보고) (2026-05-10)
+
+사용자 보고: "모든 보고서 팝업을 열면 unknown method 메시지만 나옵니다."
+
+### 원인
+
+CL #51116 의 첫 시도는 모든 보고서를 `/reports.json` 단일 endpoint + `type`
+query 로 dispatch 한다고 추측했는데, 후잉 실 API 는 endpoint 별 별도 path
+를 가진다. `whooing://api-docs` MCP 리소스에서 정확한 path 회수.
+
+### 실 API path 매핑 (수정 후)
+
+| 기능 | 실 path |
+|---|---|
+| 통합 보고서 | `/report.json` (또는 `/report/<account>[/<account_id>].json`) |
+| 손익 요약 | `/report_summary.json` (또는 `/report_summary/<account>.json`) |
+| 항목별 증감 | `/in_out.json` (또는 `/in_out/<account>[/<account_id>].json`) |
+| 캘린더 | `/calendar.json` |
+| 카드 청구 | `/bill.json` (또는 `/bill/<account_id>.json`) |
+| 체크카드 | `/checkcard.json` (또는 `/checkcard/<account_id>.json`) |
+| 예산 대비 실적 | `/budget/<account>.json` (`account` = `expenses`/`income` path 필수) |
+| 장기목표 설정 | `/budget_goal.json` |
+| 월별 자본 목표 | `/goal.json` |
+| 사용자 정의 보고서 | `/main/report_customs.json?action=list\|info[&customId=<>]` |
+| 최근 거래 | `/entries/latest.json` |
+
+### 수정
+
+- `tui/src/whooing_tui/client.py`
+  - 기존 `get_report(type=...)` 단일 메서드를 endpoint 별 메서드로 재설계:
+    `get_report` / `get_report_summary` / `get_in_out` / `get_calendar`
+    / `get_bill` / `get_checkcard` / `get_budget` / `get_budget_goal`
+    / `get_goal` / `list_report_customs` / `get_report_custom`
+    / `get_entries_latest`.
+  - `get_budget` 의 `pl` 파라미터 → `account` (path 로 들어감 — `:account`).
+  - `list_report_customs` 가 `/main/report_customs.json?action=list` 로
+    수정. `get_report_custom` 은 `?action=info&customId=<>`.
+  - `get_report` / `get_report_summary` / `get_in_out` 의 `account` /
+    `account_id` 가 path segment 로 들어가는 변형 처리.
+  - `_drop_none(params)` helper — `None` 값을 query 에서 제거.
+  - `CachedWhooingClient` 에 새 메서드들 pass-through.
+- `tui/src/whooing_tui/screens/reports.py`
+  - 메뉴 fetch 함수 11개를 새 client API 에 맞춰 재작성.
+  - `cashflow` 항목 제거 — 실 API 에 대응 endpoint 가 없음 (MCP 가 합성
+    해주는 것이라 본 클라이언트에서는 직접 구성 불가).
+  - 메뉴 라벨 "현금흐름표 (이번 달)" → "항목별 증감 (이번 달)" 로 교체
+    (`/in_out.json`).
+- `tui/tests/test_client.py` — 보고서 path 검증 12 케이스 (이전 5 케이스
+  교체 + 신규):
+  - `test_get_report_root_path`, `test_get_report_account_in_path`,
+    `test_get_report_account_id_in_path`, `test_get_report_summary_path`,
+    `test_get_calendar_path`, `test_list_report_customs_uses_main_path`,
+    `test_get_report_custom_uses_action_info`,
+    `test_get_budget_uses_account_in_path`, `test_get_budget_goal_path`,
+    `test_get_goal_path`, `test_get_in_out_path`,
+    `test_get_entries_latest_path`.
+- `tui/tests/test_reports.py` — `_Client` 모킹에 새 메서드 추가, 통합
+  테스트의 `type` 검증 → `account="assets,liabilities" + rows_type="none"`.
+
+### 검증
+
+- 446 → **453 통과** (+7 — 12 신규 - 5 obsolete).
+- 라이브 호출 검증은 사용자 환경에서. path 가 한 번 더 어긋나면 메서드의
+  literal path 만 조정 (구조 동일).
+
+### 함정 / 학습
+
+- 후잉 API 는 endpoint 가 *path 의 segment* 로 dispatch 되며 query
+  `type` 파라미터로 구분되지 않는다 (`account`, `account_id` 도 일부
+  endpoint 에서 path 로 들어감 — `/report/expenses,income/x20.json`).
+- MCP 의 `report-get` schema 의 `type` enum (cashflow / entries_* 등) 은
+  MCP 서버가 *추상화* 한 dispatch 키였고, 실 API 의 path segment 가 아니다.
+  따라서 type=cashflow 처럼 실 endpoint 가 없는 경우 클라이언트에서는
+  지원할 수 없다.
+- 보고서 path 의 `account` 는 `/budget/<account>.json` 에서 path 필수,
+  `/report/<account>.json` 에서는 옵션 (root `/report.json` 도 가능).
+
 ## CL #51116 — 0.16.0 — 후잉 통계 뷰 (드롭다운 메뉴 + 결과 팝업) Phase 1 (사용자 요청) (2026-05-10)
 
 사용자 요청:
