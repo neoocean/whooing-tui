@@ -6,8 +6,9 @@ binding ("q", "s" 등) 이 매칭 안 됨.
 
 본 모듈은:
   - `KOREAN_OF`: 영문 → 한글 자모 매핑 (두벌식 표준).
+  - `KOREAN_TO_EN`: 역방향 (한글 자모 → 영문) — `on_key` 인터셉트 시 사용.
   - `bind_ko(en_key, action, description, **kwargs)`: 영문 binding 1개 +
-    한글 자모 binding 1개 (show=False 로 Footer 안 노출) 의 list 를 반환.
+    한글 자모 binding 1개 (show=False, **priority=True**) 의 list 반환.
 
 사용:
 
@@ -40,6 +41,9 @@ KOREAN_OF: dict[str, str] = {
     "n": "ㅜ", "m": "ㅡ",
 }
 
+# 역방향 lookup — `on_key` 인터셉트 시 한글 → 영문 원키 회수용.
+KOREAN_TO_EN: dict[str, str] = {ko: en for en, ko in KOREAN_OF.items()}
+
 
 def bind_ko(
     en_key: str,
@@ -51,16 +55,21 @@ def bind_ko(
 
     한글 binding 은 Footer 에 노출하지 않는다 (`show=False`) — 영문 키만
     화면에 보이고, 한글 IME 일 때도 같은 키 입력으로 같은 액션이 동작한다.
-    `priority` 등 다른 kwargs 는 양쪽 binding 에 그대로 전달.
 
-    `en_key` 가 매핑에 없으면 영문 binding 만 1개 (single-element list).
-    이 경우는 `Binding(...)` 직접 사용하는 것과 동등하나, `bind_ko` 의
-    list-반환 일관성을 위해 그대로 둔다.
+    **CL #51115+: 한글 binding 은 항상 `priority=True`** — focused widget
+    (Input / DataTable type-to-search 등) 이 한글 자모를 텍스트로 흡수해
+    화면에 잠깐 표시되는 시각 지연 을 막는다. 영문 쪽의 `priority` 는 호출
+    측이 결정한 그대로 유지 (영문 키는 보통 텍스트 입력란에서도 의미가
+    있어 priority 까지는 강제 안 함).
+
+    `priority` 외의 kwargs (예: `show`) 는 양쪽 binding 에 그대로 전달.
+    `en_key` 가 매핑에 없으면 영문 binding 만 1개.
     """
     out = [Binding(en_key, action, description, **kwargs)]
     ko = KOREAN_OF.get(en_key)
     if ko:
         ko_kwargs = dict(kwargs)
         ko_kwargs["show"] = False  # 영문만 Footer 에 노출
+        ko_kwargs["priority"] = True  # focused widget 보다 우선 — 시각 지연 방지
         out.append(Binding(ko, action, description, **ko_kwargs))
     return out

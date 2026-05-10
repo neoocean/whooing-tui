@@ -330,7 +330,11 @@ class EntryEditDialog(ModalScreen[EntryDraft | None]):
         # 초기 date 값: existing 이 8자리 YYYYMMDD 면 그대로, 신규면 today.
         date_init = self._existing.get("entry_date") or today_yyyymmdd()
         money_init = str(self._existing.get("money") or "")
-        tags_init = " ".join(self._existing.get("_local_tags") or [])
+        # CL #51115+: tags 는 사용자 입장에서 항상 `#` 시작으로 보이도록.
+        # 내부 저장은 bare (#X 없이) — `parse_hashtags_input` 가 분리/스트립.
+        tags_init = " ".join(
+            f"#{t}" for t in (self._existing.get("_local_tags") or [])
+        )
         with Vertical(id="dialog-frame"):
             yield Static(f"[bold]{title}[/bold]", id="dialog-title")
             with Grid(id="form-grid"):
@@ -451,9 +455,12 @@ class EntryEditDialog(ModalScreen[EntryDraft | None]):
             if tag in already:
                 tags_input.focus()
                 return
+            # CL #51115+: 사용자 시각으로 `#` 시작이 자연스러우므로 항상
+            # `#` prefix 로 append. parse_hashtags_input 가 저장 시 strip.
             current = tags_input.value.rstrip()
+            display = f"#{tag}"
             tags_input.value = (
-                f"{current} {tag}" if current else tag
+                f"{current} {display}" if current else display
             )
             tags_input.cursor_position = len(tags_input.value)
             tags_input.focus()

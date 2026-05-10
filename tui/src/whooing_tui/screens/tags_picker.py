@@ -173,7 +173,10 @@ class TagsPickerScreen(ModalScreen[str | None]):
                 "타이핑으로 검색 / Enter 선택 또는 새 태그 / Esc 취소",
                 id="tagpick-hint",
             )
-            yield Input(placeholder="새 태그 또는 검색어", id="tagpick-input")
+            yield Input(
+                placeholder="새 태그 또는 검색 (예: #식비 / 식비)",
+                id="tagpick-input",
+            )
             yield OptionList(id="tagpick-list")
 
     def on_mount(self) -> None:
@@ -200,12 +203,14 @@ class TagsPickerScreen(ModalScreen[str | None]):
 
         # 0) 새 태그 옵션 — 입력이 있고 기존에 정확히 같은 이름이 없으며
         #    이미 선택된 토큰도 아닐 때만.
+        # CL #51115+: 사용자에게는 `#식비` 형태로 보이지만 내부 저장 / id
+        # 는 bare (`식비`). 사용자가 `#` 를 타이핑해도 무시하고 같은 결과.
         if query:
             normalized = query.lstrip("#").strip()
             if normalized and normalized not in self._existing and normalized not in self._already:
                 opt.add_option(
                     Option(
-                        f"[bold]+ 새 태그 만들기:[/bold] {normalized}",
+                        f"[bold]+ 새 태그 만들기:[/bold] #{normalized}",
                         id=f"{_PREFIX_NEW}{normalized}",
                     ),
                 )
@@ -221,7 +226,7 @@ class TagsPickerScreen(ModalScreen[str | None]):
             for t in rec:
                 count = self._existing.get(t, 0)
                 opt.add_option(
-                    Option(f"  {t}  [dim]({count})[/dim]", id=f"{_PREFIX_EXISTING}{t}"),
+                    Option(f"  #{t}  [dim]({count})[/dim]", id=f"{_PREFIX_EXISTING}{t}"),
                 )
             opt.add_option(Option("", disabled=True))
 
@@ -240,7 +245,7 @@ class TagsPickerScreen(ModalScreen[str | None]):
             for t in rest:
                 count = self._existing.get(t, 0)
                 opt.add_option(
-                    Option(f"  {t}  [dim]({count})[/dim]", id=f"{_PREFIX_EXISTING}{t}"),
+                    Option(f"  #{t}  [dim]({count})[/dim]", id=f"{_PREFIX_EXISTING}{t}"),
                 )
 
         # 첫 번째 *선택 가능* 옵션을 highlighted 로.

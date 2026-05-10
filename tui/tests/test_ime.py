@@ -53,6 +53,23 @@ def test_bind_ko_propagates_priority():
     assert bindings[1].priority is True
 
 
+def test_bind_ko_korean_always_priority(monkeypatch):
+    """CL #51115+: 영문이 priority=False 이거나 미지정이라도 한글 binding
+    은 항상 priority=True. focused widget 이 한글 자모를 텍스트로 흡수해
+    화면에 잠시 표시되는 시각 지연을 막기 위해."""
+    # 영문 priority 미지정 (default False)
+    bindings = bind_ko("q", "back", "Quit", show=True)
+    en_b, ko_b = bindings
+    assert en_b.priority is False
+    assert ko_b.priority is True  # 한글은 강제 priority
+
+    # 영문이 priority=False 명시
+    bindings = bind_ko("d", "delete", show=True, priority=False)
+    en_b, ko_b = bindings
+    assert en_b.priority is False
+    assert ko_b.priority is True
+
+
 def test_bind_ko_unmapped_key_returns_only_english():
     """매핑에 없는 키 (예: '?') 는 영문 binding 1개만."""
     bindings = bind_ko("question_mark", "help", "Help")

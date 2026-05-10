@@ -9,7 +9,7 @@
 > [`mcp/`](../mcp) 에 보존되며, TUI 의 `mcp_bridge.py` 가 그 `OfficialMcpClient`
 > 를 한정적으로 호출 (deprecated, 후속 정리 예정).
 
-**현재 0.15.0 — Phase 6 + ... + db 를 project/db/ 로 + P4 자동 submit (CL #51107)**:
+**현재 0.15.1 — Phase 6 + ... + 한글 IME 즉시 발화 + 해시태그 # 자연 처리 (CL #51115)**:
 
 - Phase 1: 핵심 라이브러리 + 헤드리스 CLI
 - Phase 2a: HomeScreen (섹션 picker + 활성 섹션 계정과목 트리)

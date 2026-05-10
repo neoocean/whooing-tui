@@ -333,7 +333,8 @@ async def test_tags_input_enter_pushes_picker_and_appends():
         await pilot.pause()
         app.screen.dismiss("회의")
         await pilot.pause()
-        assert tags_input.value == "커피 회의"
+        # CL #51115+: append 시 `#` prefix 로 표시 (저장은 bare).
+        assert tags_input.value == "#커피 #회의"
 
 
 @pytest.mark.asyncio

@@ -252,6 +252,56 @@ async def test_picker_input_filter_narrows_options():
 
 
 @pytest.mark.asyncio
+async def test_picker_displays_tags_with_hash_prefix():
+    """CL #51115+: 옵션 라벨이 `#식비` 형태 — 사용자에게 일관된 `#` 표기."""
+    app = WhooingTuiApp(client=_BootStrapClient())  # type: ignore[arg-type]
+    async with app.run_test() as pilot:
+        await _wait_for(lambda: app.session.section_id == "s1")
+        await app.push_screen(
+            TagsPickerScreen(item="", memo="", existing={"식비": 12, "커피": 8}),
+        )
+        await pilot.pause()
+        opt = app.screen.query_one("#tagpick-list", OptionList)
+        labels = [
+            str(opt.get_option_at_index(i).prompt)
+            for i in range(opt.option_count)
+            if not opt.get_option_at_index(i).disabled
+        ]
+        # 라벨에 #식비 / #커피 가 보여야.
+        assert any("#식비" in l for l in labels)
+        assert any("#커피" in l for l in labels)
+
+
+@pytest.mark.asyncio
+async def test_picker_strips_hash_from_user_input_when_creating():
+    """사용자가 Input 에 `#카페` 라고 타이핑 후 새 태그 생성 → bare `카페`."""
+    app = WhooingTuiApp(client=_BootStrapClient())  # type: ignore[arg-type]
+    async with app.run_test() as pilot:
+        await _wait_for(lambda: app.session.section_id == "s1")
+        results: list = []
+
+        def _on_pick(r):
+            results.append(r)
+
+        await app.push_screen(
+            TagsPickerScreen(item="", memo="", existing={}),
+            _on_pick,
+        )
+        await pilot.pause()
+        inp = app.screen.query_one("#tagpick-input", Input)
+        inp.value = "#카페"
+        await pilot.pause()
+        # `+ 새 태그 만들기` 라벨에 #카페 노출
+        opt = app.screen.query_one("#tagpick-list", OptionList)
+        first = opt.get_option_at_index(0)
+        assert "#카페" in str(first.prompt)
+        # Enter 시 bare 태그로 dismiss.
+        app.screen.post_message(Input.Submitted(inp, "#카페"))
+        await pilot.pause()
+        assert results == ["카페"]  # 내부 저장은 bare
+
+
+@pytest.mark.asyncio
 async def test_picker_excludes_already_selected():
     """`already_selected` 에 있는 태그는 옵션에서 제외."""
     app = WhooingTuiApp(client=_BootStrapClient())  # type: ignore[arg-type]

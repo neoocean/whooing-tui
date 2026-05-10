@@ -2,6 +2,65 @@
 
 각 항목은 Perforce CL 단위로 끊는다.
 
+## CL #51115 — 0.15.1 — 한글 IME 단축키 즉시 발화 + 해시태그 # 자연 처리 (사용자 요청) (2026-05-10)
+
+사용자 요청 2건 (한 CL 에 묶음):
+
+1. **한글 IME 모드일 때 단축키를 입력하면 한글이 화면에 나타난 다음
+   단축키가 좀 늦게 실행됩니다. 이를 실제 입력이 일어나지 않고 바로
+   단축키가 적용되도록 수정**.
+2. **해시태그는 # 문자로 시작하지만 실제 태그 입력에는 # 문자를 제외하고
+   처리됩니다. 입력/검색할 때 # 문자를 입력하더라도 # 를 표시하되 실제
+   데이터에는 입력하지 않고, 출력할 때는 # 를 앞에 붙여 출력**.
+
+### 동작
+
+- **한글 IME 단축키 즉시 발화** (`bind_ko` 변경):
+  - 한글 binding 을 항상 `priority=True` 로 등록 (영문 binding 의 priority
+    여부와 무관). focused widget (Input / DataTable type-to-search 등) 이
+    한글 자모를 텍스트로 흡수해 잠깐 표시되는 시각 지연 방지.
+  - 영문 binding 의 priority 는 호출 측 결정 그대로 (영문 키는 텍스트
+    입력란에서도 의미가 있으므로 강제하지 않음).
+
+- **해시태그 # 자연 처리**:
+  - **사용자 시각**: tags Input / TagsPickerScreen Input / picker 옵션 모두
+    `#식비` 형태로 표기. 사용자가 `#식비` 또는 `식비` 둘 다 같은 결과.
+  - **내부 저장**: `entry_hashtags.tag` 에는 bare `식비` 만. `parse_hashtags_input`
+    이 `[\s,#]+` 분리자로 `#` 자체를 분리.
+  - **출력**: 거래 목록 item 셀의 인라인 `#식비 #저녁`, picker 옵션 라벨
+    `#식비 (12)`, EntryEditDialog 의 tags 초기 prefill `#식비 #저녁`,
+    picker 결과 append 시 `#식비` prefix 형태.
+
+### 추가
+
+- `tui/src/whooing_tui/ime.py`
+  - `KOREAN_TO_EN: dict[str, str]` — 한글 → 영문 역방향 lookup (향후 on_key
+    인터셉트 등 활용 여지).
+  - `bind_ko` 가 한글 binding 에 `priority=True` 강제 주입.
+
+### 수정
+
+- `tui/src/whooing_tui/screens/edit_entry.py`
+  - `compose()`: `tags_init = " ".join(f"#{t}" for t in (...))` — 초기
+    prefill 에 `#` 표기.
+  - `_open_tags_picker._on_pick`: dismiss 결과 (bare tag) 를 `#{tag}` 로
+    Input value 에 append.
+- `tui/src/whooing_tui/screens/tags_picker.py`
+  - 새 태그 옵션 라벨: `+ 새 태그 만들기: #{normalized}`.
+  - 추천 / 자주 쓰는 태그 옵션 라벨: `  #{t}  ({count})`.
+  - Input placeholder: `새 태그 또는 검색 (예: #식비 / 식비)`.
+
+### 테스트
+
+- `tui/tests/test_ime.py` — 1 신규: `test_bind_ko_korean_always_priority`.
+- `tui/tests/test_tags_picker.py` — 2 신규:
+  - `test_picker_displays_tags_with_hash_prefix`
+  - `test_picker_strips_hash_from_user_input_when_creating`
+- `tui/tests/test_entries_mutate.py` — 1 갱신:
+  - `test_tags_input_enter_pushes_picker_and_appends` 가 `"#커피 #회의"`
+    형태 검증.
+- 합계: 428 → **431 통과** (+3).
+
 ## CL #51107 — 0.15.0 — 로컬 sqlite 를 ~/.whooing 에서 <project>/db/ 로 이동 + 변경 시 P4 자동 submit (사용자 요청) (2026-05-10)
 
 사용자 요청:
