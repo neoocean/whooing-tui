@@ -71,6 +71,22 @@ def _fmt_money(v: Any) -> str:
     return f"{n:,}"
 
 
+def _fmt_date(v: Any) -> str:
+    """후잉 entry_date (YYYYMMDD 8자리) 를 YYYY-MM-DD 표시용으로 정규화.
+
+    후잉 응답은 가끔 `"20260510.0001"` 처럼 sub-index (sequence) 가 붙어
+    오므로 `.` 앞 8자리만 사용. 8자리 숫자가 아니면 손대지 않고 그대로
+    반환 (디버깅 친화).
+    """
+    if v is None or v == "":
+        return ""
+    s = str(v)
+    head = s.split(".", 1)[0]
+    if len(head) == 8 and head.isdigit():
+        return f"{head[:4]}-{head[4:6]}-{head[6:8]}"
+    return s
+
+
 class EntriesScreen(Screen):
     """활성 섹션의 거래내역 화면."""
 
@@ -518,7 +534,7 @@ class EntriesScreen(Screen):
         table = self.query_one("#entries-table", DataTable)
         table.clear()
         for e in entries:
-            date_s = e.get("entry_date") or ""
+            date_s = _fmt_date(e.get("entry_date"))
             money_s = _fmt_money(e.get("money"))
             l_id = e.get("l_account_id") or ""
             r_id = e.get("r_account_id") or ""
@@ -567,7 +583,10 @@ class EntriesScreen(Screen):
             f"section={sec_label})"
         )
         if self.last_cap_warning:
-            cap_list = ", ".join(cap_dates[:3]) + (" …" if len(cap_dates) > 3 else "")
+            # status 메시지의 날짜도 표 컬럼과 동일한 YYYY-MM-DD 형식으로.
+            cap_list = ", ".join(_fmt_date(d) for d in cap_dates[:3]) + (
+                " …" if len(cap_dates) > 3 else ""
+            )
             msg += f"  ⚠ 100-cap 도달 가능 ({cap_list})"
             self.set_status(msg, warn=True)
         else:

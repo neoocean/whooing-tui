@@ -117,13 +117,15 @@ async def test_entries_screen_is_initial_and_self_bootstraps():
         )
         assert ok
 
-        # account_id 가 title 로 변환되어야 함 (식비, 현금)
+        # account_id 가 title 로 변환되어야 함 (식비, 현금) +
+        # entry_date 가 YYYY-MM-DD 형식으로 정규화 (CL #51043).
         table = app.screen.query_one("#entries-table", DataTable)
         col_count = len(table.columns)
         row0 = [
             str(table.get_cell_at((0, c))) for c in range(col_count)
         ]
-        assert "20260510" in row0
+        assert "2026-05-10" in row0
+        assert "20260510" not in row0  # 정규화 후 raw 형식은 사라져야
         assert "12,000" in row0
         assert "식비" in row0
         assert "현금" in row0
@@ -203,7 +205,8 @@ async def test_entries_screen_100_cap_warning_for_single_date():
         bar = app.screen.query_one("#status", Static)
         assert "warn" in bar.classes
         assert "100-cap" in app.screen.last_status
-        assert "20260510" in app.screen.last_status
+        # status 메시지의 날짜도 YYYY-MM-DD 정규화 (CL #51043).
+        assert "2026-05-10" in app.screen.last_status
 
 
 @pytest.mark.asyncio
@@ -245,6 +248,34 @@ async def test_entries_screen_empty_sections_shows_error():
         assert ok
         # entries 호출은 발생하지 않아야 (sections 단계에서 fail)
         assert fake.list_entries_calls == []
+
+
+# ---- _fmt_date (CL #51043) -------------------------------------------
+
+
+def test_fmt_date_yyyymmdd_to_dashed():
+    from whooing_tui.screens.entries import _fmt_date
+    assert _fmt_date("20260510") == "2026-05-10"
+
+
+def test_fmt_date_strips_sub_index():
+    """후잉 응답이 '20260510.0001' 같이 sub-index 를 붙이는 경우."""
+    from whooing_tui.screens.entries import _fmt_date
+    assert _fmt_date("20260510.0001") == "2026-05-10"
+
+
+def test_fmt_date_empty_and_none():
+    from whooing_tui.screens.entries import _fmt_date
+    assert _fmt_date(None) == ""
+    assert _fmt_date("") == ""
+
+
+def test_fmt_date_passthrough_for_unrecognized():
+    """8자리 숫자가 아닌 입력은 손대지 않고 그대로 — 디버깅 친화."""
+    from whooing_tui.screens.entries import _fmt_date
+    assert _fmt_date("2026-05-10") == "2026-05-10"  # 이미 dashed
+    assert _fmt_date("abcd") == "abcd"
+    assert _fmt_date("2026") == "2026"
 
 
 # ---- 자동 활성화 우선순위 (CL #51031+) -------------------------------

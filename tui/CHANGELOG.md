@@ -2,6 +2,46 @@
 
 각 항목은 Perforce CL 단위로 끊는다.
 
+## CL #51043 — 0.9.2 — EntriesScreen date 컬럼을 YYYY-MM-DD 형식으로 (sub-index 제거) (2026-05-10)
+
+사용자 요청 (2026-05-10): "초기화면에서 date를 '2026-05-10' 의 형태로
+표시하고 시간은 생략."
+
+이전엔 후잉 응답의 `entry_date` 가 `20260510` 또는 `20260510.0001`
+(sub-index = entries 내 sequence) 형태로 그대로 표시 — 사용자에게 가독성
+나쁨. 표 컬럼과 100-cap 경고 status 메시지 둘 다 정규화.
+
+### 추가
+
+- `tui/src/whooing_tui/screens/entries.py` 에 `_fmt_date(v) -> str`
+  helper. `"20260510"` → `"2026-05-10"`. `"20260510.0001"` → `"2026-05-10"`
+  (`.` 앞 8자리만 사용). 8자리 숫자가 아니면 손대지 않고 그대로 (디버깅
+  친화).
+- `tui/tests/test_entries_screen.py` 에 4 cases (`_fmt_date` 단위:
+  yyyymmdd→dashed, sub-index 제거, empty/None, unrecognized passthrough).
+
+### 수정
+
+- `screens/entries.py::_render_table` 의 `date_s` 가 `_fmt_date(...)` 적용.
+- `screens/entries.py::_update_window_status` 의 100-cap 경고 메시지의
+  `cap_dates` 도 정규화 (표시 일관성).
+- `tests/test_entries_screen.py` 의 기존 검증 (`"20260510"`) 을
+  `"2026-05-10"` 으로 갱신, 추가로 raw 8자리가 표 셀에 더 이상 없는지도
+  검증.
+- `tui/CHANGELOG.md` / `tui/MEMORY.md` — 본 항목.
+- `tui/pyproject.toml` + `__init__.py` — 0.9.1 → 0.9.2.
+
+### 검증
+
+- `make test-tui` → **226 passed** (222 + 4 새).
+
+### 의도적 보존
+
+- `EntryEditDialog` 의 `f-date` Input prefill 은 raw 8자리 그대로 (max_length=8
+  + `parse_yyyymmdd` 검증 — 사용자가 폼에서 입력하는 값과 일관성).
+- `ConfirmModal` 의 거래 삭제 메시지는 raw `entry_date` 그대로 (사용자
+  메시지가 "초기화면" 만 명시).
+
 ## CL #51041 — 0.9.1 — 한글 IME 모드에서도 단축키 동작 (영문 ↔ 한글 자모 binding 매핑) (2026-05-10)
 
 사용자 보고 (2026-05-10): "q를 누르면 종료되는데 IME가 한글 모드일 때는
