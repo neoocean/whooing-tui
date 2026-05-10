@@ -2,6 +2,98 @@
 
 각 항목은 Perforce CL 단위로 끊는다.
 
+## CL #51102 — 0.14.0 — 거래 목록 item 컬럼에 해시태그 인라인 + 태그 단위 column 네비 + 태그 Enter 필터 (사용자 요청) (2026-05-10)
+
+사용자 요청 (한 묶음):
+
+> 거래목록에서 item 을 표기할 때 자리가 남는다면 뒤쪽에 태그 목록을
+> 나열해주세요. 태그는 실제로 # 문자로 시작되지 않지만 태그들을 구분하기
+> 위해 태그는 # 문자로 시작해주세요. 이들은 좌우 방향키로 칼럼을 선택할 때
+> item 이 선택된 상태에서 다시 한 번 오른쪽 방향키를 누르면 커서 색상이
+> 바뀌며 해시태그를 하나씩 선택합니다. 해시태그가 선택된 상태에서 엔터키를
+> 누르면 이 해시태그로 검색한 결과를 보여줍니다.
+
+### 동작
+
+- **인라인 태그 표시 (`_format_cell` item 컬럼)**:
+  - `스타벅스 #식비 #저녁` 형태. 실제 db 에는 `#` 없이 bare 토큰 (`식비`,
+    `저녁`) 으로 저장 — `#` 는 시각 구분 prefix.
+  - 태그가 많으면 (`_ITEM_TAG_INLINE_LIMIT=2` 초과) 앞 2 개 + `#…(N)` 축약.
+  - item 이 빈 문자열이어도 태그가 있으면 `#식비 #저녁` 만 표시.
+  - SQLite `entry_hashtags` 의 PK 가 `(entry_id, tag)` 라 fetch 순서가
+    가나다 순 — 인라인 표시도 그 순서.
+
+- **태그 단위 column 네비** (←/→ 가 item 을 넘어 태그 사이로 sliding):
+  - `_active_col == item` + `_column_active=True` 상태에서 → 한 번 더 →
+    태그 모드 진입 (`_tag_index = 0`).
+  - 태그 모드에서 → 면 다음 태그 (`_tag_index += 1`).
+  - 마지막 태그에서 → 면 태그 모드 종료 + memo 진입.
+  - memo 위 ← 면 그 row 가 태그 보유 시 마지막 태그 (`_tag_index = N-1`).
+  - 태그 모드 0 에서 ← → 태그 모드 종료, item 셀 자체 marker 로 복귀.
+  - **↑/↓ 로 row 가 바뀌면 태그 모드 자동 종료** (각 row 의 태그 개수가
+    달라 index 보존이 의미 없음 — 사용자 답변 명시).
+  - `Esc` (action_deactivate_column) 가 `_tag_index` 도 함께 None.
+
+- **태그 marker 색상** (사용자 명시: "커서 색상이 바뀌며"):
+  - 일반 컬럼 marker: `_ACTIVE_CELL_STYLE = "black on yellow"` (기존).
+  - 태그 marker: `_TAG_MARKER_STYLE = "black on cyan"` — 시각 구분.
+  - 태그 모드 일 때 item 셀을 `_render_item_cell_with_tag_marker(entry,
+    tag_idx)` 로 다시 build — 선택된 태그 토큰만 cyan.
+
+- **태그 Enter 필터** (`_apply_tag_filter`):
+  - `_active_filter = ("tag", {"tag": tag})` 로 통일.
+  - `_entry_tags` 사전 lookup 으로 해당 태그 보유 entries 만 표시.
+  - status: `필터: tag=#식비 — N/M건. c 로 해제 / r 로 재로드.` (warn 톤).
+  - `r` (refresh) / `c` (clear_filter) / `Esc` 모두 해제 — 기존 column
+    필터와 동일 흐름.
+
+### 추가
+
+- `tui/src/whooing_tui/screens/entries.py`
+  - `_entry_tags: dict[str, list[str]]` 필드 — refresh_entries 끝에서
+    `_fetch_all_entry_tags(entry_ids)` 로 batch 채움.
+  - `_tag_index: int | None` 필드 — 태그 모드 추적.
+  - `_TAG_MARKER_STYLE = "black on cyan"` 상수.
+  - `_ITEM_TAG_INLINE_LIMIT = 2` — 인라인 표시 한도.
+  - helper: `_fetch_all_entry_tags`, `_current_row_tags`,
+    `_item_col_index`, `_memo_col_index`, `_render_item_cell_with_tag_marker`.
+  - `action_next_column` / `action_prev_column` 의 태그 mode 분기.
+  - `action_context_enter` 의 태그 mode 분기 (→ `_apply_tag_filter`).
+  - `_apply_tag_filter(tag)` 메서드.
+  - `_filter_label` 의 `column == "tag"` 케이스.
+  - `_announce_active_column` 의 태그 mode 안내.
+  - `on_data_table_row_highlighted` 가 `_tag_index = None` reset (row
+    변경 시).
+  - `_render_table` 시작에서 `_tag_index = None` reset (defensive).
+  - `action_deactivate_column` 도 `_tag_index = None` reset.
+
+- `tui/tests/test_entries_tag_inline.py` (신규) — 8 통합 케이스:
+  - `test_item_cell_inlines_tags_after_text`
+  - `test_item_cell_truncates_many_tags`
+  - `test_item_cell_shows_only_tags_when_item_empty`
+  - `test_right_arrow_enters_tag_mode_after_item`
+  - `test_left_arrow_from_memo_to_last_tag`
+  - `test_row_change_resets_tag_mode`
+  - `test_tag_marker_uses_cyan_style`
+  - `test_enter_on_tag_applies_tag_filter`
+
+### 테스트
+
+- 기존 406 → **414 통과** (+8).
+
+### 사용자 흐름 다이어그램
+
+```mermaid
+graph LR
+    A[item col 활성<br/>black on yellow] -->|→| B[태그 0 선택<br/>black on cyan]
+    B -->|→| C[태그 1 선택]
+    C -->|→ 마지막 후| D[memo col]
+    D -->|←| C2[마지막 태그]
+    B -->|↑/↓ row 변경| E[태그 모드 종료]
+    B -->|Enter| F[tag 필터 적용<br/>같은 태그 entries만]
+    F -->|c / r / Esc| G[필터 해제]
+```
+
 ## CL #51096 — 0.13.2 — AccountPicker ←/→ 트리 펼침/접힘 + sentinel 하이라이트 색상 (사용자 요청) (2026-05-10)
 
 사용자 요청 2건 (한 CL 에 모두):

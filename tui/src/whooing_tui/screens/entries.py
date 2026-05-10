@@ -180,6 +180,9 @@ class EntriesScreen(Screen):
     # 배경 + 검정 글자. textual 의 색 변수 (`$warning` 등) 가 markup 안에서
     # 변수 치환되지 않을 수 있어 안전하게 명시 색.
     _ACTIVE_CELL_STYLE = "black on yellow"
+    # CL #51102+: item 셀 안의 *태그* 가 선택된 상태 — 일반 컬럼 marker 와
+    # 다른 색 (cyan) 으로 시각 구분 (사용자 지시: "커서 색상이 바뀌며").
+    _TAG_MARKER_STYLE = "black on cyan"
 
     # CL #51072 부터: DataTable 의 row 0 은 "새 거래 추가" sentinel.
     # cursor 가 row 0 일 때 enter = action_new_entry. 실 거래는 row 1+ 부터.
@@ -231,6 +234,16 @@ class EntriesScreen(Screen):
         # sentinel 에서 ↓ 누르면 다시 False, sentinel 사라지고 cursor 가
         # 첫 실거래로. 빈 entries 일 때는 강제 True (사용자 진입점 보장).
         self._show_sentinel: bool = False
+        # CL #51102 부터: entry_id → 해시태그 list. refresh_entries 가
+        # core_db.get_annotations_for 로 batch fetch 해서 채운다. 비어있으면
+        # item 컬럼에 태그 인라인 표시 X / 태그 단위 네비 X.
+        self._entry_tags: dict[str, list[str]] = {}
+        # 태그 단위 column 네비 — `_active_col == _COL_INDEX["item"]` +
+        # `_column_active=True` 인 상태에서 → 한 번 더 누르면 0 부터 그 row
+        # 의 태그 개수 - 1 까지 sliding. None = 태그 모드 아님 (item 셀 자체
+        # marker). row 가 ↑/↓ 로 바뀌면 None 으로 reset (각 row 의 태그
+        # 개수가 달라 index 보존이 의미 없음).
+        self._tag_index: int | None = None
 
     # ---- compose -------------------------------------------------------
 
@@ -388,27 +401,106 @@ class EntriesScreen(Screen):
 
     # ---- 컬럼 navigation (CL #51053+, 활성/비활성 상태는 #51064+) -----
 
+    def _item_col_index(self) -> int:
+        return self._COLUMN_NAMES.index("item")
+
+    def _memo_col_index(self) -> int:
+        return self._COLUMN_NAMES.index("memo")
+
+    def _current_row_tags(self) -> list[str]:
+        """현재 cursor row 의 entry 가 가진 해시태그 list — 없으면 빈 list."""
+        if not self._entries:
+            return []
+        try:
+            table = self.query_one("#entries-table", DataTable)
+        except Exception:  # pragma: no cover
+            return []
+        idx = self._entry_index_for_row(table.cursor_row)
+        if idx is None:
+            return []
+        eid = str(self._entries[idx].get("entry_id") or "")
+        return list(self._entry_tags.get(eid, []))
+
     def action_prev_column(self) -> None:
-        """← 키 — marker 비활성이면 활성화만 (_active_col 그대로), 활성이면 -1."""
+        """← 키 — marker 비활성이면 활성화만 (_active_col 그대로), 활성이면 -1.
+
+        CL #51102+: memo 위에서 ← 면 그 row 가 태그 가지고 있으면 마지막 태그
+        를 선택 (`_active_col=item, _tag_index=N-1`). item 위에서 태그 모드
+        인 동안엔 `_tag_index -= 1`; 0 에서 다시 ← 면 태그 모드 종료 (item
+        셀 자체 marker 로 복귀).
+        """
         if not self._column_active:
             self._column_active = True
             self._update_active_cell_marker()
             self._announce_active_column()
             return
+
+        item_idx = self._item_col_index()
+        memo_idx = self._memo_col_index()
+        # memo → 그 row 의 마지막 태그 (있으면).
+        if self._active_col == memo_idx and self._tag_index is None:
+            tags = self._current_row_tags()
+            if tags:
+                self._active_col = item_idx
+                self._tag_index = len(tags) - 1
+                self._update_active_cell_marker()
+                self._announce_active_column()
+                return
+        # 태그 모드에서 한 칸 이전 — 0 까지.
+        if self._active_col == item_idx and self._tag_index is not None:
+            if self._tag_index > 0:
+                self._tag_index -= 1
+            else:
+                # 태그 모드 종료 → item 셀 자체 marker.
+                self._tag_index = None
+            self._update_active_cell_marker()
+            self._announce_active_column()
+            return
+        # 일반 컬럼 -1.
         if self._active_col > 0:
             self._active_col -= 1
+            self._tag_index = None
             self._update_active_cell_marker()
             self._announce_active_column()
 
     def action_next_column(self) -> None:
-        """→ 키 — marker 비활성이면 활성화만, 활성이면 +1."""
+        """→ 키 — marker 비활성이면 활성화만, 활성이면 +1.
+
+        CL #51102+: item 위 + 태그가 있으면 → 한 번 더 누름이 태그 모드 진입
+        (`_tag_index=0`). 마지막 태그에서 → 면 태그 모드 종료 + memo 로.
+        """
         if not self._column_active:
             self._column_active = True
             self._update_active_cell_marker()
             self._announce_active_column()
             return
+
+        item_idx = self._item_col_index()
+        memo_idx = self._memo_col_index()
+        # item → 태그 모드 진입 (있을 때).
+        if self._active_col == item_idx and self._tag_index is None:
+            tags = self._current_row_tags()
+            if tags:
+                self._tag_index = 0
+                self._update_active_cell_marker()
+                self._announce_active_column()
+                return
+        # 태그 모드 → 다음 태그 또는 memo.
+        if self._active_col == item_idx and self._tag_index is not None:
+            tags = self._current_row_tags()
+            if self._tag_index + 1 < len(tags):
+                self._tag_index += 1
+            else:
+                # 태그 모드 종료 + memo 진입.
+                self._tag_index = None
+                self._active_col = memo_idx
+            self._update_active_cell_marker()
+            self._announce_active_column()
+            return
+        # 일반 컬럼 +1.
         if self._active_col < len(self._COLUMN_NAMES) - 1:
             self._active_col += 1
+            self._tag_index = None
             self._update_active_cell_marker()
             self._announce_active_column()
 
@@ -434,6 +526,7 @@ class EntriesScreen(Screen):
 
         if self._column_active:
             self._column_active = False
+            self._tag_index = None  # CL #51102+: 태그 모드도 같이 해제
             self._update_active_cell_marker()  # marker cleanup
 
         if had_filter:
@@ -461,7 +554,12 @@ class EntriesScreen(Screen):
         CL #51096+: cursor 가 sentinel 위에 있는 동안 table 에 `.sentinel-
         active` class 를 토글 — CSS 가 cursor cell 의 배경/글자색을 노란/
         검정 으로 바꿔 일반 거래 row 와 시각적으로 구분.
+
+        CL #51102+: row 가 바뀌면 태그 모드 자동 종료. 각 row 의 태그 개수
+        가 달라 `_tag_index` 를 보존하는 게 의미 없다 (사용자 답변 명시).
         """
+        if self._tag_index is not None:
+            self._tag_index = None
         self._update_active_cell_marker()
         self._update_sentinel_cursor_class()
         if self._is_on_sentinel_row():
@@ -522,6 +620,26 @@ class EntriesScreen(Screen):
             return
         cur_col = self._active_col
 
+        # CL #51102+: 태그 모드면 item 셀을 일반 marker 대신 *그 안의 한
+        # 태그만* cyan 으로 강조해 cell 자체를 다시 build.
+        if (
+            self._tag_index is not None
+            and cur_col == self._item_col_index()
+        ):
+            marked = self._render_item_cell_with_tag_marker(
+                self._entries[cur_entry_idx], self._tag_index,
+            )
+            try:
+                table.update_cell_at(
+                    Coordinate(cur_row, cur_col),
+                    marked,
+                    update_width=False,
+                )
+            except Exception:  # pragma: no cover
+                return
+            self._marked_cell = (cur_row, cur_col)
+            return
+
         plain_cur = self._format_cell(self._entries[cur_entry_idx], cur_col)
         # CL #51087+: money 컬럼은 Rich Text (justify="right") 로 와서 markup
         # 래핑 시 정렬 정보가 보존되지 않는다 — Text 면 stylize 로 같은 색을
@@ -544,6 +662,15 @@ class EntriesScreen(Screen):
 
     def _announce_active_column(self) -> None:
         """status bar 에 현재 컬럼 + Enter 시 동작 안내."""
+        # CL #51102+: 태그 모드면 별도 안내.
+        if self._tag_index is not None:
+            tags = self._current_row_tags()
+            if 0 <= self._tag_index < len(tags):
+                tag = tags[self._tag_index]
+                self.set_status(
+                    f"활성 태그: #{tag}    Enter = 같은 태그로 필터",
+                )
+                return
         col = self._COLUMN_NAMES[self._active_col]
         if col in FILTERABLE_COLUMNS:
             hint = f"Enter = 같은 {col} 으로 필터"
@@ -561,6 +688,7 @@ class EntriesScreen(Screen):
         - **실 거래 + 컬럼 활성** (파란 + 노란 cell marker):
           * date / left / right / item: 같은 값으로 필터.
           * money / memo: 거래 수정 dialog.
+          * **태그 모드 (CL #51102+)**: 그 태그로 entries 필터.
         """
         # Sentinel row 우선 — entry 가 없는 자리.
         if self._is_on_sentinel_row():
@@ -575,12 +703,49 @@ class EntriesScreen(Screen):
         if not self._column_active:
             self.action_edit_entry()
             return
+        # CL #51102+: 태그 모드 → 그 태그로 필터.
+        if self._tag_index is not None:
+            tags = self._current_row_tags()
+            if 0 <= self._tag_index < len(tags):
+                self._apply_tag_filter(tags[self._tag_index])
+            return
         col = self._COLUMN_NAMES[self._active_col]
         if col in FILTERABLE_COLUMNS:
             self._apply_filter(col, target)
         else:
             # money / memo 컬럼 → edit_entry.
             self.action_edit_entry()
+
+    def _apply_tag_filter(self, tag: str) -> None:
+        """CL #51102+: 해당 tag 가 붙은 entries 만 보여준다 (`_entry_tags`
+        사전 lookup). 다른 column 필터와 같은 status / 해제 흐름.
+
+        `_active_filter` 의 식별자는 `("tag", {"tag": tag})` 로 통일 — 기존
+        column 기반 필터 path 와 분기되도록 column key 를 `"tag"` 로 사용.
+        """
+        wanted = (tag or "").strip().lstrip("#")
+        if not wanted:
+            return
+        filtered = [
+            e for e in self._all_entries
+            if wanted in (
+                self._entry_tags.get(str(e.get("entry_id") or ""), [])
+            )
+        ]
+        if not filtered:
+            self.set_status(
+                f"태그 필터 '#{wanted}' — 매칭 0건. c 로 해제 / r 로 재로드.",
+                warn=True,
+            )
+            return
+        self._active_filter = ("tag", {"tag": wanted})
+        self._entries = filtered
+        self._render_table(filtered)
+        self.set_status(
+            f"필터: tag=#{wanted} — {len(filtered)}/{len(self._all_entries)}건. "
+            f"c 로 해제 / r 로 재로드.",
+            warn=True,
+        )
 
     def _apply_filter(self, column: str, target: dict[str, Any]) -> None:
         filtered = filter_entries(self._all_entries, column, target)
@@ -616,6 +781,8 @@ class EntriesScreen(Screen):
             from whooing_tui.filters import outside_paren_keywords
             keys = outside_paren_keywords(target.get("item"))
             return f"item∋{{{', '.join(sorted(keys))}}}"
+        if column == "tag":  # CL #51102+
+            return f"tag=#{target.get('tag') or '?'}"
         return column
 
     def _update_window_status_after_filter_clear(self) -> None:
@@ -891,6 +1058,53 @@ class EntriesScreen(Screen):
         info = rows.get(str(entry_id)) or {}
         return list(info.get("hashtags") or [])
 
+    def _render_item_cell_with_tag_marker(
+        self, entry: dict[str, Any], tag_idx: int,
+    ) -> str:
+        """태그 모드 marker 렌더 — item 셀 안에서 tag_idx 번째 태그만 cyan
+        강조. 다른 토큰은 plain. 화면 밖에 잘려도 안전한 일반 markup 형식.
+        """
+        item_text = entry.get("item") or ""
+        tags = self._entry_tags.get(str(entry.get("entry_id") or "")) or []
+        shown = tags[: self._ITEM_TAG_INLINE_LIMIT]
+        extra = len(tags) - len(shown)
+        parts: list[str] = []
+        if item_text:
+            parts.append(item_text)
+        for i, t in enumerate(shown):
+            tok = f"#{t}"
+            if i == tag_idx:
+                parts.append(f"[{self._TAG_MARKER_STYLE}]{tok}[/]")
+            else:
+                parts.append(tok)
+        if extra > 0:
+            tok = f"#…({extra})"
+            # 축약 토큰은 marker 대상 외 — 사용자가 그 위에서 enter 해도
+            # 지정할 단일 태그가 없다.
+            parts.append(tok)
+        return " ".join(parts)
+
+    def _fetch_all_entry_tags(self, entry_ids: list[str]) -> dict[str, list[str]]:
+        """entry_id list → {entry_id: [tag, ...]} batch fetch.
+
+        한 query 로 모든 entry 의 해시태그를 받아 사전화 — `_format_cell`
+        의 item 컬럼 인라인 + 태그 필터 가 같은 source 를 본다. 실패는
+        fatal 이 아니다 (db 없음 / 권한 등) — 빈 사전 반환.
+        """
+        if not entry_ids:
+            return {}
+        try:
+            with tui_data.open_ro() as conn:
+                rows = core_db.get_annotations_for(conn, entry_ids)
+        except Exception:  # pragma: no cover
+            log.exception("fetch_all_entry_tags failed")
+            return {}
+        return {
+            eid: list(info.get("hashtags") or [])
+            for eid, info in rows.items()
+            if info.get("hashtags")
+        }
+
     def _fetch_all_tags_db(self) -> dict[str, int]:
         """전체 해시태그 사전 — `{tag: count}`. TagsPickerScreen 의 *추천*
         + *자주 쓰는 태그* 섹션 출처. db 가 비어있으면 빈 사전 (모달은
@@ -1074,10 +1288,20 @@ class EntriesScreen(Screen):
         self._entries = entries_sorted
         self._all_entries = list(entries_sorted)  # 필터 해제 시 복원용 원본
         self.last_entry_count = len(entries_sorted)
+        # CL #51102+: 로컬 sqlite 의 해시태그를 batch fetch 해 entry_id →
+        # tag list 사전 보관. _format_cell 의 item 컬럼에 인라인 표시 + 태그
+        # 단위 column 네비 + tag 필터 의 단일 source.
+        self._entry_tags = self._fetch_all_entry_tags(
+            [str(e.get("entry_id") or "") for e in entries_sorted if e.get("entry_id")],
+        )
         self._render_table(entries_sorted)
         self._update_window_status(start_date, end_date, entries_sorted)
 
     # ---- render --------------------------------------------------------
+
+    # CL #51102+: item 셀 안에 인라인 태그가 너무 많아질 때 보여줄 최대 개수.
+    # 그 이상은 마지막 옵션으로 `#…(N)` 한 토큰만 추가.
+    _ITEM_TAG_INLINE_LIMIT = 2
 
     def _format_cell(self, entry: dict[str, Any], col_index: int) -> Any:
         """entry 와 column index 로부터 cell 의 표시 값을 만든다.
@@ -1085,6 +1309,10 @@ class EntriesScreen(Screen):
         `_render_table` 의 row 추가 + `_update_active_cell_marker` 의 cell
         복원 양쪽에서 같은 형식으로 보이도록 단일 helper. money 만 Rich
         `Text` 로 (오른쪽 정렬, CL #51087+) — 나머지는 `str`.
+
+        CL #51102+: item 컬럼은 끝에 해시태그 인라인 (`스타벅스 #식비 #저녁`).
+        item 이 비어있으면 태그만, 태그가 많으면 앞 N + `#…(K)` 축약. 태그
+        앞의 `#` 는 시각 구분용 prefix — 실 db 에는 bare 토큰만 저장.
         """
         session = self.app.session  # type: ignore[attr-defined]
         col = self._COLUMN_NAMES[col_index]
@@ -1099,7 +1327,17 @@ class EntriesScreen(Screen):
             r_id = entry.get("r_account_id") or ""
             return session.title_of(r_id) if r_id else ""
         if col == "item":
-            return entry.get("item") or ""
+            item_text = entry.get("item") or ""
+            tags = self._entry_tags.get(str(entry.get("entry_id") or "")) or []
+            if not tags:
+                return item_text
+            shown = tags[: self._ITEM_TAG_INLINE_LIMIT]
+            extra = len(tags) - len(shown)
+            tag_tokens = [f"#{t}" for t in shown]
+            if extra > 0:
+                tag_tokens.append(f"#…({extra})")
+            tag_str = " ".join(tag_tokens)
+            return f"{item_text} {tag_str}".strip()
         if col == "memo":
             return entry.get("memo") or ""
         return ""
@@ -1123,6 +1361,11 @@ class EntriesScreen(Screen):
         # 빈 entries 면 sentinel 강제 표시 (사용자 진입점 보장).
         if not entries:
             self._show_sentinel = True
+
+        # CL #51102+: 새 데이터로 그리는 시점에 태그 모드 자동 종료 — 같은
+        # row 라도 태그가 변했을 수 있고 (필터 / refresh / 입력 후) 다른
+        # row 의 태그 개수와도 의미가 어긋난다.
+        self._tag_index = None
 
         table = self.query_one("#entries-table", DataTable)
         prev_cursor = table.cursor_row
