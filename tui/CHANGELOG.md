@@ -2,6 +2,40 @@
 
 각 항목은 Perforce CL 단위로 끊는다.
 
+## CL #50951 — 0.5.1 — README 갱신 + 콘솔 스크립트 smoke + coverage 인프라 (2026-05-10)
+
+작은 인프라 정리. Step 5/6/8 묶음.
+
+### 수정
+
+- `tui/README.md` — Phase 1 시점의 outdated 안내문을 Phase 3 까지의 진행
+  반영. monorepo 구조 (`make install` from monorepo root) 명시. **TUI 키
+  바인딩 요약 표** 추가 — HomeScreen / EntriesScreen / EntryEditDialog 의
+  주요 키.
+- `tui/pyproject.toml` — dev deps 에 `pytest-cov>=4` 추가.
+- `Makefile` (monorepo root) — `make coverage` (tui 의 pytest --cov,
+  HTML report → `htmlcov/`) + `make smoke-cli` (콘솔 스크립트 + `python
+  -m` 양쪽 진입점이 모두 동작함을 dispatch 만으로 검증, 토큰 불필요)
+  타겟 추가.
+- `.gitignore` — `.coverage` / `htmlcov/` / `coverage.xml` 차단 추가.
+- `pyproject.toml` + `__init__.py` — 0.5.0 → 0.5.1.
+
+### 검증
+
+- `make smoke-cli` → "OK — 양쪽 진입점 모두 동작."
+- `make coverage` → 94 passed, **73% 라인 커버** (1208 lines, 330 missed).
+  주요 미커버는 cli.py 0% (서브커맨드 dispatch — 헤드리스 단위 테스트 미작성),
+  __main__.py 0%, app.py 62% (run_app 의 GUI 부팅 코드), edit_entry.py
+  69% (UI 폼 핸들러). 핵심 라이브러리 (auth/dates/errors/models/state) 는
+  100%, client.py 80%, cache.py 81%, entries.py 83%, home.py 92%.
+- `make test` → 166 passed (회귀 없음).
+
+### 의도적 누락 (다음 CL 로)
+
+- 화면 도움말 모달 (`?` 키) — Phase 2c 부터 자리만 잡혀 있음.
+- `.env` 공통 위치 (whooing-mcp-server-wrapper 와 함께 옮기는
+  cross-project 작업).
+
 ## CL #50940 — 0.5.0 — Phase 3 문서 정리 (cache 통합 사실 기록) (2026-05-10)
 
 **경위**: Phase 3 (sqlite 캐시) 의 코드 변경 (cache.py / test_cache.py /
