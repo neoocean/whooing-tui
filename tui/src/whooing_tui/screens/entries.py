@@ -1,23 +1,34 @@
-"""EntriesScreen — 활성 섹션의 거래내역 표.
+"""EntriesScreen — TUI 의 **초기 화면** (CL #51023+).
 
-HomeScreen 에서 `e` 키로 push 한다. 진입과 동시에 최근 N일 (기본
-`config.entries.default_window_days`, 30일) 의 거래를 fetch 해서 DataTable
-로 표시. 100-cap pagination 위험 (`WhooingClient._list_entries_chunked` 의
-주석 참고) 은 footer 에 인지 메시지로 노출.
+앱이 시작되면 본 화면이 첫 push 된다. 진입 시점에 자체적으로 sections /
+accounts / entries 를 chain 으로 부팅한다 (별도 HomeScreen 없이):
 
-키 바인딩:
-  q / escape  HomeScreen 으로 복귀
-  r           재로드 (현재 윈도우)
-  +  / -      윈도우를 ±7일씩 늘리기/줄이기
-  d           날짜 범위 직접 입력 (DateRangeDialog)
-  ?           화면 도움말 (별도 CL 에서 추가 예정)
+  1. SessionState.section_id 가 비어있으면 sections-list 호출 → WHOOING_
+     SECTION_ID 환경변수 우선, 없으면 첫 섹션을 자동 활성화.
+  2. SessionState.accounts_flat 이 비어있으면 accounts-list 호출 → 양방향
+     인덱스 빌드.
+  3. 최근 N일 (기본 `config.entries.default_window_days`, 30) 거래 fetch.
+
+100-cap pagination 위험은 footer 의 `.warn` 클래스로 인지 메시지를 노출.
+
+별도 옵션 화면 (CL #51023):
+  s   SectionPickerScreen 으로 push — 섹션 선택 후 dismiss → 자동 재부팅.
+  a   AccountsScreen 으로 push — 계정과목 조회 / 추가 / 수정 / 삭제.
+      돌아온 후 자동으로 entries 재로드 (cache 가 invalidate 됐을 수 있음).
+
+키 바인딩 (Footer 가 표시):
+  q / escape       앱 종료 (initial screen 이므로 pop 이 아닌 exit).
+  r                재로드 (현재 윈도우, 캐시 강제 invalidate).
+  + / -            윈도우 ±7일.
+  s / a            섹션 picker / 계정과목 화면 push.
+  n / Enter / d    거래 추가 / 수정 / 삭제 (EntryEditDialog / Confirm).
+  ?                화면 도움말 (HelpModal).
 
 DataTable 컬럼:
   date  money  left  right  item  memo
 
-money 는 천단위 콤마 + 우측 정렬. left/right 는 account_id 를 SessionState
-의 양방향 인덱스로 즉시 title 로 변환 — 사용자에게는 코드 대신 이름이
-보인다.
+money 는 천단위 콤마. left/right 는 account_id 를 SessionState 의 양방향
+인덱스로 즉시 title 로 변환 — 사용자에게는 코드 대신 이름이 보인다.
 """
 
 from __future__ import annotations
@@ -39,6 +50,7 @@ from whooing_tui.models import ToolError
 from whooing_tui.screens.edit_entry import (
     ConfirmModal, EntryDraft, EntryEditDialog,
 )
+from whooing_tui.state import default_section_id_from_env
 
 log = logging.getLogger(__name__)
 
@@ -82,12 +94,14 @@ class EntriesScreen(Screen):
     """
 
     BINDINGS = [
-        Binding("q", "back", "Back", show=True),
-        Binding("escape", "back", "Back", show=False),
-        Binding("r", "refresh", "Refresh", show=True, priority=True),
+        Binding("q", "back", "Quit", show=True),
+        Binding("escape", "back", "Quit", show=False),
+        Binding("s", "open_sections", "Sections", show=True, priority=True),
+        Binding("a", "open_accounts", "Accounts", show=True, priority=True),
         Binding("n", "new_entry", "New", show=True, priority=True),
         Binding("enter", "edit_entry", "Edit", show=True, priority=True),
         Binding("d", "delete_entry", "Delete", show=True, priority=True),
+        Binding("r", "refresh", "Refresh", show=True, priority=True),
         Binding("question_mark", "help", "Help", show=True, priority=True, key_display="?"),
         Binding("plus", "extend_window", "+7d", show=True),
         Binding("minus", "shrink_window", "-7d", show=True),
@@ -135,12 +149,56 @@ class EntriesScreen(Screen):
     # ---- actions -------------------------------------------------------
 
     def action_back(self) -> None:
-        self.app.pop_screen()
+        """초기 화면이라 pop 대신 앱 종료."""
+        self.app.exit()
 
     def action_help(self) -> None:
         """현재 화면의 BINDINGS 를 모달로 보여줌."""
         from whooing_tui.screens.help import HelpModal
         self.app.push_screen(HelpModal("EntriesScreen", list(self.BINDINGS)))
+
+    def action_open_sections(self) -> None:
+        """섹션 picker 모달 push. 사용자가 다른 섹션을 고르면 자동 재로드."""
+        from whooing_tui.screens.sections import SectionPickerScreen
+        session = self.app.session  # type: ignore[attr-defined]
+
+        def _on_close(result: tuple[str, str | None] | None) -> None:
+            if result is None:
+                return
+            sid, title = result
+            if sid == session.section_id:
+                # 같은 섹션 — 그대로 둔다.
+                return
+            session.set_section(sid, title)
+            self.set_status(
+                f"섹션 {sid} ({title or '?'}) 으로 전환. 재로드 중…",
+            )
+            self.refresh_entries()
+
+        self.app.push_screen(
+            SectionPickerScreen(
+                self._client, current_section_id=session.section_id,
+            ),
+            _on_close,
+        )
+
+    def action_open_accounts(self) -> None:
+        """계정과목 화면 push. 돌아온 후 자동으로 entries 재로드.
+
+        AccountsScreen 안의 mutation 이 cache 를 invalidate 하므로 단순히
+        refresh_entries() 만 부르면 fresh 한 결과가 나온다.
+        """
+        from whooing_tui.screens.accounts import AccountsScreen
+        session = self.app.session  # type: ignore[attr-defined]
+        if not session.section_id:
+            self.set_status("활성 섹션이 없습니다 — `s` 로 먼저 선택하세요.", error=True)
+            return
+
+        def _on_close(_: Any) -> None:
+            self.set_status("계정과목 화면에서 돌아왔습니다. 재로드 중…")
+            self.refresh_entries()
+
+        self.app.push_screen(AccountsScreen(self._client), _on_close)
 
     def action_refresh(self) -> None:
         # 사용자가 'r' = "지금 즉시 후잉 데이터" — 캐시가 있으면 invalidate.
@@ -335,12 +393,62 @@ class EntriesScreen(Screen):
 
     @work(exclusive=True, group="entries", name="refresh_entries")
     async def refresh_entries(self) -> None:
-        session = self.app.session  # type: ignore[attr-defined]
-        section_id = session.section_id
-        if not section_id:
-            self.set_status("활성 섹션이 없습니다 — 홈으로 돌아가 섹션을 선택하세요.", error=True)
-            return
+        """sections / accounts / entries 를 chain 으로 부팅 / 재로드.
 
+        section_id 가 비어있으면 sections-list → 자동 활성화.
+        accounts_flat 이 비어있으면 accounts-list → SessionState 인덱스
+        빌드. 마지막에 entries-list → DataTable 갱신.
+        """
+        session = self.app.session  # type: ignore[attr-defined]
+
+        # 1. 섹션 미선택 시 sections-list + 자동 활성화 (HomeScreen 자리에서
+        #    하던 일이 본 화면으로 흡수된 결과 — CL #51023).
+        if not session.section_id:
+            try:
+                sections = await self._client.list_sections()
+            except ToolError as e:
+                self.set_status(f"섹션 로드 실패 [{e.kind}] {e.message}", error=True)
+                return
+            except Exception as e:  # pragma: no cover
+                log.exception("entries bootstrap: list_sections failed")
+                self.set_status(f"섹션 로드 실패 (INTERNAL): {e}", error=True)
+                return
+            if not sections:
+                self.set_status(
+                    "후잉 계정에 섹션이 없습니다 — whooing.com 에서 먼저 생성하세요.",
+                    error=True,
+                )
+                return
+            # WHOOING_SECTION_ID 우선, 없으면 첫 섹션.
+            env_id = default_section_id_from_env()
+            chosen = None
+            if env_id:
+                chosen = next(
+                    (s for s in sections
+                     if str(s.get("section_id") or s.get("id")) == env_id),
+                    None,
+                )
+            if chosen is None:
+                chosen = sections[0]
+            sid = str(chosen.get("section_id") or chosen.get("id"))
+            session.set_section(sid, chosen.get("title"))
+
+        # 2. accounts 캐시 미로드 시 fetch.
+        if not session.accounts_flat:
+            try:
+                raw = await self._client.list_accounts(session.section_id)
+            except ToolError as e:
+                self.set_status(f"계정과목 로드 실패 [{e.kind}] {e.message}", error=True)
+                return
+            except Exception as e:  # pragma: no cover
+                log.exception("entries bootstrap: list_accounts failed")
+                self.set_status(f"계정과목 로드 실패 (INTERNAL): {e}", error=True)
+                return
+            flat = WhooingClient.flatten_accounts(raw)
+            session.set_accounts(raw, flat)
+
+        # 3. entries-list (기존 로직).
+        section_id = session.section_id
         end_date = today_yyyymmdd()
         start_date = days_ago_yyyymmdd(self._window_days - 1)
         try:

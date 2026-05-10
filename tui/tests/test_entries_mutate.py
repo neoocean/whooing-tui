@@ -102,14 +102,13 @@ async def _wait_for(predicate, *, timeout: float = 3.0, interval: float = 0.02):
 
 
 async def _open_entries(app, pilot) -> EntriesScreen:
+    """초기 화면이 EntriesScreen (CL #51023) — 자체적으로 sections + accounts
+    + entries 가 부팅될 때까지만 기다린다."""
     await _wait_for(
-        lambda: app.session.section_id == "s1"
+        lambda: isinstance(app.screen, EntriesScreen)
+        and app.session.section_id == "s1"
         and app.session.id_of("식비") == "x20",
         timeout=3.0,
-    )
-    await pilot.press("e")
-    await _wait_for(
-        lambda: isinstance(app.screen, EntriesScreen), timeout=2.0,
     )
     await _wait_for(
         lambda: app.screen.last_entry_count >= 1, timeout=2.0,
@@ -234,11 +233,11 @@ async def test_delete_with_no_selection_shows_error():
     fake = FakeClient(entries=[])
     app = WhooingTuiApp(client=fake)  # type: ignore[arg-type]
     async with app.run_test() as pilot:
-        # entries 빈 응답으로 진입
-        await _wait_for(lambda: app.session.section_id == "s1", timeout=3.0)
-        await pilot.press("e")
+        # 초기 화면이 EntriesScreen, entries 빈 응답으로 진입
         await _wait_for(
-            lambda: isinstance(app.screen, EntriesScreen), timeout=2.0,
+            lambda: isinstance(app.screen, EntriesScreen)
+            and app.session.section_id == "s1",
+            timeout=3.0,
         )
         es: EntriesScreen = app.screen  # type: ignore[assignment]
         es.action_delete_entry()

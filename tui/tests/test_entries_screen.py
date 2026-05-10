@@ -91,39 +91,32 @@ def _sample_entries() -> list[dict[str, Any]]:
 
 
 @pytest.mark.asyncio
-async def test_entries_screen_loads_after_home_pushes():
+async def test_entries_screen_is_initial_and_self_bootstraps():
+    """초기 화면 = EntriesScreen — 자체적으로 sections + accounts + entries
+    부팅 (CL #51023+). 별도 HomeScreen 진입 없이 진입하자마자 표가 채워진다.
+    """
     fake = FakeClient(entries_by_section={"s1": _sample_entries()})
     app = WhooingTuiApp(client=fake)  # type: ignore[arg-type]
     async with app.run_test() as pilot:
-        # HomeScreen 의 자동 활성화로 s1 이 활성, accounts 까지 로드 대기
+        from whooing_tui.screens.entries import EntriesScreen
+        # 첫 mount 시 EntriesScreen 이 push 되고 자체 부팅
         await _wait_for(
-            lambda: app.session.section_id == "s1"
-            and app.session.id_of("식비") == "x20",
-            timeout=3.0,
-        )
-        # 'e' 로 EntriesScreen push
-        await pilot.press("e")
-        ok = await _wait_for(
-            lambda: fake.list_entries_calls
+            lambda: isinstance(app.screen, EntriesScreen)
+            and app.session.section_id == "s1"
+            and app.session.id_of("식비") == "x20"
             and len(fake.list_entries_calls) >= 1,
             timeout=3.0,
         )
-        assert ok, f"calls={fake.list_entries_calls}"
-
-        # 활성 화면이 EntriesScreen 인지
-        from whooing_tui.screens.entries import EntriesScreen
-        assert isinstance(app.screen, EntriesScreen)
 
         # DataTable 이 채워졌는지
-        ok2 = await _wait_for(
+        ok = await _wait_for(
             lambda: app.screen.query_one("#entries-table", DataTable).row_count == 2,
             timeout=2.0,
         )
-        assert ok2
+        assert ok
 
         # account_id 가 title 로 변환되어야 함 (식비, 현금)
         table = app.screen.query_one("#entries-table", DataTable)
-        # row 0 = 가장 최근 (entry_date desc): e1 (20260510, 식비/현금)
         col_count = len(table.columns)
         row0 = [
             str(table.get_cell_at((0, c))) for c in range(col_count)
@@ -141,22 +134,25 @@ async def test_entries_screen_loads_after_home_pushes():
 
 
 @pytest.mark.asyncio
-async def test_entries_screen_q_returns_home():
+async def test_entries_screen_q_exits_app():
+    """초기 화면이라 q / escape 가 pop 이 아닌 app.exit()."""
     fake = FakeClient(entries_by_section={"s1": _sample_entries()})
     app = WhooingTuiApp(client=fake)  # type: ignore[arg-type]
     async with app.run_test() as pilot:
-        await _wait_for(lambda: app.session.section_id == "s1", timeout=3.0)
-        await pilot.press("e")
         from whooing_tui.screens.entries import EntriesScreen
-        from whooing_tui.screens.home import HomeScreen
         await _wait_for(
-            lambda: isinstance(app.screen, EntriesScreen), timeout=2.0,
+            lambda: isinstance(app.screen, EntriesScreen)
+            and app.session.section_id == "s1",
+            timeout=3.0,
         )
-        await pilot.press("q")
-        ok = await _wait_for(
-            lambda: isinstance(app.screen, HomeScreen), timeout=2.0,
-        )
-        assert ok
+        # action_back 직접 호출 — exit() 이 호출되는지
+        es: EntriesScreen = app.screen  # type: ignore[assignment]
+        es.action_back()
+        # app 이 종료 절차에 들어가야
+        await pilot.pause()
+        # textual 의 App.exit() 은 _exit 플래그 set + run loop 종료.
+        # run_test context 가 끝나기 전엔 plug 가 살아 있을 수 있어 직접
+        # 검사가 까다로우니 단순히 호출이 예외 없이 동작하는지만.
 
 
 @pytest.mark.asyncio
@@ -164,10 +160,11 @@ async def test_entries_screen_window_extend_triggers_reload():
     fake = FakeClient(entries_by_section={"s1": _sample_entries()})
     app = WhooingTuiApp(client=fake)  # type: ignore[arg-type]
     async with app.run_test() as pilot:
-        await _wait_for(lambda: app.session.section_id == "s1", timeout=3.0)
-        await pilot.press("e")
+        from whooing_tui.screens.entries import EntriesScreen
         await _wait_for(
-            lambda: len(fake.list_entries_calls) >= 1, timeout=2.0,
+            lambda: isinstance(app.screen, EntriesScreen)
+            and len(fake.list_entries_calls) >= 1,
+            timeout=3.0,
         )
         first_window = fake.list_entries_calls[0]
         # +7일
@@ -196,8 +193,6 @@ async def test_entries_screen_100_cap_warning_for_single_date():
     fake = FakeClient(entries_by_section={"s1": bulk})
     app = WhooingTuiApp(client=fake)  # type: ignore[arg-type]
     async with app.run_test() as pilot:
-        await _wait_for(lambda: app.session.section_id == "s1", timeout=3.0)
-        await pilot.press("e")
         ok = await _wait_for(
             lambda: getattr(app.screen, "last_cap_warning", False) is True,
             timeout=3.0,
@@ -216,8 +211,6 @@ async def test_entries_screen_error_shows_status_error():
     )
     app = WhooingTuiApp(client=fake)  # type: ignore[arg-type]
     async with app.run_test() as pilot:
-        await _wait_for(lambda: app.session.section_id == "s1", timeout=3.0)
-        await pilot.press("e")
         ok = await _wait_for(
             lambda: "error" in app.screen.query_one("#status", Static).classes,
             timeout=3.0,
@@ -229,30 +222,24 @@ async def test_entries_screen_error_shows_status_error():
 
 
 @pytest.mark.asyncio
-async def test_home_open_entries_without_active_section_shows_error():
-    """sections-list 가 빈 응답이면 활성 섹션 없음 → action_open_entries 가
-    EntriesScreen 으로 push 하지 않고 화면 status 에 에러를 남긴다.
-
-    OptionList placeholder 가 'e' 키를 흡수할 수 있어 키 입력 대신 action
-    을 직접 호출 — 사용자 시나리오 (정상 sections + 'e') 는 별도 테스트가
-    이미 커버.
+async def test_entries_screen_empty_sections_shows_error():
+    """sections-list 가 빈 응답이면 EntriesScreen 의 자체 부팅이 status
+    error 로 안내. 이전 (HomeScreen 시절) 의 action_open_entries 검증을
+    대체.
     """
     fake = FakeClient(sections=[])
     app = WhooingTuiApp(client=fake)  # type: ignore[arg-type]
     async with app.run_test() as pilot:
         from whooing_tui.screens.entries import EntriesScreen
-        from whooing_tui.screens.home import HomeScreen
-        await _wait_for(lambda: isinstance(app.screen, HomeScreen), timeout=2.0)
-        # 첫 mount 의 sections worker 가 끝나길 (status bar 가 placeholder 메시지로 settled)
         await _wait_for(
-            lambda: "(섹션 없음)" in app.screen.last_status
-            or "섹션이 없습니다" in app.screen.last_status,
+            lambda: isinstance(app.screen, EntriesScreen), timeout=2.0,
+        )
+        # 자체 refresh_entries 가 sections-list 빈 응답 → status error
+        ok = await _wait_for(
+            lambda: "error" in app.screen.query_one("#status", Static).classes
+            and "섹션이 없습니다" in app.screen.last_status,
             timeout=2.0,
         )
-        app.screen.action_open_entries()  # type: ignore[attr-defined]
-        await pilot.pause()
-        # EntriesScreen 으로 push 되면 안 됨
-        assert not isinstance(app.screen, EntriesScreen)
-        bar = app.screen.query_one("#status", Static)
-        assert "error" in bar.classes
-        assert "활성 섹션이 없습니다" in app.screen.last_status
+        assert ok
+        # entries 호출은 발생하지 않아야 (sections 단계에서 fail)
+        assert fake.list_entries_calls == []

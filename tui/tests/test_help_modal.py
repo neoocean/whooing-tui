@@ -10,7 +10,6 @@ from textual.binding import Binding
 from whooing_tui.app import WhooingTuiApp
 from whooing_tui.screens.entries import EntriesScreen
 from whooing_tui.screens.help import HelpModal, _format_bindings
-from whooing_tui.screens.home import HomeScreen
 
 
 # 같은 워크스페이스의 다른 테스트가 사용 중인 FakeClient 와 호환되도록 단순
@@ -79,12 +78,13 @@ def test_format_bindings_empty_visible():
 
 
 @pytest.mark.asyncio
-async def test_help_modal_pushes_from_home_and_dismiss_returns():
+async def test_help_modal_pushes_from_initial_screen_and_dismiss_returns():
+    """초기 화면(EntriesScreen)에서 action_help → HelpModal push 후 dismiss 복귀."""
     fake = _FakeClient()
     app = WhooingTuiApp(client=fake)  # type: ignore[arg-type]
     async with app.run_test() as pilot:
         await _wait_for(
-            lambda: isinstance(app.screen, HomeScreen)
+            lambda: isinstance(app.screen, EntriesScreen)
             and app.session.section_id == "s1",
             timeout=3.0,
         )
@@ -93,32 +93,31 @@ async def test_help_modal_pushes_from_home_and_dismiss_returns():
         app.screen.action_help()
         await pilot.pause()
         assert isinstance(app.screen, HelpModal)
-        # 본문에 HomeScreen 의 visible 단축키들이 포함돼 있어야 함
-        assert "Entries" in app.screen.body_text
+        # 본문에 EntriesScreen 의 visible 단축키들이 포함돼 있어야 함
+        assert "Sections" in app.screen.body_text
+        assert "Accounts" in app.screen.body_text
+        assert "New" in app.screen.body_text
         assert "Refresh" in app.screen.body_text
         assert "Help" in app.screen.body_text
-        # 닫기 — 키 시뮬 대신 dismiss 직접 (escape binding 의 textual
-        # internal 처리는 환경 의존적이라 단위 테스트에서 단축)
+        # 닫기 — 키 시뮬 대신 dismiss 직접
         app.screen.dismiss(None)
         ok = await _wait_for(
-            lambda: isinstance(app.screen, HomeScreen), timeout=2.0,
+            lambda: isinstance(app.screen, EntriesScreen), timeout=2.0,
         )
         assert ok
 
 
 @pytest.mark.asyncio
 async def test_help_modal_from_entries_shows_entries_bindings():
+    """동일 화면이지만 entries 가 로드된 후 호출 — visible 키 동일."""
     fake = _FakeClient()
     app = WhooingTuiApp(client=fake)  # type: ignore[arg-type]
     async with app.run_test() as pilot:
-        # Home → Entries → Help
         await _wait_for(
-            lambda: isinstance(app.screen, HomeScreen)
+            lambda: isinstance(app.screen, EntriesScreen)
             and app.session.id_of("식비") == "x20",
             timeout=3.0,
         )
-        await pilot.press("e")
-        await _wait_for(lambda: isinstance(app.screen, EntriesScreen), timeout=2.0)
         es: EntriesScreen = app.screen  # type: ignore[assignment]
         es.action_help()
         await pilot.pause()

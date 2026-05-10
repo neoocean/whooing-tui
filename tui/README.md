@@ -40,35 +40,49 @@ cp .env.example .env
 .venv/bin/whooing-tui accounts list                # 콘솔 스크립트
 .venv/bin/python ../whooing.py entries list --days 7   # monorepo 루트 진입점
 
-# 4. TUI 실행 — HomeScreen → 'e' 로 EntriesScreen → 'n'/Enter/d 로 거래 추가/수정/삭제
+# 4. TUI 실행 — 진입 즉시 거래내역이 표시 (자체 부팅: sections + accounts + entries)
+#    s = 섹션 변경 / a = 계정과목 / n / Enter / d = 거래 추가/수정/삭제
 make run
 # 또는: .venv/bin/python ../whooing.py
 ```
 
 ## TUI 키 바인딩 요약
 
-### HomeScreen
-
-| 키 | 동작 |
-| --- | --- |
-| ↑/↓ | 섹션 picker 이동 |
-| Enter | 선택된 섹션 활성화 (계정과목 로드) |
-| `e` | EntriesScreen 진입 |
-| `r` | 캐시 invalidate + 재로드 |
-| `t` | 테마 토글 |
-| `q` / Ctrl+C | 종료 |
-
-### EntriesScreen
+### EntriesScreen (초기 화면, 0.8.1+)
 
 | 키 | 동작 |
 | --- | --- |
 | ↑/↓ | 거래 행 이동 |
+| `s` | 섹션 picker 모달 (선택 후 자동 재로드) |
+| `a` | 계정과목 화면 (조회 / 추가 / 수정 / 삭제) |
 | `n` | 새 거래 입력 (EntryEditDialog) |
 | Enter | 선택 거래 수정 (EntryEditDialog) |
 | `d` | 선택 거래 삭제 (ConfirmModal) |
 | `r` | 캐시 invalidate + 재로드 |
 | `+` / `-` | 조회 윈도우 ±7일 |
-| `q` / Esc | HomeScreen 복귀 |
+| `?` | 화면 도움말 |
+| `q` / Esc | 앱 종료 |
+
+### SectionPickerScreen (`s` 로 push)
+
+| 키 | 동작 |
+| --- | --- |
+| ↑/↓ | 섹션 이동 |
+| Enter | 선택 → 활성 섹션 변경 + EntriesScreen 자동 재로드 |
+| `r` | 섹션 목록 재로드 |
+| `q` / Esc | 취소 |
+
+### AccountsScreen (`a` 로 push)
+
+| 키 | 동작 |
+| --- | --- |
+| ↑/↓ | 계정과목 이동 |
+| `n` | 새 계정과목 추가 (AccountEditDialog) |
+| Enter | 선택된 계정과목 수정 |
+| `d` | 삭제 (사전 검사 + 사용자 확인) |
+| `r` | 캐시 invalidate + 재로드 |
+| `?` | 화면 도움말 |
+| `q` / Esc | EntriesScreen 으로 복귀 |
 
 ### EntryEditDialog
 

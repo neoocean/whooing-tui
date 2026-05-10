@@ -2,6 +2,102 @@
 
 각 항목은 Perforce CL 단위로 끊는다.
 
+## CL #51023 — 0.8.1 — UI 재구성: 초기 화면을 EntriesScreen 으로, 옵션 화면 분리 (2026-05-10)
+
+사용자 지시 (2026-05-10): "초기화면에 거래내역, 섹션 선택과 계정과목은
+별도 옵션 화면". 본 CL 이 그 변경을 적용 + HomeScreen 제거.
+
+### Before
+
+```
+앱 시작 → HomeScreen (섹션 picker + 계정과목 트리)
+            └─ 'e' → EntriesScreen
+```
+
+### After
+
+```
+앱 시작 → EntriesScreen (자체 부팅: sections → accounts → entries)
+            ├─ 's' → SectionPickerScreen (모달, 선택 후 dismiss → 자동 재로드)
+            └─ 'a' → AccountsScreen (계정과목 조회 + CRUD, 돌아오면 자동 재로드)
+```
+
+### 추가 (4 files)
+
+- `tui/src/whooing_tui/screens/sections.py` — `SectionPickerScreen
+  (ModalScreen[tuple[str, str | None] | None])`. OptionList 로 섹션 표시,
+  현재 활성 섹션은 ▶ 인디케이터. Enter → `dismiss((sid, title))`,
+  Esc/q → `dismiss(None)`. EntriesScreen 의 `action_open_sections` 가
+  callback 으로 dismiss 결과를 받아 SessionState 갱신 + entries 재로드.
+- `tui/src/whooing_tui/screens/accounts.py` — `AccountsScreen` + 자체
+  `AccountEditDialog` + `AccountDraft`.
+  * Tree 로 계정과목을 type 별 그룹화 (assets/liabilities/capital/income/
+    expenses/group). 후잉 표준 순서.
+  * `n` (new): `AccountEditDialog` push → `WhooingClient.create_account`.
+    필드: title / account / type / open_date / close_date / category /
+    memo. type ∈ {account, group}. account ∈ 5 표준 type.
+  * `Enter` (edit): leaf 선택 시 dialog prefill → `update_account` (전체
+    필드 전달).
+  * `d` (delete): **`check_account_deletable` 우선 호출** → 결과
+    (entries_count / balance / is_last) 를 ConfirmModal 메시지에 포함 →
+    Yes 면 `delete_account`. 거래내역이 있으면 close_date 변경 권장 안내.
+  * `q`/`escape`: `dismiss(None)` 으로 EntriesScreen 복귀.
+- `tui/tests/test_sections_picker.py` — 5 cases (정상 push / dismiss
+  with choice / dismiss None / 같은 섹션 skip / 빈 sections placeholder).
+- `tui/tests/test_accounts_screen.py` — 9 cases (트리 렌더, new dialog
+  push, dismiss → create, leaf 가 아닌 cursor 에서 edit 거부, leaf cursor
+  + edit dialog → update, delete 의 check → ConfirmModal → delete chain,
+  No 면 delete 안 함, entries_count > 0 시 ConfirmModal 메시지에 경고,
+  back → EntriesScreen 복귀).
+
+### 수정 (10 files)
+
+- `tui/src/whooing_tui/screens/entries.py` — 초기 화면 역할 흡수.
+  * 키 바인딩 추가: `s` (Sections), `a` (Accounts) — 둘 다 priority.
+  * `action_back` 이 pop 이 아닌 `app.exit()` (initial screen).
+  * `refresh_entries` 가 chain 부팅: section_id 비어있으면 sections-list
+    + WHOOING_SECTION_ID 우선 자동 활성화, accounts_flat 비어있으면
+    accounts-list + 양방향 인덱스 빌드, 마지막에 entries-list.
+  * `action_open_sections` / `action_open_accounts` — 모달 push +
+    callback 으로 결과 처리 (섹션 변경 시 자동 재로드, accounts 화면
+    돌아온 후도 자동 재로드).
+- `tui/src/whooing_tui/app.py` — initial screen 을 `HomeScreen` →
+  `EntriesScreen` 으로 변경.
+- `tui/src/whooing_tui/screens/__init__.py` — HomeScreen import 제거,
+  새 `SectionPickerScreen` / `AccountsScreen` / `AccountEditDialog`
+  re-export.
+- `tui/tests/test_entries_screen.py` — HomeScreen 의존 검증을 EntriesScreen
+  자체 부팅 흐름으로 교체 (자체 sections + accounts + entries 한 번에
+  로드되는 통합 케이스, 빈 sections 시 status error, q → exit).
+- `tui/tests/test_entries_mutate.py` — `_open_entries` helper 가 'e' 키
+  입력 대신 EntriesScreen mount 만 기다리도록 수정 (HomeScreen 진입 단계
+  소거).
+- `tui/tests/test_help_modal.py` — HomeScreen 참조 제거, 초기 화면
+  (EntriesScreen) 에서 `?` → HelpModal 검증으로 교체. 본문 keys 도
+  Sections/Accounts/New/Refresh/Help 로 갱신.
+- `tui/CHANGELOG.md` / `tui/DESIGN.md` / `tui/MEMORY.md` / `tui/README.md`
+  — 본 변경 사항 반영.
+- `tui/pyproject.toml` + `__init__.py` — 0.8.0 → 0.8.1.
+
+### 제거
+
+- `tui/src/whooing_tui/screens/home.py` — HomeScreen.
+- `tui/tests/test_home_screen.py` — 6 cases.
+
+### 검증
+
+- `make test-tui` → **188 passed** (이전 180 + 14 new screen 테스트 -
+  6 home 테스트). 회귀 0.
+- `make smoke-cli` → 진입점 3 종 모두 동작.
+- 라이브 검증: 사용자 수동 — `python whooing.py` → 거래내역이 즉시 표시
+  되어야 함. `s` 로 섹션 picker, `a` 로 계정과목 화면.
+
+### accounts CRUD 의 라이브 검증
+
+`mcp__whooing__accounts-*` schema 와 동일한 입력으로 RESTful path 호출.
+실 후잉 응답이 우리 가정과 다르면 `client.py` 의 `_ACCOUNTS_PATH` /
+`_account_path()` / `_account_check_deletable_path()` 만 조정.
+
 ## CL #51019 — 0.8.0 — `WhooingClient` 에 accounts CRUD (UI 재구성 준비) (2026-05-10)
 
 UI 재구성 (initial = EntriesScreen, 별도 SectionPicker / Accounts 화면)

@@ -28,7 +28,7 @@ from whooing_tui.auth import load_auth_from_env
 from whooing_tui.cache import CacheStore, default_cache_path
 from whooing_tui.client import CachedWhooingClient, WhooingClient
 from whooing_tui.config import load_config
-from whooing_tui.screens.home import HomeScreen
+from whooing_tui.screens.entries import EntriesScreen
 from whooing_tui.state import SessionState
 
 log = logging.getLogger(__name__)
@@ -60,9 +60,9 @@ class WhooingTuiApp(App):
         self.session = SessionState()
 
     def compose(self) -> ComposeResult:
-        # HomeScreen 이 자체 Header/Footer 를 가지므로 root 는 비워둔다.
-        # 단, App.run_test() 환경 등에서 HomeScreen push 전에 잠시
-        # 보일 수 있어 minimal Header/Footer 를 제공.
+        # 초기 화면 (EntriesScreen) 이 자체 Header/Footer 를 가지므로 root
+        # 는 비워둔다. App.run_test() 환경 등에서 push 전에 잠시 보일 수
+        # 있어 minimal Header/Footer 를 제공.
         yield Header(show_clock=False)
         yield Footer()
 
@@ -78,7 +78,9 @@ class WhooingTuiApp(App):
             # client 가 None 이면 테스트가 직접 만든 경우이므로 화면도
             # 띄우지 않는다 (테스트는 fake client 를 넘긴다).
             return
-        self.push_screen(HomeScreen(self._client))
+        # CL #51023 부터 초기 화면은 EntriesScreen — 자체적으로 sections
+        # / accounts / entries 를 chain 으로 부팅한다.
+        self.push_screen(EntriesScreen(self._client))
 
     def action_toggle_theme(self) -> None:
         try:
