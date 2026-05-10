@@ -27,9 +27,15 @@ make install
 cp .env.example .env
 # WHOOING_AI_TOKEN 설정. 권장 위치는 ~/.config/whooing/.env
 
-# 3. TUI 실행
-make run
+# 3. TUI 실행 — 셋 다 동등
+make run                              # Makefile 단축 (가장 짧음)
+.venv/bin/python whooing.py           # 본 디렉터리의 진입점 스크립트
+.venv/bin/python -m whooing_tui       # 패키지 module
 ```
+
+`whooing.py` 는 monorepo 루트에 두고 `tui/src` / `core/src` 를 sys.path
+에 prepend 한 뒤 `whooing_tui.cli.main()` 으로 위임 — 셋 다 같은 코드 경로
+를 거쳐 동작이 100% 동일.
 
 자세한 사용법:
 - TUI 키보드 단축키 / CLI 흐름: [`tui/README.md`](tui/README.md)
@@ -57,6 +63,8 @@ whooing-tui/                  ← 본 monorepo (이 README)
 │   ├── pyproject.toml        MCP 서버 + 14 도구 (parsers/sms, tools/audit 등)
 │   ├── src/whooing_mcp/
 │   └── tests/
+├── whooing.py                ← `python whooing.py` 진입점 (sys.path 셋업
+│                                후 whooing_tui.cli.main 호출)
 ├── README.md                 이 파일
 ├── Makefile                  install / test 모든 패키지 처리
 ├── LICENSE                   MIT

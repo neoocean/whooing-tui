@@ -2,6 +2,45 @@
 
 각 항목은 Perforce CL 단위로 끊는다.
 
+## CL #51009 — 0.7.6 — monorepo 루트 진입점 `whooing.py` 추가 (2026-05-10)
+
+`python whooing.py [args]` 가 `python -m whooing_tui [args]` / 콘솔
+스크립트 `whooing-tui` 와 100% 동등. 사용자가 monorepo 루트에서 짧게
+실행할 수 있는 발견 가능한 진입점.
+
+### 추가
+
+- `whooing.py` (monorepo 루트, +x permission)
+  * `tui/src` 와 `core/src` 를 `sys.path` 에 prepend → venv 활성화 안
+    된 상태에서도 외부 deps 만 있으면 동작.
+  * 지연 import 후 `whooing_tui.cli.main()` 으로 그대로 위임. 자체 로직
+    없음 — 같은 코드 경로 재사용.
+  * 모듈 docstring 에 사용 예시 + 전제 (deps 위치) 명시.
+
+### 수정
+
+- `Makefile` — `smoke-cli` 가 진입점 **3 종** (python -m / 콘솔 스크립트
+  / `whooing.py`) 을 모두 검증. 하나라도 깨지면 즉시 발견.
+- `README.md` (monorepo root) — 빠른 시작 섹션의 TUI 실행 방법을 3가지
+  동등 형태로 정리. 디렉터리 레이아웃에 `whooing.py` 추가.
+- `tui/README.md` — 빠른 시작의 헤드리스 CLI 예시에 `whooing.py` 추가.
+- `tui/CHANGELOG.md` / `tui/MEMORY.md` — 본 항목.
+- `tui/pyproject.toml` + `__init__.py` — 0.7.5 → 0.7.6.
+
+### 검증
+
+- `make smoke-cli` → "OK — 진입점 3 종 모두 동작."
+- `.venv/bin/python whooing.py sections list` → 실 후잉 응답 (Default,
+  테스트 두 섹션) 정상.
+- `make test-tui` → 170 passed (회귀 없음).
+
+### Perforce 표시
+
+- `whooing.py` 는 `p4 add -t text+x` 로 등록 — 다른 사용자가 sync 받을
+  때도 +x permission 보존. shebang `#!/usr/bin/env python3` 가 동작하면
+  `./whooing.py` 도 가능 (단, 권장은 `python whooing.py` 명시 호출 —
+  외부 deps 의 venv 위치를 사용자가 명확히 통제).
+
 ## CL #51008 — 0.7.5 — `mcp_bridge.py` 제거 (UI 통합 미완성, unused 코드 정리) (2026-05-10)
 
 CL #50987 (scaffolding) → #51007 (archived 의존 제거 + 자체 클라이언트로

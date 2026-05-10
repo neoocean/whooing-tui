@@ -35,13 +35,14 @@ cp .env.example .env
 # .env 의 WHOOING_AI_TOKEN 을 실 토큰으로 교체
 # 발급: 후잉 → 사용자 > 계정 > 비밀번호 및 보안 > AI 토큰 발급
 
-# 3. 헤드리스 CLI 로 동작 확인
-.venv/bin/python -m whooing_tui sections list
-.venv/bin/whooing-tui accounts list      # 콘솔 스크립트도 동등하게 동작
-.venv/bin/whooing-tui entries list --days 7
+# 3. 헤드리스 CLI 로 동작 확인 — 진입점 3종 모두 동등
+.venv/bin/python -m whooing_tui sections list      # 패키지 module
+.venv/bin/whooing-tui accounts list                # 콘솔 스크립트
+.venv/bin/python ../whooing.py entries list --days 7   # monorepo 루트 진입점
 
 # 4. TUI 실행 — HomeScreen → 'e' 로 EntriesScreen → 'n'/Enter/d 로 거래 추가/수정/삭제
 make run
+# 또는: .venv/bin/python ../whooing.py
 ```
 
 ## TUI 키 바인딩 요약

@@ -69,13 +69,16 @@ coverage:
 	$(PYTEST) -q --cov=whooing_tui --cov-report=term-missing --cov-report=html tui/tests
 	@echo "HTML report: htmlcov/index.html"
 
-# 콘솔 스크립트와 python -m 둘 다 같은 결과를 주는지 빠르게 확인.
+# 모든 진입점이 같은 결과를 주는지 빠르게 확인 — `python -m`, console
+# 스크립트, monorepo 루트의 whooing.py 셋 다.
 smoke-cli:
-	@echo "[1/2] python -m whooing_tui --help"
+	@echo "[1/3] python -m whooing_tui --help"
 	@$(PY) -m whooing_tui --help > /dev/null
-	@echo "[2/2] whooing-tui --help (console_scripts entry)"
+	@echo "[2/3] whooing-tui --help (console_scripts entry)"
 	@$(VENV)/bin/whooing-tui --help > /dev/null
-	@echo "OK — 양쪽 진입점 모두 동작."
+	@echo "[3/3] python whooing.py --help (monorepo 루트 진입점)"
+	@$(PY) whooing.py --help > /dev/null
+	@echo "OK — 진입점 3 종 모두 동작."
 
 # mcp 의 등록된 MCP 도구 목록 — 14 도구 검증.
 tools:
