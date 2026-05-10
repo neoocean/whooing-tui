@@ -507,6 +507,140 @@ class WhooingClient:
         )
         return _coerce_dict(results)
 
+    # ---- report / budget / goal endpoints (CL #51116+) -------------------
+    #
+    # 후잉 공식 MCP 의 report-get / report_customs / budget / goal schema
+    # (CL #51116 시점) 그대로 wrap. 정확한 REST path 는 RESTful 가정 으로
+    # 시작:
+    #   /reports.json            (entries.json 과 동일 패턴)
+    #   /report_customs.json
+    #   /report_customs/<id>.json
+    #   /budget.json
+    #   /budget_goal.json
+    #   /goal.json
+    # 라이브 검증에서 path 가 다르면 _REPORT_*PATH 만 조정.
+
+    _REPORTS_PATH = "/reports.json"
+    _REPORT_CUSTOMS_PATH = "/report_customs.json"
+    _BUDGET_PATH = "/budget.json"
+    _BUDGET_GOAL_PATH = "/budget_goal.json"
+    _GOAL_PATH = "/goal.json"
+
+    @staticmethod
+    def _report_custom_path(custom_id: str) -> str:
+        return f"/report_customs/{custom_id}.json"
+
+    async def get_report(
+        self,
+        *,
+        section_id: str,
+        type: str,
+        start_date: str | None = None,
+        end_date: str | None = None,
+        account: str | None = None,
+        account_id: str | None = None,
+        rows_type: str | None = None,
+        client: str | None = None,
+        item: str | None = None,
+        limit: int | None = None,
+    ) -> Any:
+        """report-get — 통합 재무 보고서 / cashflow / in_out / calendar /
+        bill / checkcard / budget / goal / entries_* 시리즈.
+
+        `type` 값은 후잉 MCP schema 의 enum 그대로 (report, report_summary,
+        cashflow, in_out, calendar, bill, checkcard, budget, goal,
+        entries_latest, entries_*_of_account 등). 응답 shape 는 type 별로
+        달라 caller 가 해석 — 본 메서드는 raw results 를 반환.
+        """
+        params: dict[str, Any] = {"section_id": section_id, "type": type}
+        for k, v in {
+            "start_date": start_date, "end_date": end_date,
+            "account": account, "account_id": account_id,
+            "rows_type": rows_type, "client": client,
+            "item": item, "limit": limit,
+        }.items():
+            if v is not None:
+                params[k] = v
+        return await self._get(self._REPORTS_PATH, params=params)
+
+    async def list_report_customs(
+        self,
+        *,
+        section_id: str,
+        report: str,
+        calculated_result: str | None = None,
+        start_date: str | None = None,
+        end_date: str | None = None,
+    ) -> list[dict[str, Any]]:
+        """사용자 정의 보고서 행 목록. `report` = report_bs / report_pl.
+
+        `calculated_result="y"` 면 server 가 각 행의 money 를 미리 계산해
+        반환 — 이때 start_date / end_date 도 같이 전달 필요.
+        """
+        params: dict[str, Any] = {"section_id": section_id, "report": report}
+        for k, v in {
+            "calculated_result": calculated_result,
+            "start_date": start_date, "end_date": end_date,
+        }.items():
+            if v is not None:
+                params[k] = v
+        results = await self._get(self._REPORT_CUSTOMS_PATH, params=params)
+        return self._normalize_collection(results, key="customs")
+
+    async def get_report_custom(
+        self,
+        *,
+        section_id: str,
+        report: str,
+        custom_id: str,
+    ) -> dict[str, Any]:
+        """사용자 정의 보고서 행 단건."""
+        results = await self._get(
+            self._report_custom_path(custom_id),
+            params={"section_id": section_id, "report": report},
+        )
+        return _coerce_dict(results)
+
+    async def get_budget(
+        self,
+        *,
+        section_id: str,
+        pl: str,
+        start_date: str | None = None,
+        end_date: str | None = None,
+    ) -> Any:
+        """예산 대비 실적. `pl` = expenses / income."""
+        params: dict[str, Any] = {"section_id": section_id, "pl": pl}
+        if start_date is not None:
+            params["start_date"] = start_date
+        if end_date is not None:
+            params["end_date"] = end_date
+        return await self._get(self._BUDGET_PATH, params=params)
+
+    async def get_budget_goal(self, *, section_id: str) -> dict[str, Any]:
+        """장기목표 설정 — base_ym/goal_ym, goal_money, 예산, each_months."""
+        results = await self._get(
+            self._BUDGET_GOAL_PATH, params={"section_id": section_id},
+        )
+        return _coerce_dict(results)
+
+    async def get_goal(
+        self,
+        *,
+        section_id: str,
+        start_date: str,
+        end_date: str,
+    ) -> Any:
+        """월별 자본 목표값 (장기목표에서 파생)."""
+        return await self._get(
+            self._GOAL_PATH,
+            params={
+                "section_id": section_id,
+                "start_date": start_date,
+                "end_date": end_date,
+            },
+        )
+
     @staticmethod
     def _normalize_collection(results: Any, key: str) -> list[dict[str, Any]]:
         """후잉 응답이 list / {key: [...]} / {id: obj} 셋 다 가능하다.
@@ -635,6 +769,25 @@ class CachedWhooingClient:
     async def check_account_deletable(self, **kwargs) -> dict[str, Any]:
         # 단순 조회라 캐시 영향 없음 — 그대로 위임.
         return await self._inner.check_account_deletable(**kwargs)
+
+    # 보고서 / 예산 / 목표 — CL #51116+. 모두 단순 조회라 캐시 영향 없음.
+    async def get_report(self, **kwargs) -> Any:
+        return await self._inner.get_report(**kwargs)
+
+    async def list_report_customs(self, **kwargs) -> list[dict[str, Any]]:
+        return await self._inner.list_report_customs(**kwargs)
+
+    async def get_report_custom(self, **kwargs) -> dict[str, Any]:
+        return await self._inner.get_report_custom(**kwargs)
+
+    async def get_budget(self, **kwargs) -> Any:
+        return await self._inner.get_budget(**kwargs)
+
+    async def get_budget_goal(self, **kwargs) -> dict[str, Any]:
+        return await self._inner.get_budget_goal(**kwargs)
+
+    async def get_goal(self, **kwargs) -> Any:
+        return await self._inner.get_goal(**kwargs)
 
     # 사용자가 'r' 누르면 호출 — 화면이 직접 강제 재로드 가능.
     def invalidate_section(self, section_id: str) -> None:

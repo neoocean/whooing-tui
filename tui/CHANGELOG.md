@@ -2,6 +2,91 @@
 
 각 항목은 Perforce CL 단위로 끊는다.
 
+## CL #51116 — 0.16.0 — 후잉 통계 뷰 (드롭다운 메뉴 + 결과 팝업) Phase 1 (사용자 요청) (2026-05-10)
+
+사용자 요청:
+
+> 후잉에서 제공하는 여러 가지 통계 뷰들을 지원해주세요. 각각의 통계는
+> 풀다운 메뉴를 통해 접근하고 메뉴를 선택하면 팝업을 통해 결과를
+> 보여줘야 합니다.
+
+선택된 우선순위 (사용자 답변): report-get 기본 + report-get 기간별 +
+report_customs (사용자 정의) + budget / goal — 모두 Phase 1 에 골격 포함.
+
+### 추가
+
+- `tui/src/whooing_tui/screens/reports.py` (신규)
+  - `ReportsMenuScreen(ModalScreen[(item_id, label)])` — `t` 단축키로 push.
+    OptionList 의 항목 11개:
+      * 재무상태표 (자산/부채/자본 — 현재)
+      * 손익 요약 (이번 달)
+      * 월별 추이 (YTD)
+      * 현금흐름표 (이번 달)
+      * 캘린더 (이번 달)
+      * 최근 거래 20건
+      * 사용자 정의 BS / PL (YTD, calculated_result=y)
+      * 예산 대비 실적 — 지출 / 수입
+      * 장기목표 설정
+  - `ReportResultScreen(ModalScreen[None])` — fetch worker (`@work group=
+    "reports"`) + raw JSON pretty dump. `last_payload` / `last_error` 테스
+    트 친화 attribute. 에러는 적색 status — 모달은 그대로 (앱 정상).
+  - `_build_menu()` — `(item_id, label, fetch_fn)` 의 list. fetch_fn 은
+    client + session 받아 await 결과 반환. 메뉴 dispatch 와 fetch 의 단일
+    source.
+  - `format_report_payload(item_id, payload)` — Phase 1 베이스라인은 indent
+    JSON dump. 종류별 전용 렌더러는 후속 CL 에서 점진 교체.
+
+- `tui/src/whooing_tui/client.py`
+  - `WhooingClient.get_report(*, section_id, type, ...)` — `/reports.json`
+    GET. type=report / report_summary / cashflow / in_out / calendar /
+    bill / checkcard / budget / goal / entries_* 전부 dispatch.
+  - `list_report_customs(*, section_id, report, calculated_result, ...)`.
+  - `get_report_custom(*, section_id, report, custom_id)`.
+  - `get_budget(*, section_id, pl, start_date, end_date)`.
+  - `get_budget_goal(*, section_id)`.
+  - `get_goal(*, section_id, start_date, end_date)`.
+  - `CachedWhooingClient` 에 같은 메서드 wrapping pass-through (캐시 영향 X).
+  - 모든 path 는 RESTful 가정 (entries.json / accounts.json 패턴) 으로 시작
+    — 라이브 검증에서 path 다르면 `_REPORTS_PATH` 등 상수만 조정.
+
+- `tui/src/whooing_tui/screens/entries.py`
+  - `BINDINGS` 에 `*bind_ko("t", "open_reports", "Reports", show=True,
+    priority=True)` 추가.
+  - `action_open_reports()` — `ReportsMenuScreen` push, dismiss 결과로
+    `ReportResultScreen` push.
+
+- `tui/tests/test_reports.py` (신규) — 10 케이스:
+  - 단위: `_build_menu` / `format_report_payload`.
+  - 통합: 't' 키 → 메뉴 / 메뉴 선택 → 결과 / 메뉴 cancel / endpoint
+    dispatch / ToolError silent 처리.
+- `tui/tests/test_client.py` — 5 추가:
+  - `test_get_report_basic`, `test_get_report_passes_optional_params`,
+    `test_list_report_customs_returns_list`, `test_get_budget`,
+    `test_get_budget_goal`.
+
+### 검증
+
+- 기존 431 → **446 통과** (+15).
+
+### Phase 2 후속 (계획만 — 본 CL 에는 미포함)
+
+- 종류별 전용 렌더러: 재무상태표 → assets/liabilities/capital 표 (money
+  오른쪽 정렬). 월별 추이 → 시계열 표. 캘린더 → 일 별 그리드 mockup.
+- 보고서 모달 안에서 기간 조정 (+/-).
+- 사용자 정의 BS/PL 의 항목별 drill-down.
+- 캐시 (보고서는 데이터가 자주 안 바뀌므로 짧은 TTL 캐시 가치).
+
+```mermaid
+graph LR
+    A[EntriesScreen] -->|t 또는 ㅌ| B[ReportsMenuScreen]
+    B -->|선택| C[ReportResultScreen]
+    C -->|worker| D{후잉 API}
+    D -->|성공| E[payload pretty dump]
+    D -->|ToolError| F[적색 status]
+    C -->|Esc / q| A
+    B -->|Esc / q| A
+```
+
 ## CL #51115 — 0.15.1 — 한글 IME 단축키 즉시 발화 + 해시태그 # 자연 처리 (사용자 요청) (2026-05-10)
 
 사용자 요청 2건 (한 CL 에 묶음):

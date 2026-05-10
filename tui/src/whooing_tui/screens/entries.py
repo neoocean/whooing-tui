@@ -150,6 +150,8 @@ class EntriesScreen(Screen):
         Binding("escape", "deactivate_column", "Cancel col", show=False),
         *bind_ko("s", "open_sections", "Sections", show=True, priority=True),
         *bind_ko("a", "open_accounts", "Accounts", show=True, priority=True),
+        # CL #51116+: 't' (또는 ㅌ) 단축키 — 보고서/통계 드롭다운 메뉴 push.
+        *bind_ko("t", "open_reports", "Reports", show=True, priority=True),
         *bind_ko("n", "new_entry", "New", show=True, priority=True),
         # Enter 의 의미는 _column_active + _active_col 에 따라 분기.
         Binding("enter", "context_enter", "Enter", show=True, priority=True),
@@ -335,6 +337,32 @@ class EntriesScreen(Screen):
             self.refresh_entries()
 
         self.app.push_screen(AccountsScreen(self._client), _on_close)
+
+    def action_open_reports(self) -> None:
+        """CL #51116+: 통계 / 보고서 드롭다운 메뉴 (`t` 또는 ㅌ).
+
+        ReportsMenuScreen 으로 종류 선택 → 결과 ReportResultScreen.
+        """
+        from whooing_tui.screens.reports import (
+            ReportResultScreen, ReportsMenuScreen,
+        )
+
+        session = self.app.session  # type: ignore[attr-defined]
+        if not session.section_id:
+            self.set_status("활성 섹션이 없습니다 — `s` 로 먼저 선택하세요.", error=True)
+            return
+
+        def _on_pick(result: tuple[str, str] | None) -> None:
+            if result is None:
+                return
+            item_id, label = result
+            self.app.push_screen(
+                ReportResultScreen(
+                    self._client, session, item_id=item_id, label=label,
+                ),
+            )
+
+        self.app.push_screen(ReportsMenuScreen(), _on_pick)
 
     def action_refresh(self) -> None:
         # 사용자가 'r' = "지금 즉시 후잉 데이터" — 캐시가 있으면 invalidate.
