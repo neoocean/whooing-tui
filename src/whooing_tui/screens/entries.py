@@ -36,6 +36,9 @@ from whooing_tui.client import WhooingClient
 from whooing_tui.config import load_config
 from whooing_tui.dates import days_ago_yyyymmdd, today_yyyymmdd
 from whooing_tui.models import ToolError
+from whooing_tui.screens.edit_entry import (
+    ConfirmModal, EntryDraft, EntryEditDialog,
+)
 
 log = logging.getLogger(__name__)
 
@@ -81,7 +84,10 @@ class EntriesScreen(Screen):
     BINDINGS = [
         Binding("q", "back", "Back", show=True),
         Binding("escape", "back", "Back", show=False),
-        Binding("r", "refresh", "Refresh", show=True),
+        Binding("r", "refresh", "Refresh", show=True, priority=True),
+        Binding("n", "new_entry", "New", show=True, priority=True),
+        Binding("enter", "edit_entry", "Edit", show=True, priority=True),
+        Binding("d", "delete_entry", "Delete", show=True, priority=True),
         Binding("plus", "extend_window", "+7d", show=True),
         Binding("minus", "shrink_window", "-7d", show=True),
         Binding("equals_sign", "extend_window", "", show=False),  # '+' 키 (no shift)
@@ -102,6 +108,10 @@ class EntriesScreen(Screen):
         # 마지막 fetch 결과 메타 (테스트가 검사할 수 있도록)
         self.last_entry_count: int = 0
         self.last_cap_warning: bool = False
+        # 표시 중인 entries — DataTable row index ↔ entry dict 1:1 매핑.
+        # 사용자가 row 를 선택하면 entry_id / 기존 값을 dialog 로 prefill
+        # 할 수 있도록.
+        self._entries: list[dict[str, Any]] = []
 
     # ---- compose -------------------------------------------------------
 
@@ -140,6 +150,176 @@ class EntriesScreen(Screen):
         self.set_status(f"윈도우 -7일 → 최근 {self._window_days}일. 재로드 중…")
         self.refresh_entries()
 
+    # ---- new / edit / delete -----------------------------------------
+
+    def _selected_entry(self) -> dict[str, Any] | None:
+        """현재 DataTable cursor 가 가리키는 entry. 없으면 None."""
+        if not self._entries:
+            return None
+        table = self.query_one("#entries-table", DataTable)
+        row = table.cursor_row
+        if row is None or row < 0 or row >= len(self._entries):
+            return None
+        return self._entries[row]
+
+    def action_new_entry(self) -> None:
+        session = self.app.session  # type: ignore[attr-defined]
+        if not session.section_id or not session.accounts_flat:
+            self.set_status("계정과목 캐시가 비어있습니다 — 홈에서 섹션을 다시 활성화하세요.", error=True)
+            return
+
+        def _on_close(draft: EntryDraft | None) -> None:
+            if draft is None:
+                self.set_status("입력 취소됨.")
+                return
+            self._submit_create(draft)
+
+        self.app.push_screen(EntryEditDialog(session), _on_close)
+
+    def action_edit_entry(self) -> None:
+        session = self.app.session  # type: ignore[attr-defined]
+        target = self._selected_entry()
+        if target is None:
+            self.set_status("선택된 거래가 없습니다.", error=True)
+            return
+        if not target.get("entry_id"):
+            self.set_status("이 거래에는 entry_id 가 없습니다 — 수정 불가.", error=True)
+            return
+
+        def _on_close(draft: EntryDraft | None) -> None:
+            if draft is None:
+                self.set_status("수정 취소됨.")
+                return
+            self._submit_update(draft)
+
+        self.app.push_screen(EntryEditDialog(session, existing=target), _on_close)
+
+    def action_delete_entry(self) -> None:
+        target = self._selected_entry()
+        if target is None:
+            self.set_status("선택된 거래가 없습니다.", error=True)
+            return
+        eid = target.get("entry_id")
+        if not eid:
+            self.set_status("이 거래에는 entry_id 가 없습니다 — 삭제 불가.", error=True)
+            return
+
+        # 사용자에게 거래 요약을 보여주고 y 로 확정.
+        session = self.app.session  # type: ignore[attr-defined]
+        l_name = session.title_of(target.get("l_account_id") or "")
+        r_name = session.title_of(target.get("r_account_id") or "")
+        msg = (
+            f"이 거래를 영구 삭제할까요?\n\n"
+            f"  date  : {target.get('entry_date') or ''}\n"
+            f"  money : {_fmt_money(target.get('money'))}\n"
+            f"  left  : {l_name}\n"
+            f"  right : {r_name}\n"
+            f"  item  : {target.get('item') or ''}\n\n"
+            f"되돌릴 수 없습니다."
+        )
+
+        def _on_close(yes: bool | None) -> None:
+            # ConfirmModal 은 bool 만 dismiss 하지만 escape 로 닫히면 None
+            # 일 수도 있어 안전하게 truth check.
+            if not yes:
+                self.set_status("삭제 취소됨.")
+                return
+            self._submit_delete(target)
+
+        self.app.push_screen(ConfirmModal(msg, title="거래 삭제 확인"), _on_close)
+
+    # ---- mutation workers --------------------------------------------
+
+    @work(exclusive=True, group="mutate", name="create_entry")
+    async def _submit_create(self, draft: EntryDraft) -> None:
+        session = self.app.session  # type: ignore[attr-defined]
+        # account_id 의 type 을 SessionState 에서 조회해 함께 보낸다.
+        l_type = self._account_type(draft.l_account_id)
+        r_type = self._account_type(draft.r_account_id)
+        if not l_type or not r_type:
+            self.set_status("계정 type 조회 실패 — accounts-list 를 다시 받으세요.", error=True)
+            return
+        try:
+            await self._client.create_entry(
+                section_id=session.section_id,
+                l_account=l_type,
+                l_account_id=draft.l_account_id,
+                r_account=r_type,
+                r_account_id=draft.r_account_id,
+                money=draft.money,
+                item=draft.item,
+                memo=draft.memo,
+                entry_date=draft.entry_date,
+            )
+        except ToolError as e:
+            self.set_status(f"거래 생성 실패 [{e.kind}] {e.message}", error=True)
+            return
+        except Exception as e:  # pragma: no cover
+            log.exception("create_entry failed")
+            self.set_status(f"거래 생성 실패 (INTERNAL): {e}", error=True)
+            return
+        self.set_status("거래 생성 완료. 재로드 중…")
+        self.refresh_entries()
+
+    @work(exclusive=True, group="mutate", name="update_entry")
+    async def _submit_update(self, draft: EntryDraft) -> None:
+        session = self.app.session  # type: ignore[attr-defined]
+        if not draft.entry_id:
+            self.set_status("entry_id 가 없습니다 — 수정 불가.", error=True)
+            return
+        l_type = self._account_type(draft.l_account_id)
+        r_type = self._account_type(draft.r_account_id)
+        try:
+            await self._client.update_entry(
+                section_id=session.section_id,
+                entry_id=draft.entry_id,
+                l_account=l_type,
+                l_account_id=draft.l_account_id,
+                r_account=r_type,
+                r_account_id=draft.r_account_id,
+                money=draft.money,
+                item=draft.item,
+                memo=draft.memo,
+                entry_date=draft.entry_date,
+            )
+        except ToolError as e:
+            self.set_status(f"거래 수정 실패 [{e.kind}] {e.message}", error=True)
+            return
+        except Exception as e:  # pragma: no cover
+            log.exception("update_entry failed")
+            self.set_status(f"거래 수정 실패 (INTERNAL): {e}", error=True)
+            return
+        self.set_status("거래 수정 완료. 재로드 중…")
+        self.refresh_entries()
+
+    @work(exclusive=True, group="mutate", name="delete_entry")
+    async def _submit_delete(self, target: dict[str, Any]) -> None:
+        session = self.app.session  # type: ignore[attr-defined]
+        eid = target.get("entry_id")
+        if not eid:
+            return
+        try:
+            await self._client.delete_entry(
+                section_id=session.section_id, entry_id=str(eid),
+            )
+        except ToolError as e:
+            self.set_status(f"거래 삭제 실패 [{e.kind}] {e.message}", error=True)
+            return
+        except Exception as e:  # pragma: no cover
+            log.exception("delete_entry failed")
+            self.set_status(f"거래 삭제 실패 (INTERNAL): {e}", error=True)
+            return
+        self.set_status(f"거래 {eid} 삭제 완료. 재로드 중…")
+        self.refresh_entries()
+
+    def _account_type(self, account_id: str) -> str:
+        """SessionState 의 flat 에서 account_id 의 type 키 (assets 등)."""
+        session = self.app.session  # type: ignore[attr-defined]
+        for a in session.accounts_flat:
+            if a.get("account_id") == account_id:
+                return a.get("type") or ""
+        return ""
+
     # ---- worker --------------------------------------------------------
 
     @work(exclusive=True, group="entries", name="refresh_entries")
@@ -170,6 +350,7 @@ class EntriesScreen(Screen):
             reverse=True,
         )
 
+        self._entries = entries_sorted
         self.last_entry_count = len(entries_sorted)
         self._render_table(entries_sorted)
         self._update_window_status(start_date, end_date, entries_sorted)

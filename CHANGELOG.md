@@ -2,6 +2,100 @@
 
 각 항목은 Perforce CL 단위로 끊는다.
 
+## CL #50939 — 0.4.0 — Phase 2c: EntryEditDialog + WhooingClient CRUD (2026-05-10)
+
+후잉 거래의 추가/수정/삭제. 이 CL 부터 mcp-server-wrapper 와 정책 분기 —
+wrapper 는 read-only 로 mutating 을 공식 MCP 에 위임하지만, 본 TUI 는
+사용자가 직접 키보드로 다루는 도구라 후잉 REST 의 mutation endpoint 를
+직접 호출한다.
+
+### 추가
+
+- `src/whooing_tui/screens/edit_entry.py`
+  - `EntryEditDialog(ModalScreen[EntryDraft|None])` — 거래 추가/수정 폼.
+    필드 6개 (date / money / left / right / item / memo). `Ctrl+S` 저장,
+    `Esc` 취소.
+    * `_resolve_account()` — `account_id` 직접 입력 또는 표시명(한국어/
+      영문, 대소문자 무시, 양 끝 공백 허용) 양쪽 매칭.
+    * `_strip_comma_int()` — 천단위 콤마 입력 허용.
+    * 검증: YYYYMMDD, money 양수, left ≠ right, account 매칭.
+    * 수정 모드는 `existing` dict 로 prefill + `entry_id` 보존.
+  - `ConfirmModal(ModalScreen[bool])` — 짧은 yes/no 모달. 삭제처럼 되돌릴
+    수 없는 액션 직전. `y`/`n` 키와 button 둘 다.
+- `tests/test_edit_entry_dialog.py` — 폼 검증 단위 테스트 8 cases
+  (`_strip_comma_int`, `_resolve_account` by id/title/case-insensitive/
+  unknown, dataclass instantiation).
+- `tests/test_client_mutations.py` — `respx` 7 cases:
+  * create_entry POST body 정확성 + optional 필드 omit.
+  * update_entry PUT 변경 필드만 (None 은 omit — 덮어쓰기 방지).
+  * delete_entry DELETE + section_id 쿼리.
+  * 400 → USER_INPUT, 401 → AUTH 매핑.
+  * `_coerce_dict` variants.
+- `tests/test_entries_mutate.py` — App.run_test() 통합 5 cases:
+  * `n` (new) → dialog → dismiss(EntryDraft) → create_entry 호출 →
+    SessionState 의 type 으로 보강된 body. 재로드 후 row count 증가.
+  * `enter` (edit) → dialog 가 선택된 row prefill + entry_id → update_entry.
+  * `d` (delete) → ConfirmModal → No 면 호출 안 함, Yes 면 delete_entry.
+  * create 실패 시 status error.
+  * 빈 entries 에서 delete → "선택된 거래 없음" 안내.
+
+### 수정
+
+- `src/whooing_tui/client.py`
+  - `_request(method, path, ...)` 공통 HTTP 호출 — throttle / 429
+    backoff / 응답 매핑을 GET 외 POST/PUT/DELETE 도 사용하도록 추출.
+  - `_get` / `_post` / `_put` / `_delete` 단순 wrapper.
+  - **`create_entry` / `update_entry` / `delete_entry`** — 후잉 공식 MCP
+    의 `entries-create/update/delete` schema 와 동일한 입력 필드.
+    RESTful 가정으로 `POST /entries.json`, `PUT /entries/<id>.json`,
+    `DELETE /entries/<id>.json?section_id=` 호출. 라이브 검증에서 path
+    가 다르면 `_ENTRIES_PATH` / `_entry_path()` 만 조정 가능.
+  - `_coerce_dict()` — mutation 응답이 dict / list[dict] / 그 외 어떤
+    형태로 와도 dict 1개로 정규화 (보수적 처리).
+- `src/whooing_tui/screens/entries.py`
+  - 키 바인딩: `n` (New), `enter` (Edit), `d` (Delete) — 모두 priority.
+  - `_entries: list[dict]` — DataTable row index ↔ entry 1:1 매핑으로
+    선택된 거래의 entry_id 추적.
+  - `action_new_entry` / `action_edit_entry` / `action_delete_entry` +
+    `_submit_create` / `_submit_update` / `_submit_delete` (worker group
+    `mutate`). 성공 시 `refresh_entries` 자동 호출. 실패 시 status error.
+  - `_account_type()` — SessionState.flat 에서 type 조회.
+- `CHANGELOG.md` / `DESIGN.md` / `MEMORY.md` — Phase 2c 진행 상황.
+- `pyproject.toml` + `src/whooing_tui/__init__.py` — 0.3.0 → 0.4.0.
+
+### 검증
+
+  make test    82 passed in 5.24s
+               (Phase 1 48 + 2a 6 + 2b 6 + 2c 22)
+
+  라이브 검증은 사용자 수동으로 미룸 (분당 20 한도 부담 회피). `make run`
+  → 'n' 키로 테스트 섹션(s133178) 에 작은 거래 입력 시도. 후잉 REST 의
+  실 path 가 RESTful 가정과 다르면 `WhooingClient._ENTRIES_PATH` /
+  `_entry_path()` 만 조정.
+
+### 정책 분기 — mcp-server-wrapper 와의 차이
+
+- mcp-server-wrapper: read-only. 거래 mutation 은 후잉 공식 MCP 의
+  `entries-create/update/delete` 에 위임 (`tools/delete.py` 의 chained
+  call).
+- whooing-tui (본 도구): 사용자가 직접 키보드로 다룰 때 latency / 의존성
+  부담을 줄이기 위해 후잉 REST 를 직접 호출.
+
+같은 후잉 토큰을 공유하므로 한쪽 한도를 다른 쪽이 갉아먹는다 — 두 도구를
+동시에 사용할 때는 분당 20 한도가 합산임을 인지.
+
+### 의도적 누락 (다음 CL 로)
+
+- 자주입력·매월입력 매칭 (frequent_items.list / monthly_items.list).
+- 로컬 sqlite 캐시.
+- 라이브 검증 (사용자 수동).
+
+## CL #50937 — 문서 다이어그램을 mermaid 로 마이그레이션 (2026-05-10)
+
+DESIGN.md §2 자매 도구 관계 + §3.1 호출 그래프 ASCII → mermaid flowchart.
+§3 디렉토리 트리는 markdown 표로. MEMORY.md §10 — 다이어그램 가이드라인
+보존 (사용자 지시 2026-05-10).
+
 ## CL #50936 — 0.3.0 — Phase 2b: EntriesScreen + 100-cap footer (2026-05-10)
 
 ### 추가

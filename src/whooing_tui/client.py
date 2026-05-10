@@ -28,6 +28,20 @@ from whooing_tui.models import ToolError
 
 log = logging.getLogger(__name__)
 
+
+def _coerce_dict(results: Any) -> dict[str, Any]:
+    """mutation 응답이 dict / list[dict] / 그 외 어떤 형태로 와도 dict 1개로 정규화.
+
+    후잉 응답 spec 이 mutating endpoint 에 대해 명시되지 않았으므로 보수적
+    으로 처리: list 면 첫 element, 그 외는 빈 dict + raw 보존.
+    """
+    if isinstance(results, dict):
+        return results
+    if isinstance(results, list) and results and isinstance(results[0], dict):
+        return results[0]
+    return {"_raw": results} if results is not None else {}
+
+
 DEFAULT_BASE = "https://whooing.com/api"
 
 # 후잉 공식 한도: 분당 20 / 일 20,000. client-side 보수 throttle.
@@ -78,15 +92,41 @@ class WhooingClient:
 
     # ---- HTTP ----------------------------------------------------------
 
-    async def _get(self, path: str, params: dict[str, Any] | None = None) -> Any:
+    async def _request(
+        self,
+        method: str,
+        path: str,
+        *,
+        params: dict[str, Any] | None = None,
+        json_body: dict[str, Any] | None = None,
+    ) -> Any:
+        """공통 HTTP 호출 — throttle + 429 backoff 재시도 + 응답 매핑.
+
+        method: GET / POST / PUT / DELETE 중 하나. 본문 (json_body) 은
+        POST/PUT 에서만 의미가 있으나 다른 메서드에 줘도 httpx 가 알아서
+        무시한다 (RESTful 호환).
+
+        후잉 응답이 비-JSON 이거나 응답 본문 code 가 4xx/5xx 인 경우
+        ToolError 로 변환되어 raise (자세한 매핑은 errors.map_response).
+        """
         url = f"{self.base_url}{path}"
-        log.debug("GET %s params=%s auth=%s", url, params, sanitize_token(self.auth.token))
+        log.debug(
+            "%s %s params=%s body=%s auth=%s",
+            method.upper(), url, params,
+            "<set>" if json_body is not None else None,
+            sanitize_token(self.auth.token),
+        )
 
         last_error: ToolError | None = None
         for attempt, backoff in enumerate(DEFAULT_RETRY_BACKOFF):
             await self._throttle()
             async with httpx.AsyncClient(timeout=self.timeout) as client:
-                r = await client.get(url, headers=self.auth.headers(), params=params)
+                r = await client.request(
+                    method, url,
+                    headers=self.auth.headers(),
+                    params=params,
+                    json=json_body,
+                )
             try:
                 return self._handle(r)
             except ToolError as e:
@@ -106,6 +146,18 @@ class WhooingClient:
 
         # 모든 재시도 실패
         raise last_error or ToolError("RATE_LIMIT", "재시도 후에도 429")
+
+    async def _get(self, path: str, params: dict[str, Any] | None = None) -> Any:
+        return await self._request("GET", path, params=params)
+
+    async def _post(self, path: str, json_body: dict[str, Any]) -> Any:
+        return await self._request("POST", path, json_body=json_body)
+
+    async def _put(self, path: str, json_body: dict[str, Any]) -> Any:
+        return await self._request("PUT", path, json_body=json_body)
+
+    async def _delete(self, path: str, params: dict[str, Any] | None = None) -> Any:
+        return await self._request("DELETE", path, params=params)
 
     def _handle(self, r: httpx.Response) -> Any:
         """공식 응답 포맷을 파싱해 results 만 추출 + 에러 매핑."""
@@ -250,6 +302,102 @@ class WhooingClient:
         left = await self._list_entries_chunked(section_id, start_date, mid)
         right = await self._list_entries_chunked(section_id, next_str, end_date)
         return left + right
+
+    # ---- mutating endpoints ----------------------------------------------
+    #
+    # 후잉 REST 의 mutating endpoint 정확한 path 는 공식 docs 가 JS 로 렌더링
+    # 되어 직접 추출이 어려웠다. 후잉 공식 MCP (`mcp__whooing__entries-*`)
+    # 의 입력 schema 가 노출하는 필드 (section_id / l_account[_id] /
+    # r_account[_id] / money / item / memo / entry_date) 를 그대로 body 로
+    # 보내고, RESTful 가정 (POST /entries.json 으로 생성, PUT /entries/<id>
+    # .json 으로 수정, DELETE /entries/<id>.json 으로 삭제) 로 시작한다.
+    # 라이브 검증에서 실패하면 _entries_path / _entry_path 만 조정하면 된다.
+
+    _ENTRIES_PATH = "/entries.json"
+
+    @staticmethod
+    def _entry_path(entry_id: str) -> str:
+        return f"/entries/{entry_id}.json"
+
+    async def create_entry(
+        self,
+        *,
+        section_id: str,
+        l_account: str,
+        l_account_id: str,
+        r_account: str,
+        r_account_id: str,
+        money: int,
+        item: str = "",
+        memo: str = "",
+        entry_date: str | None = None,
+    ) -> dict[str, Any]:
+        """새 거래 입력. 성공 시 후잉이 반환한 results dict (entry_id 포함).
+
+        money 는 음수도 허용하지 않는다 (후잉은 차변/대변으로 음양을 표현).
+        호출자가 0/음수 검증을 책임진다.
+        """
+        body: dict[str, Any] = {
+            "section_id": section_id,
+            "l_account": l_account,
+            "l_account_id": l_account_id,
+            "r_account": r_account,
+            "r_account_id": r_account_id,
+            "money": int(money),
+        }
+        if item:
+            body["item"] = item
+        if memo:
+            body["memo"] = memo
+        if entry_date:
+            body["entry_date"] = entry_date
+        results = await self._post(self._ENTRIES_PATH, json_body=body)
+        return _coerce_dict(results)
+
+    async def update_entry(
+        self,
+        *,
+        section_id: str,
+        entry_id: str,
+        l_account: str | None = None,
+        l_account_id: str | None = None,
+        r_account: str | None = None,
+        r_account_id: str | None = None,
+        money: int | None = None,
+        item: str | None = None,
+        memo: str | None = None,
+        entry_date: str | None = None,
+    ) -> dict[str, Any]:
+        """기존 거래 수정 — 변경 필드만 보낸다.
+
+        section_id / entry_id 외에 적어도 한 필드는 채워져 있어야 의미가
+        있지만, 호출자가 그 검증을 책임진다 (전부 None 이어도 본 메서드는
+        body 만 비워서 보낸다).
+        """
+        body: dict[str, Any] = {"section_id": section_id}
+        for k, v in [
+            ("l_account", l_account),
+            ("l_account_id", l_account_id),
+            ("r_account", r_account),
+            ("r_account_id", r_account_id),
+            ("item", item),
+            ("memo", memo),
+            ("entry_date", entry_date),
+        ]:
+            if v is not None:
+                body[k] = v
+        if money is not None:
+            body["money"] = int(money)
+        results = await self._put(self._entry_path(entry_id), json_body=body)
+        return _coerce_dict(results)
+
+    async def delete_entry(self, *, section_id: str, entry_id: str) -> dict[str, Any]:
+        """거래 영구 삭제. 후잉은 soft-delete 가 아니므로 복구 불가."""
+        results = await self._delete(
+            self._entry_path(entry_id),
+            params={"section_id": section_id},
+        )
+        return _coerce_dict(results)
 
     @staticmethod
     def _normalize_collection(results: Any, key: str) -> list[dict[str, Any]]:
