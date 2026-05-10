@@ -2,6 +2,47 @@
 
 각 항목은 Perforce CL 단위로 끊는다.
 
+## CL #50956 — 0.6.0 — 화면 도움말 모달 (Step 7) (2026-05-10)
+
+### 추가
+
+- `tui/src/whooing_tui/screens/help.py` — `HelpModal(ModalScreen[None])`.
+  현재 활성 Screen 의 `BINDINGS` 를 introspect 해서 `show=True` 인 항목을
+  표 형태로 노출. 같은 description 의 키들 (예: `q` / `ctrl+c`) 은 한 줄
+  로 묶어 보인다. `body_text: str` attribute 으로 평문 본문을 보관해 테스트
+  가 Static 의 사적 API (`renderable`) 에 의존하지 않게.
+- `tui/tests/test_help_modal.py` — 5 cases:
+  * `_format_bindings()` 단위: hidden 제외 / 같은 description 묶기 / 빈
+    visible 케이스 안내 메시지.
+  * 통합: HomeScreen `?` (action_help) → HelpModal push, 본문에
+    "Entries" / "Refresh" / "Help" 포함 → dismiss → HomeScreen 복귀.
+  * 통합: EntriesScreen → Help → 본문에 "New" / "Delete" / "Edit" /
+    "Refresh".
+
+### 수정
+
+- `tui/src/whooing_tui/screens/home.py` — `?` (`question_mark`) 키
+  바인딩 추가 (priority, key_display="?"). `action_help()` 가 `HomeScreen`
+  타이틀과 자체 BINDINGS 를 HelpModal 로 push.
+- `tui/src/whooing_tui/screens/entries.py` — 같은 패턴으로 `?` /
+  `action_help()`.
+- `tui/CHANGELOG.md` / `tui/MEMORY.md` — 본 항목 + 메모.
+- `tui/pyproject.toml` + `__init__.py` — 0.5.1 → 0.6.0.
+
+### 검증
+
+- `make test` → core 72 + tui 99 (= 5 new help cases) = **171 passed**.
+
+### 학습된 함정 (Phase 2c 의 학습과 일관)
+
+- textual 8.x 의 `Static` 은 `renderable` 속성이 없음 (반복 함정). 화면
+  자체에 평문 attribute (`HelpModal.body_text`) 를 보관해 테스트가
+  내부 API 에 의존하지 않게.
+- ModalScreen 의 `escape` binding 으로 textual 이 dispatch 시 `'list'
+  object has no attribute 'key_to_bindings'` 같은 internal AttributeError
+  를 보일 수 있음 (textual 8.2.5 환경). 테스트는 키 시뮬 대신 `dismiss(None)`
+  직접 호출로 단축. 실 사용자 경험에서는 escape 정상 동작.
+
 ## CL #50951 — 0.5.1 — README 갱신 + 콘솔 스크립트 smoke + coverage 인프라 (2026-05-10)
 
 작은 인프라 정리. Step 5/6/8 묶음.

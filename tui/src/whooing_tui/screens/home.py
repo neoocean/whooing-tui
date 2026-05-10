@@ -91,6 +91,7 @@ class HomeScreen(Screen):
         # "거래내역으로 진입" 액션이 우선.
         Binding("e", "open_entries", "Entries", show=True, priority=True),
         Binding("r", "refresh", "Refresh", show=True, priority=True),
+        Binding("question_mark", "help", "Help", show=True, priority=True, key_display="?"),
         Binding("ctrl+l", "refresh", "Refresh", show=False),
         Binding("escape", "focus_sections", "Focus sections", show=False),
     ]
@@ -155,6 +156,11 @@ class HomeScreen(Screen):
             self.query_one("#sections-list", OptionList).focus()
         except Exception:
             pass
+
+    def action_help(self) -> None:
+        """현재 화면의 BINDINGS 를 모달로 보여줌."""
+        from whooing_tui.screens.help import HelpModal
+        self.app.push_screen(HelpModal("HomeScreen", list(self.BINDINGS)))
 
     def action_open_entries(self) -> None:
         """활성 섹션의 EntriesScreen 으로 진입.

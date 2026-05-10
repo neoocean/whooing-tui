@@ -88,6 +88,7 @@ class EntriesScreen(Screen):
         Binding("n", "new_entry", "New", show=True, priority=True),
         Binding("enter", "edit_entry", "Edit", show=True, priority=True),
         Binding("d", "delete_entry", "Delete", show=True, priority=True),
+        Binding("question_mark", "help", "Help", show=True, priority=True, key_display="?"),
         Binding("plus", "extend_window", "+7d", show=True),
         Binding("minus", "shrink_window", "-7d", show=True),
         Binding("equals_sign", "extend_window", "", show=False),  # '+' 키 (no shift)
@@ -135,6 +136,11 @@ class EntriesScreen(Screen):
 
     def action_back(self) -> None:
         self.app.pop_screen()
+
+    def action_help(self) -> None:
+        """현재 화면의 BINDINGS 를 모달로 보여줌."""
+        from whooing_tui.screens.help import HelpModal
+        self.app.push_screen(HelpModal("EntriesScreen", list(self.BINDINGS)))
 
     def action_refresh(self) -> None:
         # 사용자가 'r' = "지금 즉시 후잉 데이터" — 캐시가 있으면 invalidate.
