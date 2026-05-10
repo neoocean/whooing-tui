@@ -46,6 +46,7 @@ from textual.widgets import DataTable, Footer, Header, Static
 from whooing_tui.client import WhooingClient
 from whooing_tui.config import load_config
 from whooing_tui.dates import days_ago_yyyymmdd, today_yyyymmdd
+from whooing_tui.filters import FILTERABLE_COLUMNS, filter_entries
 from whooing_tui.ime import bind_ko
 from whooing_tui.models import ToolError
 from whooing_tui.screens.edit_entry import (
@@ -117,20 +118,35 @@ class EntriesScreen(Screen):
     # 영문 letter key 는 한글 IME 일 때도 동작하도록 `bind_ko` 로 자모
     # binding 을 같이 등록 (CL #51041). escape / enter / question_mark /
     # plus / minus / equals_sign 은 IME 영향이 없으므로 그대로.
+    #
+    # CL #51053+: 좌우 방향키로 컬럼 navigation, Enter 의 의미가 column
+    # 별 컨텍스트 액션 (date/left/right/item = 필터 적용, money/memo = 거래
+    # 수정 dialog). 필터 활성 상태에서 'r' 또는 'c' 로 해제.
     BINDINGS = [
         *bind_ko("q", "back", "Quit", show=True),
         Binding("escape", "back", "Quit", show=False),
         *bind_ko("s", "open_sections", "Sections", show=True, priority=True),
         *bind_ko("a", "open_accounts", "Accounts", show=True, priority=True),
         *bind_ko("n", "new_entry", "New", show=True, priority=True),
-        Binding("enter", "edit_entry", "Edit", show=True, priority=True),
+        # Enter 의 의미는 _active_col 에 따라 분기 (action_context_enter).
+        Binding("enter", "context_enter", "Enter", show=True, priority=True),
+        *bind_ko("e", "edit_entry", "Edit", show=True, priority=True),
         *bind_ko("d", "delete_entry", "Delete", show=True, priority=True),
         *bind_ko("r", "refresh", "Refresh", show=True, priority=True),
+        *bind_ko("c", "clear_filter", "Clear", show=True, priority=True),
+        Binding("left", "prev_column", "←", show=False, priority=True),
+        Binding("right", "next_column", "→", show=False, priority=True),
         Binding("question_mark", "help", "Help", show=True, priority=True, key_display="?"),
         Binding("plus", "extend_window", "+7d", show=True),
         Binding("minus", "shrink_window", "-7d", show=True),
         Binding("equals_sign", "extend_window", "", show=False),  # '+' 키 (no shift)
     ]
+
+    # DataTable 의 컬럼 순서 — _active_col index 와 1:1 매핑. _render_table /
+    # add_column 호출 순서와 일치해야 한다.
+    _COLUMN_NAMES: tuple[str, ...] = (
+        "date", "money", "left", "right", "item", "memo",
+    )
 
     # 한 번에 fetch 할 거래는 후잉 server-side hard cap 100건. 단일 일자에
     # 100건 초과는 _list_entries_chunked 가 더 분할할 수 없으므로 footer
@@ -148,9 +164,21 @@ class EntriesScreen(Screen):
         self.last_entry_count: int = 0
         self.last_cap_warning: bool = False
         # 표시 중인 entries — DataTable row index ↔ entry dict 1:1 매핑.
+        # 필터가 활성이면 _all_entries 의 부분집합. 비활성이면 동일 list.
         # 사용자가 row 를 선택하면 entry_id / 기존 값을 dialog 로 prefill
         # 할 수 있도록.
         self._entries: list[dict[str, Any]] = []
+        # 필터 적용 전 원본 (refresh_entries 가 받은 그대로). 필터 해제
+        # ('r' / 'c') 시 이 list 로 복원.
+        self._all_entries: list[dict[str, Any]] = []
+        # 활성 필터 ((column, target_entry) 또는 None). 사용자에게 status
+        # 로 안내 + 같은 컬럼에서 다시 enter 시 toggle 같은 후속 정책에
+        # 활용 가능.
+        self._active_filter: tuple[str, dict[str, Any]] | None = None
+        # 좌우 방향키로 이동하는 컬럼 인덱스 (CL #51053+). DataTable 의
+        # cursor_type 이 "row" 라 textual 자체로는 column 추적이 안 된다 —
+        # 화면이 직접 관리.
+        self._active_col: int = 0
 
     # ---- compose -------------------------------------------------------
 
@@ -237,12 +265,113 @@ class EntriesScreen(Screen):
 
     def action_refresh(self) -> None:
         # 사용자가 'r' = "지금 즉시 후잉 데이터" — 캐시가 있으면 invalidate.
+        # 필터도 자연스럽게 해제 (full fetch 라 _all_entries 가 재구성됨).
         session = self.app.session  # type: ignore[attr-defined]
         invalidate = getattr(self._client, "invalidate_section", None)
         if session.section_id and callable(invalidate):
             invalidate(session.section_id)
+        self._active_filter = None
         self.set_status("재로드 중…")
         self.refresh_entries()
+
+    def action_clear_filter(self) -> None:
+        """필터 해제 — _all_entries 를 그대로 다시 표시 (재로드 X)."""
+        if self._active_filter is None:
+            self.set_status("활성 필터 없음.")
+            return
+        self._active_filter = None
+        self._entries = list(self._all_entries)
+        self._render_table(self._entries)
+        self._update_window_status_after_filter_clear()
+
+    # ---- 컬럼 navigation (CL #51053+) ---------------------------------
+
+    def action_prev_column(self) -> None:
+        if self._active_col > 0:
+            self._active_col -= 1
+            self._announce_active_column()
+
+    def action_next_column(self) -> None:
+        if self._active_col < len(self._COLUMN_NAMES) - 1:
+            self._active_col += 1
+            self._announce_active_column()
+
+    def _announce_active_column(self) -> None:
+        """status bar 에 현재 컬럼 + Enter 시 동작 안내."""
+        col = self._COLUMN_NAMES[self._active_col]
+        if col in FILTERABLE_COLUMNS:
+            hint = f"Enter = 같은 {col} 으로 필터"
+        elif col in ("money", "memo"):
+            hint = "Enter = 거래 수정"
+        else:
+            hint = ""  # unreachable
+        self.set_status(f"활성 컬럼: {col}    {hint}")
+
+    def action_context_enter(self) -> None:
+        """Enter — 활성 컬럼에 따라 필터 또는 거래 수정.
+
+        - date / left / right / item: 같은 값으로 필터.
+        - money / memo: 기존 edit_entry (거래 수정) dialog.
+        """
+        target = self._selected_entry()
+        if target is None:
+            self.set_status("선택된 거래가 없습니다.", error=True)
+            return
+        col = self._COLUMN_NAMES[self._active_col]
+        if col in FILTERABLE_COLUMNS:
+            self._apply_filter(col, target)
+        else:
+            # money / memo 컬럼 → edit_entry 그대로.
+            self.action_edit_entry()
+
+    def _apply_filter(self, column: str, target: dict[str, Any]) -> None:
+        filtered = filter_entries(self._all_entries, column, target)
+        if not filtered:
+            self.set_status(
+                f"'{column}' 필터 — 매칭 0건 (target 의 키 정보가 없거나 결과 없음). "
+                f"c 로 해제 / r 로 재로드.",
+                warn=True,
+            )
+            return
+        self._active_filter = (column, target)
+        self._entries = filtered
+        self._render_table(filtered)
+        # 필터 결과 안내. _update_window_status 는 _all_entries 윈도우 기준
+        # 이라 의미가 다르다 — 필터 전용 message.
+        label = self._filter_label(column, target)
+        self.set_status(
+            f"필터: {label} — {len(filtered)}/{len(self._all_entries)}건. "
+            f"c 로 해제 / r 로 재로드.",
+            warn=True,
+        )
+
+    @staticmethod
+    def _filter_label(column: str, target: dict[str, Any]) -> str:
+        if column == "date":
+            from whooing_tui.filters import date_head
+            return f"date={date_head(target.get('entry_date'))}"
+        if column == "left":
+            return f"left={target.get('l_account_id') or '?'}"
+        if column == "right":
+            return f"right={target.get('r_account_id') or '?'}"
+        if column == "item":
+            from whooing_tui.filters import outside_paren_keywords
+            keys = outside_paren_keywords(target.get("item"))
+            return f"item∋{{{', '.join(sorted(keys))}}}"
+        return column
+
+    def _update_window_status_after_filter_clear(self) -> None:
+        """필터 해제 직후 status — 윈도우 정보 재계산."""
+        # `start_date` / `end_date` 는 마지막 fetch 시각에 의존. 단순 안내.
+        n = len(self._entries)
+        section_id = self.app.session.section_id  # type: ignore[attr-defined]
+        section_title = self.app.session.section_title  # type: ignore[attr-defined]
+        sec_label = (
+            f"{section_title} ({section_id})" if section_title else str(section_id)
+        )
+        self.set_status(
+            f"필터 해제 — {n}건 (section={sec_label}, 최근 {self._window_days}일)"
+        )
 
     def action_extend_window(self) -> None:
         self._window_days = min(365 * 5, self._window_days + 7)
@@ -532,6 +661,7 @@ class EntriesScreen(Screen):
         )
 
         self._entries = entries_sorted
+        self._all_entries = list(entries_sorted)  # 필터 해제 시 복원용 원본
         self.last_entry_count = len(entries_sorted)
         self._render_table(entries_sorted)
         self._update_window_status(start_date, end_date, entries_sorted)

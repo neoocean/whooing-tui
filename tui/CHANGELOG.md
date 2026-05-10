@@ -2,6 +2,91 @@
 
 각 항목은 Perforce CL 단위로 끊는다.
 
+## CL #51053 — 0.10.0 — EntriesScreen 좌우 방향키 column navigation + Enter 컬럼별 컨텍스트 액션 (2026-05-10)
+
+사용자 요청 (2026-05-10): "거래 화면에서 한 거래가 선택된 상태에서 좌우
+방향키로 컬럼 이동, 엔터키 시 date 컬럼은 같은 날짜 / left 는 같은 차변 /
+right 는 같은 대변 / item 은 괄호 바깥 키워드 매칭으로 필터."
+
+### 흐름
+
+```mermaid
+flowchart TB
+    SEL[거래 row 선택] --> NAV[← / → 으로 컬럼 이동]
+    NAV --> COL{활성 컬럼?}
+    COL -->|date| FD[같은 entry_date 필터<br/>sub-index 무시]
+    COL -->|left| FL[같은 l_account_id 필터]
+    COL -->|right| FR[같은 r_account_id 필터]
+    COL -->|item| FI[괄호 바깥 키워드<br/>set intersection]
+    COL -->|money / memo| EDIT[EntryEditDialog]
+    FD --> SHOW[필터된 부분집합 표시<br/>+ status 안내]
+    FL --> SHOW
+    FR --> SHOW
+    FI --> SHOW
+    SHOW -->|c 또는 r| RESET[필터 해제]
+    RESET --> ALL[전체 entries 복원]
+```
+
+### 추가 (2 files)
+
+- `tui/src/whooing_tui/filters.py` — 클라이언트-사이드 필터 로직 (pure
+  함수):
+  * `date_head(value)` — `"20260510.0001"` → `"20260510"` (sub-index 무시,
+    `_fmt_date` 와 같은 정책).
+  * `outside_paren_keywords(item)` — 괄호와 그 안의 내용 제거 후 공백/콤마
+    split 한 키워드 set. `"외식(저녁, 불고기)"` → `{"외식"}`,
+    `"교통(버스) 주차"` → `{"교통", "주차"}`.
+  * `FILTERABLE_COLUMNS` — `("date", "left", "right", "item")` (사용자 명시).
+  * `filter_entries(entries, column, target)` — 부분집합 list 반환. item
+    필터는 set intersection (target 의 키워드 중 하나라도 매칭). pure 함수,
+    side-effect 없음.
+- `tui/tests/test_filters.py` — 24 cases (date_head / outside_paren_keywords
+  / FILTERABLE_COLUMNS 상수 / filter_entries 의 4 컬럼별 / multi-keyword
+  target / 빈 target / 미지원 컬럼 / mutating-input 방지).
+
+### 수정
+
+- `tui/src/whooing_tui/screens/entries.py`
+  * 새 키 바인딩:
+    - `←` / `→`: `action_prev_column` / `action_next_column` — `_active_col`
+      이동, status 에 현재 컬럼 + Enter 시 동작 안내.
+    - `enter`: `action_context_enter` — 활성 컬럼이 `FILTERABLE_COLUMNS`
+      이면 `_apply_filter`, 아니면 (`money` / `memo`) `action_edit_entry`
+      그대로.
+    - `e`: 기존 enter 의 거래 수정 동작을 새 키로 분리 (한글 IME 자모
+      ㄷ 도 같이 binding).
+    - `c`: `action_clear_filter` — 활성 필터 해제 (원본 `_all_entries`
+      복원).
+  * `_active_col: int` (0..5) + `_COLUMN_NAMES` 튜플 — `_active_col`
+    이 textual cursor 와 별개로 화면이 직접 추적 (cursor_type="row" 유지).
+  * `_all_entries` — 필터 해제 시 복원할 원본. `refresh_entries` 가 매번
+    채움.
+  * `_active_filter: tuple[col, target] | None` — 현재 필터 상태.
+  * `_apply_filter(column, target)` + `_filter_label(...)` — 필터 결과를
+    status bar 의 warn 메시지로 (예: `"필터: left=x20 — 4/12건. c 로
+    해제 / r 로 재로드."`). 0건 매칭은 안내 후 필터 적용 안 함.
+  * `action_refresh` 가 `_active_filter = None` 도 같이 초기화.
+  * Footer 의 enter 키 라벨이 `Edit` → `Enter` (컨텍스트 액션).
+
+### 수정 (test)
+
+- `tui/tests/test_entries_screen.py` — 9 cases 추가 (active col 초기값,
+  ← / → 양방향 + boundary clamp, date / left / right / item 컬럼별 enter
+  필터 결과, money 컬럼 enter 가 EntryEditDialog push, c 로 필터 해제,
+  r 로 자동 해제).
+
+### 수정 (그 외)
+
+- `tui/README.md` — 키 바인딩 표에 `←` / `→` / `e` / `c` 추가, Enter
+  의 컨텍스트 액션 설명.
+- `tui/CHANGELOG.md` / `tui/MEMORY.md` — 본 항목.
+- `tui/pyproject.toml` + `__init__.py` — 0.9.3 → 0.10.0 (사용자 가시
+  주요 기능 추가).
+
+### 검증
+
+- `make test-tui` → **259 passed** (226 + 24 filters + 9 entries 새).
+
 ## CL #51051 — 0.9.3 — EntriesScreen 의 'left' 컬럼 width 를 12 cells 로 fixed (2026-05-10)
 
 사용자 요청 (2026-05-10): "left 패널의 가로폭을 줄여주세요" — DataTable

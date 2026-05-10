@@ -48,20 +48,35 @@ make run
 
 ## TUI 키 바인딩 요약
 
-### EntriesScreen (초기 화면, 0.8.1+)
+### EntriesScreen (초기 화면, 0.10.0+)
 
 | 키 | 동작 |
 | --- | --- |
 | ↑/↓ | 거래 행 이동 |
+| ←/→ | 활성 컬럼 이동 (date / money / left / right / item / memo) |
+| Enter | **컬럼별 컨텍스트 액션** — 자세히 아래 |
+| `e` | 선택 거래 수정 (EntryEditDialog) |
+| `n` | 새 거래 입력 |
+| `d` | 선택 거래 삭제 (ConfirmModal) |
+| `c` | 활성 필터 해제 |
 | `s` | 섹션 picker 모달 (선택 후 자동 재로드) |
 | `a` | 계정과목 화면 (조회 / 추가 / 수정 / 삭제) |
-| `n` | 새 거래 입력 (EntryEditDialog) |
-| Enter | 선택 거래 수정 (EntryEditDialog) |
-| `d` | 선택 거래 삭제 (ConfirmModal) |
-| `r` | 캐시 invalidate + 재로드 |
+| `r` | 캐시 invalidate + 재로드 (필터도 자동 해제) |
 | `+` / `-` | 조회 윈도우 ±7일 |
 | `?` | 화면 도움말 |
 | `q` / Esc | 앱 종료 |
+
+**Enter 컬럼별 컨텍스트 액션** (0.10.0+):
+
+| 활성 컬럼 | Enter 동작 |
+| --- | --- |
+| `date` | 같은 날짜의 거래만 필터 (sub-index 무시 — `20260510` 매칭) |
+| `left` | 같은 차변 항목만 필터 (`l_account_id` 비교) |
+| `right` | 같은 대변 항목만 필터 (`r_account_id` 비교) |
+| `item` | 괄호 바깥 키워드 매칭 (예: `스타벅스(커피)` → `스타벅스`. `외식(저녁, 불고기)` → `외식`) |
+| `money` / `memo` | 거래 수정 dialog (EntryEditDialog) |
+
+필터가 활성일 때는 status bar 가 노란색 (warn) 으로 `필터: left=x20 — 4/12건. c 로 해제 / r 로 재로드.` 와 같이 안내합니다.
 
 ### SectionPickerScreen (`s` 로 push)
 

@@ -464,3 +464,226 @@ async def test_empty_entries_status_includes_action_hints():
         assert "[n]" in msg
         bar = app.screen.query_one("#status", Static)
         assert "warn" in bar.classes
+
+
+# ---- 컬럼 navigation + Enter 컬럼별 필터 (CL #51053+) ------------------
+
+
+def _entries_for_filter():
+    return [
+        {"entry_id": "e1", "entry_date": "20260510",
+         "money": 12000, "l_account_id": "x20", "r_account_id": "x11",
+         "item": "스타벅스(커피)"},
+        {"entry_id": "e2", "entry_date": "20260510",
+         "money": 5500, "l_account_id": "x21", "r_account_id": "x11",
+         "item": "지하철"},
+        {"entry_id": "e3", "entry_date": "20260509",
+         "money": 8000, "l_account_id": "x20", "r_account_id": "x11",
+         "item": "스타벅스"},
+        {"entry_id": "e4", "entry_date": "20260508",
+         "money": 25000, "l_account_id": "x21", "r_account_id": "x12",
+         "item": "택시"},
+    ]
+
+
+@pytest.mark.asyncio
+async def test_active_col_starts_at_zero():
+    fake = FakeClient(entries_by_section={"s1": _entries_for_filter()})
+    app = WhooingTuiApp(client=fake)  # type: ignore[arg-type]
+    async with app.run_test() as pilot:
+        from whooing_tui.screens.entries import EntriesScreen
+        await _wait_for(
+            lambda: isinstance(app.screen, EntriesScreen)
+            and app.screen.last_entry_count == 4,
+            timeout=3.0,
+        )
+        assert app.screen._active_col == 0  # date
+
+
+@pytest.mark.asyncio
+async def test_arrow_keys_navigate_columns():
+    fake = FakeClient(entries_by_section={"s1": _entries_for_filter()})
+    app = WhooingTuiApp(client=fake)  # type: ignore[arg-type]
+    async with app.run_test() as pilot:
+        from whooing_tui.screens.entries import EntriesScreen
+        await _wait_for(
+            lambda: isinstance(app.screen, EntriesScreen)
+            and app.screen.last_entry_count == 4,
+            timeout=3.0,
+        )
+        es: EntriesScreen = app.screen  # type: ignore[assignment]
+        # → 5번 이동: date(0) → money → left → right → item → memo(5).
+        for _ in range(5):
+            es.action_next_column()
+        assert es._active_col == 5  # memo
+        # 끝에서 한 번 더 → boundary clamp
+        es.action_next_column()
+        assert es._active_col == 5
+        # ← 두 번 → memo - 2 = right(3)
+        es.action_prev_column()
+        es.action_prev_column()
+        assert es._active_col == 3  # right
+        # 처음 boundary
+        for _ in range(10):
+            es.action_prev_column()
+        assert es._active_col == 0
+
+
+@pytest.mark.asyncio
+async def test_enter_on_date_column_filters_same_day():
+    fake = FakeClient(entries_by_section={"s1": _entries_for_filter()})
+    app = WhooingTuiApp(client=fake)  # type: ignore[arg-type]
+    async with app.run_test() as pilot:
+        from whooing_tui.screens.entries import EntriesScreen
+        await _wait_for(
+            lambda: isinstance(app.screen, EntriesScreen)
+            and app.screen.last_entry_count == 4,
+            timeout=3.0,
+        )
+        es: EntriesScreen = app.screen  # type: ignore[assignment]
+        # 정렬: 20260510×2, 20260509, 20260508 → row 0/1 = 20260510, row 2 = 20260509
+        # row 0 (= 20260510) cursor 그대로. _active_col = 0 (date). enter.
+        es.action_context_enter()
+        await pilot.pause()
+        # 20260510 매칭 entries 만 (e1, e2)
+        assert {e["entry_id"] for e in es._entries} == {"e1", "e2"}
+        assert es._active_filter is not None
+        assert es._active_filter[0] == "date"
+
+
+@pytest.mark.asyncio
+async def test_enter_on_left_column_filters_same_l_account():
+    fake = FakeClient(entries_by_section={"s1": _entries_for_filter()})
+    app = WhooingTuiApp(client=fake)  # type: ignore[arg-type]
+    async with app.run_test() as pilot:
+        from whooing_tui.screens.entries import EntriesScreen
+        await _wait_for(
+            lambda: isinstance(app.screen, EntriesScreen)
+            and app.screen.last_entry_count == 4,
+            timeout=3.0,
+        )
+        es: EntriesScreen = app.screen  # type: ignore[assignment]
+        # 활성 컬럼을 left(2) 로 이동
+        es.action_next_column()
+        es.action_next_column()
+        assert es._active_col == 2
+        # 정렬 후 row 0 = e2 (entry_date desc + entry_id desc).
+        # e2 의 l_account_id = x21 → 매칭: e2, e4.
+        es.action_context_enter()
+        await pilot.pause()
+        assert {e["entry_id"] for e in es._entries} == {"e2", "e4"}
+
+
+@pytest.mark.asyncio
+async def test_enter_on_right_column_filters_same_r_account():
+    fake = FakeClient(entries_by_section={"s1": _entries_for_filter()})
+    app = WhooingTuiApp(client=fake)  # type: ignore[arg-type]
+    async with app.run_test() as pilot:
+        from whooing_tui.screens.entries import EntriesScreen
+        await _wait_for(
+            lambda: isinstance(app.screen, EntriesScreen)
+            and app.screen.last_entry_count == 4,
+            timeout=3.0,
+        )
+        es: EntriesScreen = app.screen  # type: ignore[assignment]
+        # 활성 컬럼 right(3)
+        for _ in range(3):
+            es.action_next_column()
+        assert es._active_col == 3
+        es.action_context_enter()
+        await pilot.pause()
+        # row 0 = e1 (r=x11). x11 매칭: e1, e2, e3
+        assert {e["entry_id"] for e in es._entries} == {"e1", "e2", "e3"}
+
+
+@pytest.mark.asyncio
+async def test_enter_on_item_column_filters_outside_paren_keyword():
+    fake = FakeClient(entries_by_section={"s1": _entries_for_filter()})
+    app = WhooingTuiApp(client=fake)  # type: ignore[arg-type]
+    async with app.run_test() as pilot:
+        from whooing_tui.screens.entries import EntriesScreen
+        await _wait_for(
+            lambda: isinstance(app.screen, EntriesScreen)
+            and app.screen.last_entry_count == 4,
+            timeout=3.0,
+        )
+        es: EntriesScreen = app.screen  # type: ignore[assignment]
+        # 활성 컬럼 item(4)
+        for _ in range(4):
+            es.action_next_column()
+        assert es._active_col == 4
+        # 정렬 후 row 0 = e2 (지하철). 괄호 바깥 = "지하철".
+        # 다른 거래에 "지하철" 키워드 없으므로 e2 만 매칭.
+        es.action_context_enter()
+        await pilot.pause()
+        assert {e["entry_id"] for e in es._entries} == {"e2"}
+
+
+@pytest.mark.asyncio
+async def test_enter_on_money_column_opens_edit_dialog():
+    """money 컬럼에서 enter 는 필터가 아닌 거래 수정 dialog."""
+    fake = FakeClient(entries_by_section={"s1": _entries_for_filter()})
+    app = WhooingTuiApp(client=fake)  # type: ignore[arg-type]
+    async with app.run_test() as pilot:
+        from whooing_tui.screens.edit_entry import EntryEditDialog
+        from whooing_tui.screens.entries import EntriesScreen
+        await _wait_for(
+            lambda: isinstance(app.screen, EntriesScreen)
+            and app.screen.last_entry_count == 4,
+            timeout=3.0,
+        )
+        es: EntriesScreen = app.screen  # type: ignore[assignment]
+        # money 컬럼으로
+        es.action_next_column()
+        assert es._active_col == 1
+        es.action_context_enter()
+        await pilot.pause()
+        assert isinstance(app.screen, EntryEditDialog)
+
+
+@pytest.mark.asyncio
+async def test_clear_filter_restores_all_entries():
+    fake = FakeClient(entries_by_section={"s1": _entries_for_filter()})
+    app = WhooingTuiApp(client=fake)  # type: ignore[arg-type]
+    async with app.run_test() as pilot:
+        from whooing_tui.screens.entries import EntriesScreen
+        await _wait_for(
+            lambda: isinstance(app.screen, EntriesScreen)
+            and app.screen.last_entry_count == 4,
+            timeout=3.0,
+        )
+        es: EntriesScreen = app.screen  # type: ignore[assignment]
+        # 필터 적용
+        es.action_context_enter()
+        await pilot.pause()
+        assert es._active_filter is not None
+        assert len(es._entries) < 4  # 필터된 부분집합
+        # 해제
+        es.action_clear_filter()
+        await pilot.pause()
+        assert es._active_filter is None
+        assert len(es._entries) == 4
+
+
+@pytest.mark.asyncio
+async def test_refresh_clears_active_filter():
+    fake = FakeClient(entries_by_section={"s1": _entries_for_filter()})
+    app = WhooingTuiApp(client=fake)  # type: ignore[arg-type]
+    async with app.run_test() as pilot:
+        from whooing_tui.screens.entries import EntriesScreen
+        await _wait_for(
+            lambda: isinstance(app.screen, EntriesScreen)
+            and app.screen.last_entry_count == 4,
+            timeout=3.0,
+        )
+        es: EntriesScreen = app.screen  # type: ignore[assignment]
+        es.action_context_enter()  # 필터 적용
+        await pilot.pause()
+        assert es._active_filter is not None
+        # 'r' = refresh — 필터 자동 해제 + 재로드
+        es.action_refresh()
+        await _wait_for(
+            lambda: es._active_filter is None
+            and len(es._entries) == 4,
+            timeout=3.0,
+        )
