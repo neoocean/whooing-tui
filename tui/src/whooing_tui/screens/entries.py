@@ -165,7 +165,16 @@ class EntriesScreen(Screen):
 
     def on_mount(self) -> None:
         table = self.query_one("#entries-table", DataTable)
-        table.add_columns("date", "money", "left", "right", "item", "memo")
+        # 컬럼별 width — `left` 는 사용자 요청 (CL #51051) 으로 12 cells 로
+        # fixed (한글 계정과목명 6자 + 약간의 여유). 그 이상은 textual 의
+        # 자동 ellipsis. `right` 는 자동 — 차변/대변 의 시각 비대칭이
+        # 사용자 의도였다.
+        table.add_column("date")
+        table.add_column("money")
+        table.add_column("left", width=12)
+        table.add_column("right")
+        table.add_column("item")
+        table.add_column("memo")
         self.set_status("거래내역 로드 중…")
         self.refresh_entries()
         table.focus()

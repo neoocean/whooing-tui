@@ -2,6 +2,36 @@
 
 각 항목은 Perforce CL 단위로 끊는다.
 
+## CL #51051 — 0.9.3 — EntriesScreen 의 'left' 컬럼 width 를 12 cells 로 fixed (2026-05-10)
+
+사용자 요청 (2026-05-10): "left 패널의 가로폭을 줄여주세요" — DataTable
+의 `left` (차변 계정과목) 컬럼.
+
+이전엔 `add_columns(...)` 로 모든 컬럼이 자동 width — 차변에 긴 계정명
+("KB손해보험", "오렌지라이프", "자본조정" 같이 한글 6자 = 12 cells) 이
+들어오면 그만큼 컬럼이 늘어났다. 사용자 시야에서 거래내역의 핵심 정보
+(date / money / item) 가 멀리 밀리는 가독성 저하.
+
+### 수정
+
+- `screens/entries.py::on_mount` — `add_columns(...)` 한 줄을 `add_column(...)`
+  6번 호출로 풀어 `left` 만 `width=12` 로 fixed. 한글 6자까지 깨끗히
+  표시되고 그 이상은 textual 의 자동 ellipsis. 다른 컬럼 (`date` /
+  `money` / `right` / `item` / `memo`) 은 자동 width 유지.
+
+### 의도적 비대칭
+
+`right` (대변) 도 같은 종류 데이터지만 사용자 메시지에 명시 없어 자동
+width 그대로. 사용자가 거래 흐름에서 차변(left) 을 *어디로 갔나* 시점
+으로, 대변(right) 을 *어디서 왔나* 시점으로 보는 한국어 UX 직관 — 좌측
+(차변) 만 좁히는 게 시각 흐름에 자연스럽다. 대변도 좁히길 원하면 후속
+CL.
+
+### 검증
+
+- `make test-tui` → **226 passed** (회귀 없음, 컬럼 width 는 layout 만
+  영향이라 cell value 검증은 그대로 통과).
+
 ## CL #51043 — 0.9.2 — EntriesScreen date 컬럼을 YYYY-MM-DD 형식으로 (sub-index 제거) (2026-05-10)
 
 사용자 요청 (2026-05-10): "초기화면에서 date를 '2026-05-10' 의 형태로
