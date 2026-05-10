@@ -25,7 +25,8 @@ from textual.widgets import Footer, Header
 
 from whooing_tui import __version__
 from whooing_tui.auth import load_auth_from_env
-from whooing_tui.client import WhooingClient
+from whooing_tui.cache import CacheStore, default_cache_path
+from whooing_tui.client import CachedWhooingClient, WhooingClient
 from whooing_tui.config import load_config
 from whooing_tui.screens.home import HomeScreen
 from whooing_tui.state import SessionState
@@ -90,14 +91,29 @@ class WhooingTuiApp(App):
 
 
 def run_app() -> int:
-    """TUI 실행 진입점. 정상 종료 시 0, 토큰 문제 시 3 (AUTH 와 동일)."""
+    """TUI 실행 진입점. 정상 종료 시 0, 토큰 문제 시 3 (AUTH 와 동일).
+
+    config.cache.enabled 가 true (기본) 면 sqlite 캐시 wrapper 를 두른다 —
+    accounts/entries 의 inter-session 캐시로 후잉 한도 부담을 줄인다.
+    """
     try:
         auth = load_auth_from_env()
     except ValueError as e:
         # GUI 띄우기 전에 stderr 로 안내 — 사용자가 즉시 .env 를 고치게.
         print(f"error [USER_INPUT] {e}", file=sys.stderr)
         return 3
-    client = WhooingClient(auth)
+    cfg = load_config()
+    raw_client = WhooingClient(auth)
+    if cfg.cache_enabled:
+        project_root = Path(__file__).resolve().parents[2]
+        store = CacheStore(default_cache_path(project_root))
+        client = CachedWhooingClient(
+            raw_client, store,
+            accounts_ttl_sec=cfg.cache_accounts_ttl_sec,
+            entries_ttl_sec=cfg.cache_entries_ttl_sec,
+        )
+    else:
+        client = raw_client  # type: ignore[assignment]
     app = WhooingTuiApp(client=client)
     app.run()
     return 0

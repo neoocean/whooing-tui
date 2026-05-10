@@ -137,6 +137,11 @@ class EntriesScreen(Screen):
         self.app.pop_screen()
 
     def action_refresh(self) -> None:
+        # 사용자가 'r' = "지금 즉시 후잉 데이터" — 캐시가 있으면 invalidate.
+        session = self.app.session  # type: ignore[attr-defined]
+        invalidate = getattr(self._client, "invalidate_section", None)
+        if session.section_id and callable(invalidate):
+            invalidate(session.section_id)
         self.set_status("재로드 중…")
         self.refresh_entries()
 

@@ -133,10 +133,19 @@ class HomeScreen(Screen):
     # ---- 액션 ----------------------------------------------------------
 
     def action_refresh(self) -> None:
-        """현재 활성 섹션이 있으면 accounts 만, 없으면 sections 부터 재로드."""
-        if self.app.session.section_id:  # type: ignore[attr-defined]
+        """현재 활성 섹션이 있으면 accounts 만, 없으면 sections 부터 재로드.
+
+        캐시가 켜져 있다면 강제 invalidate 후 재로드 — 사용자가 'r' 을 누른
+        의미는 "지금 즉시 후잉 데이터를 받아오라" 이지 "캐시 확인" 이 아니다.
+        """
+        sid = self.app.session.section_id  # type: ignore[attr-defined]
+        # 캐시가 wrap 되어 있으면 invalidate. raw client 면 메서드 없음.
+        invalidate = getattr(self._client, "invalidate_section", None)
+        if sid and callable(invalidate):
+            invalidate(sid)
+        if sid:
             self.set_status("계정과목을 다시 불러오는 중…")
-            self.refresh_accounts(self.app.session.section_id)  # type: ignore[attr-defined]
+            self.refresh_accounts(sid)
         else:
             self.set_status("섹션 목록을 다시 불러오는 중…")
             self.refresh_sections()

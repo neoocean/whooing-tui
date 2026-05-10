@@ -15,6 +15,10 @@ dependencies = [
     "pydantic>=2",
     "python-dotenv>=1.0",
     "textual>=0.50",
+    # whooing-core 는 같은 monorepo 의 sibling 디렉터리. monorepo 루트의
+    # `make install` 이 먼저 `pip install -e core/` 를 실행하므로 별도 명시
+    # 불필요. 외부 consumer (예: whooing-mcp-server-wrapper) 는 git+ssh 로
+    # `whooing-core` 를 따로 가져옴.
 ]
 
 [project.optional-dependencies]

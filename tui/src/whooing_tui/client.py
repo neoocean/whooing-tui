@@ -419,3 +419,94 @@ class WhooingClient:
             if values and all(isinstance(v, dict) for v in values):
                 return values
         return []
+
+
+class CachedWhooingClient:
+    """sqlite-backed 캐시를 두른 WhooingClient — 같은 인터페이스.
+
+    화면 코드 (HomeScreen / EntriesScreen) 는 본 wrapper 와 raw client 를
+    구분할 필요가 없도록 같은 메서드 시그니처를 제공. 캐시 정책:
+      - sections   : 캐시 X (작고 자주 안 부르고, mutation 영향 없음)
+      - accounts   : TTL 1시간 + 외부 invalidate
+      - entries    : TTL 5분 + mutation 시 invalidate
+      - mutations  : 그대로 inner 위임 + 해당 섹션 entries 캐시 invalidate
+
+    `accounts_ttl_sec=-1` / `entries_ttl_sec=-1` 로 TTL 무시 (영구 캐시).
+    """
+
+    def __init__(
+        self,
+        inner: "WhooingClient",
+        store: "CacheStore",
+        *,
+        accounts_ttl_sec: int = 3600,
+        entries_ttl_sec: int = 300,
+    ) -> None:
+        self._inner = inner
+        self._store = store
+        self._accounts_ttl_sec = accounts_ttl_sec
+        self._entries_ttl_sec = entries_ttl_sec
+
+    # 공통 패스스루 — auth 등 raw 속성을 그대로 노출 (테스트 / 디버깅)
+    @property
+    def auth(self):  # type: ignore[no-untyped-def]
+        return self._inner.auth
+
+    # ---- read ---------------------------------------------------------
+
+    async def list_sections(self) -> list[dict[str, Any]]:
+        return await self._inner.list_sections()
+
+    async def list_accounts(self, section_id: str) -> dict[str, Any]:
+        cached = self._store.get_accounts(
+            section_id, max_age_sec=self._accounts_ttl_sec,
+        )
+        if cached is not None:
+            return cached
+        result = await self._inner.list_accounts(section_id)
+        if isinstance(result, dict) and result:
+            self._store.put_accounts(section_id, result)
+        return result
+
+    async def list_entries(
+        self, section_id: str, start_date: str, end_date: str,
+    ) -> list[dict[str, Any]]:
+        cached = self._store.get_entries(
+            section_id, start_date, end_date,
+            max_age_sec=self._entries_ttl_sec,
+        )
+        if cached is not None:
+            return cached
+        result = await self._inner.list_entries(section_id, start_date, end_date)
+        # 100-cap 도달 의심되는 응답도 같은 라운드에선 캐시 — TTL 짧음.
+        self._store.put_entries(section_id, start_date, end_date, result)
+        return result
+
+    # accounts flat 변환은 raw client 와 동일
+    flatten_accounts = staticmethod(WhooingClient.flatten_accounts)
+
+    # ---- mutate (캐시 invalidate) -------------------------------------
+
+    async def create_entry(self, **kwargs) -> dict[str, Any]:
+        out = await self._inner.create_entry(**kwargs)
+        self._store.invalidate_entries(kwargs.get("section_id"))
+        return out
+
+    async def update_entry(self, **kwargs) -> dict[str, Any]:
+        out = await self._inner.update_entry(**kwargs)
+        self._store.invalidate_entries(kwargs.get("section_id"))
+        return out
+
+    async def delete_entry(self, **kwargs) -> dict[str, Any]:
+        out = await self._inner.delete_entry(**kwargs)
+        self._store.invalidate_entries(kwargs.get("section_id"))
+        return out
+
+    # 사용자가 'r' 누르면 호출 — 화면이 직접 강제 재로드 가능.
+    def invalidate_section(self, section_id: str) -> None:
+        self._store.invalidate_accounts(section_id)
+        self._store.invalidate_entries(section_id)
+
+
+# 순환 import 회피 — 본 모듈 끝에서 import.
+from whooing_tui.cache import CacheStore  # noqa: E402

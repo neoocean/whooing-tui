@@ -1,80 +1,83 @@
-# whooing-tui
+# whooing-tui (monorepo)
 
-후잉 가계부([whooing.com](https://whooing.com))를 **터미널에서 빠르게**
-다루기 위한 Textual TUI. 같은 워크스페이스의 [`whooing-mcp-server-wrapper`](../whooing-mcp-server)
-와 핵심 라이브러리(REST 클라이언트·인증·날짜·에러 매핑)를 공유한다.
+후잉 가계부([whooing.com](https://whooing.com)) 의 사용자 도구를 모아 둔 monorepo.
+두 개의 독립 설치 가능 Python 패키지로 구성됩니다:
 
-> **Phase 1 (현재)** — 프로젝트 골격 + 헤드리스 CLI 가 동작.
-> Phase 2 에서 Textual 화면(섹션 picker / 거래내역 표 / 입력 dialog) 이
-> 들어간다. 자세한 로드맵은 [`DESIGN.md`](./DESIGN.md) 참고.
+| 디렉터리 | 패키지 | 역할 |
+|---|---|---|
+| [`core/`](core/) | `whooing-core` | 어댑터 / SQLite 스키마 / 첨부 storage — 라이브러리. 다른 consumer (TUI, MCP wrapper) 가 import. |
+| [`tui/`](tui/) | `whooing-tui` | Textual 기반 터미널 UI. statement import wizard / entry annotator / attachment browser. 사용자 가시 layer. |
 
----
+## 목적
+
+후잉의 외부 입력 (카드사 명세서) 을 정형화 + 첨부 + 메모/태그를 SQLite 에
+보관하는 user-facing 도구. 같은 머신의
+[whooing-mcp-server-wrapper](../whooing-mcp-server) (LLM 자동화) 와 데이터
+(SQLite + attachments) 를 공유:
+
+- **whooing-tui** — db + attachments **owner**. 사용자가 직접 입력/편집.
+- **whooing-mcp-server-wrapper** — 같은 db read-only. LLM 응답 augmentation
+  (`local_annotations`, `local_attachments`).
 
 ## 빠른 시작
 
 ```bash
-# 1. 가상환경 + 의존성 설치 (Python 3.11+)
+# 1. 두 패키지 모두 설치 (단일 venv)
 make install
 
-# 2. 후잉 AI 토큰 설정
+# 2. .env 설정 (한 .env 가 두 패키지 모두에서 읽힘)
 cp .env.example .env
-# .env 의 WHOOING_AI_TOKEN 을 실 토큰으로 교체
-# 발급: 후잉 → 사용자 > 계정 > 비밀번호 및 보안 > AI 토큰 발급
+# WHOOING_AI_TOKEN, (선택) WHOOING_CARD_HTML_PASSWORD 설정
 
-# 3. 헤드리스 CLI 로 동작 확인
-.venv/bin/python -m whooing_tui sections list
-.venv/bin/python -m whooing_tui accounts list
-.venv/bin/python -m whooing_tui entries list --days 7
-
-# 4. TUI 실행 (Phase 1 은 자리표시자 화면)
+# 3. TUI 실행
 make run
 ```
 
-## 헤드리스 CLI
+자세한 사용법:
+- TUI 키보드 단축키 / CLI 흐름: [`tui/README.md`](tui/README.md)
+- 라이브러리 API: [`core/README.md`](core/README.md)
 
-서브커맨드 없이 실행하면 Textual TUI 가 열리고, 다음 서브커맨드는 GUI 없이
-바로 실행된다 (cron / 스크립트 친화).
+## 디렉터리 레이아웃
 
-| 명령 | 설명 |
-| --- | --- |
-| `whooing-tui sections list` | 섹션(가계부) 목록 |
-| `whooing-tui accounts list [--section s133178]` | 활성 섹션의 계정과목 |
-| `whooing-tui entries list [--days N \| --start YYYYMMDD --end YYYYMMDD]` | 거래내역 |
-
-공통 옵션:
-
-- `--json` — 결과를 JSON 으로 출력 (기본은 정렬된 표)
-- `-v` / `-vv` — INFO / DEBUG 로그
-- `--section <ID>` — 섹션 명시. 미지정 시 `WHOOING_SECTION_ID` 또는 첫 섹션
-
-## 설정 파일 (선택)
-
-`whooing-tui.toml.example` 을 `whooing-tui.toml` 로 복사하면 테마와 기본
-조회 윈도우 등 UI 옵션을 조정할 수 있다.
-
-```toml
-[ui]
-theme = "textual-dark"   # 또는 "textual-light"
-entries_page_size = 50
-
-[entries]
-default_window_days = 30
 ```
-
-탐색 우선순위는 `$WHOOING_TUI_CONFIG` → `<project>/whooing-tui.toml` →
-`~/.config/whooing-tui/config.toml` 순.
+whooing-tui/                  ← 본 monorepo (이 README)
+├── core/                     ← whooing-core 라이브러리
+│   ├── pyproject.toml
+│   ├── src/whooing_core/
+│   │   ├── html_adapters/    하나/현대카드 보안메일 .html 파서
+│   │   ├── csv_adapters/     신한/국민/현대/삼성카드 CSV 파서
+│   │   ├── pdf_adapters/     신한/현대카드 PDF 명세서 파서
+│   │   ├── attachments.py    sha256 dedup 파일 storage
+│   │   ├── db.py             SQLite 스키마 + open_rw / open_ro
+│   │   └── dates.py          KST helper
+│   └── tests/
+├── tui/                      ← whooing-tui 패키지
+│   ├── pyproject.toml        whooing-core 를 in-tree 의존성으로 명시
+│   ├── src/whooing_tui/
+│   └── tests/
+├── README.md                 이 파일
+├── Makefile                  install / test 두 패키지 동시 처리
+├── LICENSE                   MIT
+├── .env.example
+└── .gitignore
+```
 
 ## 개발
 
 ```bash
-make install   # venv + editable install + dev deps
-make test      # pytest -q
-make run       # TUI 실행
-make clean     # cache 디렉터리 제거
+make install     # core + tui 모두 editable install
+make test        # core/ 와 tui/ 양쪽 pytest
+make test-core   # core/ 만
+make test-tui    # tui/ 만
+make run         # tui 실행
+make clean       # __pycache__ 등 제거
 ```
 
-테스트는 `respx` 로 후잉 API 를 모킹하므로 토큰 없이도 돌아간다.
+## 관련 프로젝트
 
-## 라이선스
+- [whooing-mcp-server-wrapper](../whooing-mcp-server) — LLM 자동화용 MCP 도구.
+  본 monorepo 의 `whooing-core` 를 dependency 로 import. db read-only.
 
-MIT — `LICENSE` 참고.
+## License
+
+MIT.

@@ -23,3 +23,14 @@ entries_page_size = 50
 [entries]
 # 첫 진입 시 보여줄 거래 기간 (일). 30 = 최근 30일.
 default_window_days = 30
+
+[cache]
+# inter-session sqlite 캐시. accounts 와 entries 의 read 호출을 캐시한다.
+# 분당 20 후잉 한도 부담을 줄이고 startup speed 를 높인다. mutation 시
+# 자동 invalidate. .whooing-tui-cache/whooing-tui.sqlite 에 저장 (gitignore
+# 차단).
+enabled = true
+# accounts 캐시 TTL — 계정 재구성은 드물어서 1시간이 적당.
+accounts_ttl_sec = 3600
+# entries 캐시 TTL — mutation 가능성이 있어 짧게.
+entries_ttl_sec = 300

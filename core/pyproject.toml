@@ -1,0 +1,32 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "whooing-core"
+version = "0.1.0"
+description = "Shared core for whooing-mcp-server-wrapper + whooing-tui — HTML/PDF/CSV statement adapters, attachment storage, SQLite schema (annotations/hashtags/entry_attachments)."
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [{ name = "Woojin Kim", email = "me@woojinkim.org" }]
+dependencies = [
+    "beautifulsoup4>=4.12",
+    "pdfplumber>=0.11",
+    "playwright>=1.40",
+    "lxml>=5",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8",
+    "pytest-asyncio>=0.23",
+    "ruff>=0.4",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/whooing_core"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
