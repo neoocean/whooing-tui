@@ -1,9 +1,9 @@
 """inter-session 캐시 — sqlite 기반 accounts/entries 보관.
 
 목적: 후잉 분당 20 throttle 부담을 줄이고 startup speed 를 높인다 (캐시
-hit 면 0.01초, miss 면 httpx 1-3초). mcp-server-wrapper 의
-`whooing-data.sqlite` 와는 분리된 별도 db 다 (.gitignore `*.sqlite` 가
-양쪽 차단).
+hit 면 0.01초, miss 면 httpx 1-3초). 본래 whooing-mcp-server-wrapper
+(archived 2026-05-10) 의 `whooing-data.sqlite` 와는 분리된 별도 db 로
+설계됐다 (.gitignore `*.sqlite` 가 양쪽 차단).
 
 스키마 (단순 KV):
   account_cache(section_id PK, raw_json, fetched_at_unix)

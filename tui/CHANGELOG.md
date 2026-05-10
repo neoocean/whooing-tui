@@ -2,6 +2,62 @@
 
 각 항목은 Perforce CL 단위로 끊는다.
 
+## CL #50993 — 0.7.3 — whooing-mcp-server-wrapper 종료 반영 (archive 표기) (2026-05-10)
+
+자매 프로젝트 `whooing-mcp-server-wrapper` 가 종료됐다. 코드는 monorepo
+의 `mcp/` 디렉토리에 archive 형태로 보존되며, 본 CL 은 그 사실을 코드
+docstring / 문서 / `.env.example` 에 일관 표기하고 `mcp_bridge.py` 에
+`DeprecationWarning` 을 추가한다.
+
+### 수정 (영향 받는 14 files)
+
+- `tui/src/whooing_tui/__init__.py` — package docstring 의 wrapper 페어
+  설명을 "본래 ~ wrapper 종료 (archived 2026-05-10) 이후 ~" 형태로.
+- `tui/src/whooing_tui/auth.py` — module docstring + `_env_candidates()`
+  의 공통 위치 설명 + `load_auth_from_env()` 에러 메시지에서 "wrapper 와
+  공유" 표현을 "(archived 2026-05-10)" 표기로 정정.
+- `tui/src/whooing_tui/cache.py` — `whooing-data.sqlite` 분리 사실의
+  타이밍을 archived 명시.
+- `tui/src/whooing_tui/client.py` — wrapper 와 같은 규칙으로 동작한다는
+  과거 사실에 archived 표기.
+- `tui/src/whooing_tui/dates.py` / `errors.py` — 같은 패턴.
+- `tui/src/whooing_tui/data.py` — wrapper 가 read-only SELECT 한다는
+  가정이 historical 임을 명시. `open_ro()` API 는 미래 새 도구 합류 가능
+  성을 위해 유지.
+- `tui/src/whooing_tui/mcp_bridge.py` —
+  * 모듈 docstring 에 `archived 2026-05-10` 박스 + 신규 호출자 권장
+    (REST 직접 또는 자체 MCP 클라이언트).
+  * `__init__` 에서 **`DeprecationWarning`** 발사 — 후속 정리에서 제거
+    또는 자체 클라이언트로 재작성 예정.
+  * ImportError 안내 메시지에 "archived" 명시.
+- `tui/pyproject.toml` — comment 의 "외부 consumer (예: wrapper)" 를
+  archived 표기로.
+- `README.md` (monorepo root) — 디렉터리 표에 `mcp/` 추가 + archived
+  표기. "관련 프로젝트" 섹션 갱신.
+- `tui/README.md` — 머리말 박스 + Phase 6 까지 진행 상황 (0.7.3) 갱신.
+- `tui/DESIGN.md` — §2 자매 도구 mermaid 에 점선 / archived 표기 + §4
+  제목.
+- `tui/MEMORY.md` — §2 자매 도구 표 갱신, §3 토큰 / 카드 비밀번호 사실
+  업데이트, §4 제목, §5.3 변경 전파 규칙을 historical 로.
+- `.env.example` (monorepo root) — 공통 위치 안내 박스의 wrapper 공유
+  명분을 "단순 path / XDG 표준" 으로 정정.
+- `tui/CHANGELOG.md` — 본 항목.
+- `tui/pyproject.toml` + `__init__.py` — 0.7.2 → 0.7.3.
+
+### 검증
+
+- `make test-tui` → 176 passed (회귀 없음, `DeprecationWarning` 6건은
+  `test_mcp_bridge.py` 의 의도된 부수효과).
+
+### 원칙
+
+- 코드 자체 (mcp/ 디렉토리) 는 보존 — historical 참조 자료 + `mcp_bridge`
+  의 동작 유지.
+- 문서는 "(archived 2026-05-10)" 일관 표기 — 새 독자가 사실 관계를 즉시
+  파악.
+- 의도적 코드 중복 (`auth` / `dates` / `errors` / `client` read 부분) 은
+  추출 비용이득이 작고 미래 옵션 가치가 있어 그대로 둔다.
+
 ## CL #50987 — 0.7.2 — Step 4 MCP 직접 호출 scaffolding (2026-05-10)
 
 후속 권장 1번. 후잉 공식 MCP (https://whooing.com/mcp) 호출 thin bridge.

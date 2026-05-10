@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "whooing-tui"
-version = "0.7.2"
+version = "0.7.3"
 description = "Textual TUI for Whooing (whooing.com) — sections / accounts / entries 를 터미널에서 빠르게 다룬다."
 readme = "README.md"
 requires-python = ">=3.11"
@@ -17,8 +17,9 @@ dependencies = [
     "textual>=0.50",
     # whooing-core 는 같은 monorepo 의 sibling 디렉터리. monorepo 루트의
     # `make install` 이 먼저 `pip install -e core/` 를 실행하므로 별도 명시
-    # 불필요. 외부 consumer (예: whooing-mcp-server-wrapper) 는 git+ssh 로
-    # `whooing-core` 를 따로 가져옴.
+    # 불필요. (whooing-mcp-server-wrapper 가 archived 2026-05-10 이전에는
+    # 외부 consumer 로 git+ssh `whooing-core` 를 가져왔다 — 이제 monorepo
+    # 외부 consumer 없음, 단 라이브러리 분리 자체는 미래 재사용 위해 유지.)
 ]
 
 [project.optional-dependencies]

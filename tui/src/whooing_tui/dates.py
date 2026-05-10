@@ -3,8 +3,9 @@
 후잉의 모든 날짜는 KST 자정 기준 YYYYMMDD 문자열. 본 도구는 호스트의
 시간대와 무관하게 항상 `Asia/Seoul` 강제.
 
-whooing-mcp-server-wrapper 의 동일 모듈에서 인용 — 두 도구가 같은
-날짜 규칙을 공유한다.
+본래 whooing-mcp-server-wrapper (archived 2026-05-10) 의 동일 모듈에서
+인용 — 두 도구가 같은 날짜 규칙을 공유하도록 한 의도적 코드 중복. wrapper
+종료 후에도 단독으로 유지.
 """
 
 from __future__ import annotations

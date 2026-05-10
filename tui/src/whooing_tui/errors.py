@@ -4,8 +4,9 @@
 로 변환. `/sections.json` 응답에 webhook_token (per-section secret) 이
 포함되므로 디버그 로그에 누설되지 않도록 sanitize 도 함께 제공한다.
 
-whooing-mcp-server-wrapper 의 동일 모듈에서 인용 — 같은 응답을 같은
-규칙으로 해석하기 위한 의도적 중복.
+본래 whooing-mcp-server-wrapper (archived 2026-05-10) 의 동일 모듈에서
+인용 — 같은 응답을 같은 규칙으로 해석하기 위한 의도적 중복. wrapper 종료
+후에도 단독으로 유지.
 """
 
 from __future__ import annotations

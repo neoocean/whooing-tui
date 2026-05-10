@@ -1,7 +1,10 @@
 """TUI 의 데이터 layer — whooing-core 를 import 해 SQLite + 첨부 storage 관리.
 
-TUI 가 db + attachments 의 owner — schema 생성/마이그레이션 책임. wrapper
-(whooing-mcp-server-wrapper) 는 같은 db 를 read-only 로 SELECT.
+TUI 가 db + attachments 의 owner — schema 생성/마이그레이션 책임. 본래
+wrapper (whooing-mcp-server-wrapper) 가 같은 db 를 read-only 로 SELECT
+하도록 설계됐으나 **wrapper 는 2026-05-10 종료 (archived)** — 현재 SELECT
+경로의 외부 사용자는 없다. `open_ro()` API 는 안전성 / 명분 분리를 위해
+그대로 유지 (다른 도구가 미래에 합류할 가능성).
 
 Path 정책 (v0.1.0+, monorepo):
   $WHOOING_DATA_DIR > ~/.whooing/   (default)

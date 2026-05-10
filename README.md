@@ -1,33 +1,31 @@
 # whooing-tui (monorepo)
 
 후잉 가계부([whooing.com](https://whooing.com)) 의 사용자 도구를 모아 둔 monorepo.
-두 개의 독립 설치 가능 Python 패키지로 구성됩니다:
+세 개의 독립 설치 가능 Python 패키지로 구성됩니다:
 
 | 디렉터리 | 패키지 | 역할 |
 |---|---|---|
-| [`core/`](core/) | `whooing-core` | 어댑터 / SQLite 스키마 / 첨부 storage — 라이브러리. 다른 consumer (TUI, MCP wrapper) 가 import. |
-| [`tui/`](tui/) | `whooing-tui` | Textual 기반 터미널 UI. statement import wizard / entry annotator / attachment browser. 사용자 가시 layer. |
+| [`core/`](core/) | `whooing-core` | 어댑터 / SQLite 스키마 / 첨부 storage — 라이브러리. TUI 가 import. |
+| [`tui/`](tui/) | `whooing-tui` | Textual 기반 터미널 UI. statement import wizard / entry annotator / attachment browser / dashboard. 사용자 가시 layer. |
+| [`mcp/`](mcp/) | `whooing-mcp-server-wrapper` | **archived 2026-05-10**. LLM 자동화용 MCP 서버 — 코드는 monorepo 안에 보존되고 `tui/src/whooing_tui/mcp_bridge.py` 가 그 `OfficialMcpClient` 를 한정적으로 사용 (deprecated). |
 
 ## 목적
 
 후잉의 외부 입력 (카드사 명세서) 을 정형화 + 첨부 + 메모/태그를 SQLite 에
-보관하는 user-facing 도구. 같은 머신의
-[whooing-mcp-server-wrapper](../whooing-mcp-server) (LLM 자동화) 와 데이터
-(SQLite + attachments) 를 공유:
-
-- **whooing-tui** — db + attachments **owner**. 사용자가 직접 입력/편집.
-- **whooing-mcp-server-wrapper** — 같은 db read-only. LLM 응답 augmentation
-  (`local_annotations`, `local_attachments`).
+보관하는 user-facing 도구. **whooing-tui** 가 db + attachments owner —
+사용자가 직접 입력/편집. wrapper 는 archived 라 더 이상 db 를 SELECT 하는
+외부 consumer 는 없으나, `open_ro()` API 와 read-only 분리 정책은
+미래 도구의 합류 가능성을 위해 유지.
 
 ## 빠른 시작
 
 ```bash
-# 1. 두 패키지 모두 설치 (단일 venv)
+# 1. 패키지 모두 설치 (단일 venv)
 make install
 
-# 2. .env 설정 (한 .env 가 두 패키지 모두에서 읽힘)
+# 2. .env 설정 (한 .env 가 모든 패키지에서 읽힘)
 cp .env.example .env
-# WHOOING_AI_TOKEN, (선택) WHOOING_CARD_HTML_PASSWORD 설정
+# WHOOING_AI_TOKEN 설정. 권장 위치는 ~/.config/whooing/.env
 
 # 3. TUI 실행
 make run
@@ -55,8 +53,12 @@ whooing-tui/                  ← 본 monorepo (이 README)
 │   ├── pyproject.toml        whooing-core 를 in-tree 의존성으로 명시
 │   ├── src/whooing_tui/
 │   └── tests/
+├── mcp/                      ← archived 2026-05-10 (whooing-mcp-server-wrapper)
+│   ├── pyproject.toml        MCP 서버 + 14 도구 (parsers/sms, tools/audit 등)
+│   ├── src/whooing_mcp/
+│   └── tests/
 ├── README.md                 이 파일
-├── Makefile                  install / test 두 패키지 동시 처리
+├── Makefile                  install / test 모든 패키지 처리
 ├── LICENSE                   MIT
 ├── .env.example
 └── .gitignore
@@ -65,19 +67,24 @@ whooing-tui/                  ← 본 monorepo (이 README)
 ## 개발
 
 ```bash
-make install     # core + tui 모두 editable install
-make test        # core/ 와 tui/ 양쪽 pytest
-make test-core   # core/ 만
-make test-tui    # tui/ 만
-make run         # tui 실행
-make clean       # __pycache__ 등 제거
+make install     # 모든 패키지 editable install
+make test        # core / tui / mcp 모두 pytest
+make test-core   # core 만
+make test-tui    # tui 만 (가장 자주)
+make test-mcp    # mcp 만 (archived — 회귀 검증 용도)
+make coverage    # tui 의 라인 커버리지
+make smoke-cli   # whooing-tui 콘솔 진입점 검증
+make run         # TUI
+make clean
 ```
 
 ## 관련 프로젝트
 
-- [whooing-mcp-server-wrapper](../whooing-mcp-server) — LLM 자동화용 MCP 도구.
-  본 monorepo 의 `whooing-core` 를 dependency 로 import. db read-only.
+- [`mcp/`](mcp/) — **archived 2026-05-10**. 코드는 monorepo 안에 보존되며
+  TUI 의 `mcp_bridge.py` 가 보고서·예산 같은 영역을 한정적으로 호출
+  (deprecated). 신규 호출자는 `WhooingClient` (REST 직접) 또는 자체 MCP
+  클라이언트로 가도록 권장.
 
 ## License
 
-MIT.
+MIT — `LICENSE` 파일 참고.

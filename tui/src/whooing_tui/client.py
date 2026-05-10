@@ -9,8 +9,9 @@
   GET /accounts.json?section_id=
   GET /entries.json?section_id=&start_date=&end_date=
 
-분당 20회 client-side throttle + 429 backoff 재시도. whooing-mcp-server-
-wrapper 의 client.py 와 같은 규칙으로 동작한다.
+분당 20회 client-side throttle + 429 backoff 재시도. 본래 whooing-mcp-
+server-wrapper (archived 2026-05-10) 의 client.py 와 같은 규칙으로 동작
+하도록 만든 의도적 코드 중복 — wrapper 종료 후에도 그대로 유지.
 """
 
 from __future__ import annotations

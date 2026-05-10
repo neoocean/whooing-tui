@@ -2,11 +2,14 @@
 
 후잉 가계부([whooing.com](https://whooing.com))를 **터미널에서 빠르게**
 다루기 위한 Textual TUI. 본 패키지는 monorepo 의 `tui/` 서브디렉토리이며,
-같은 monorepo 의 [`core/`](../core) (whooing-core 라이브러리) 와
-[`whooing-mcp-server-wrapper`](../../whooing-mcp-server) (LLM 자동화) 가
-같은 후잉 REST API 를 공유한다.
+같은 monorepo 의 [`core/`](../core) (whooing-core 라이브러리) 를 import 한다.
 
-**현재 0.5.0 — Phase 3 까지 완료**:
+> **자매 도구 정리 (2026-05-10)** — 본래 같은 후잉 REST API 를 공유하던
+> [`whooing-mcp-server-wrapper`](../mcp) 는 archived. 코드는 monorepo 의
+> [`mcp/`](../mcp) 에 보존되며, TUI 의 `mcp_bridge.py` 가 그 `OfficialMcpClient`
+> 를 한정적으로 호출 (deprecated, 후속 정리 예정).
+
+**현재 0.7.3 — Phase 6 까지 완료**:
 
 - Phase 1: 핵심 라이브러리 + 헤드리스 CLI
 - Phase 2a: HomeScreen (섹션 picker + 활성 섹션 계정과목 트리)
