@@ -2,6 +2,43 @@
 
 각 항목은 Perforce CL 단위로 끊는다.
 
+## v0.7.0 — Phase 6 (statement import / annotator / attachment / dashboard) (2026-05-10)
+
+monorepo 의 sibling `whooing-core` 라이브러리에서 어댑터 / 첨부 storage /
+SQLite 스키마를 받아 다음 화면 4개 추가. `whooing-mcp-server-wrapper` v0.2.0
+이 같은 db 를 read-only 로 SELECT — TUI 가 owner.
+
+### Added
+
+* **Phase 6.2** `tui/src/whooing_tui/data.py` — WHOOING_DATA_DIR root +
+  `init_shared_schema()` + `open_rw()` / `open_ro()` (whooing_core.db 위 layer).
+* **Phase 6.3** `screens/statement_import.py` — Statement Import Wizard
+  (HTML/PDF). issuer auto-detect → password modal → adapter → dedup → preview
+  → entries-create + statement_import_log.
+* **Phase 6.4** `screens/annotator.py` — AnnotatorModal (entry_id 단위 메모 +
+  해시태그). `parse_hashtags_input()` helper.
+* **Phase 6.5** `screens/attachment_browser.py` — entry 별 첨부 list / add (path
+  modal) / delete / open (`open` / `xdg-open`).
+* **Phase 6.6** `screens/dashboard.py` — at-a-glance: import 통계 + annotation
+  카운트 + 첨부 합계 + db meta.
+
+### Tests
+
+  `tui/tests/test_data.py`                     9 tests
+  `tui/tests/test_statement_import.py`         10 tests
+  `tui/tests/test_annotator.py`                 9 tests
+  `tui/tests/test_attachment_browser.py`       12 tests
+  `tui/tests/test_dashboard.py`                10 tests
+  → +50 tests; total tui pytest 152 passed.
+
+### Notes
+
+* 모든 신규 화면이 `whooing_tui.data.{open_rw, open_ro}` 사용 — wrapper 와
+  같은 db 공유 (WAL + busy_timeout=5000 으로 동시 SELECT 안전).
+* CLI / app.py 에 'i' (import) / 'a' (annotator) / 'A' (attachments) / 'D'
+  (dashboard) 단축키 wiring 은 follow-up. 현재는 push_screen() 호출 가능한
+  programmatic API 만 제공.
+
 ## CL #50961 — 0.6.1 — `.env` 공통 위치 (Step 10) (2026-05-10)
 
 후잉 토큰을 양쪽 도구 (whooing-tui + whooing-mcp-server-wrapper) 가
