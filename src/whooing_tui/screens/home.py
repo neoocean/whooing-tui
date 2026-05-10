@@ -86,7 +86,11 @@ class HomeScreen(Screen):
     """
 
     BINDINGS = [
-        Binding("r", "refresh", "Refresh", show=True),
+        # priority=True — OptionList / Tree 가 focus 일 때도 'e' 가
+        # HomeScreen 까지 도달하도록. type-to-search 같은 위젯 입력보다
+        # "거래내역으로 진입" 액션이 우선.
+        Binding("e", "open_entries", "Entries", show=True, priority=True),
+        Binding("r", "refresh", "Refresh", show=True, priority=True),
         Binding("ctrl+l", "refresh", "Refresh", show=False),
         Binding("escape", "focus_sections", "Focus sections", show=False),
     ]
@@ -142,6 +146,22 @@ class HomeScreen(Screen):
             self.query_one("#sections-list", OptionList).focus()
         except Exception:
             pass
+
+    def action_open_entries(self) -> None:
+        """활성 섹션의 EntriesScreen 으로 진입.
+
+        섹션이 아직 활성화되지 않았으면 (sections-list 가 아직 안 끝났거나
+        빈 응답) 안내 메시지만 띄우고 push 하지 않는다.
+        """
+        session = self.app.session  # type: ignore[attr-defined]
+        if not session.section_id:
+            self.set_status("활성 섹션이 없습니다 — 먼저 섹션을 선택하세요.", error=True)
+            return
+        # 지연 import — entries.py 가 home 을 import 하지 않으므로 순환은
+        # 없지만, 패키지 초기화 시점을 분리해두면 헤드리스 CLI 가 textual
+        # widgets 의 일부 초기화를 안 거쳐도 된다.
+        from whooing_tui.screens.entries import EntriesScreen
+        self.app.push_screen(EntriesScreen(self._client))
 
     # ---- sections worker ----------------------------------------------
 

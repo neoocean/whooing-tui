@@ -2,6 +2,65 @@
 
 각 항목은 Perforce CL 단위로 끊는다.
 
+## CL #50936 — 0.3.0 — Phase 2b: EntriesScreen + 100-cap footer (2026-05-10)
+
+### 추가
+
+- `src/whooing_tui/screens/entries.py` — EntriesScreen.
+  - `DataTable` 컬럼: date / money / left / right / item / memo.
+  - 진입 시 최근 N일 (`config.entries.default_window_days`, 기본 30)
+    자동 fetch.
+  - account_id 는 `SessionState.title_of()` 로 즉시 표시명으로 변환 —
+    사용자에게는 코드 대신 이름.
+  - money 는 천단위 콤마 (`_fmt_money` — None / 빈 값 안전).
+  - 정렬: `entry_date desc`, 동일 일자는 `entry_id desc` 보조.
+  - **100-cap 인지 footer**: 같은 entry_date 가 정확히 100건이면 누락
+    가능성 의심 → status bar 의 `warn` 클래스 + `last_cap_warning=True`.
+    일자 목록을 메시지에 노출 (앞 3개 + "…").
+  - 키 바인딩: `q`/`escape` (Back), `r` (Refresh), `+` (윈도우 +7일,
+    max 5년), `-` (-7일, min 1일).
+- `tests/test_entries_screen.py` — `App.run_test()` 통합 6 cases:
+  - HomeScreen → `e` → EntriesScreen push + entries 자동 로드.
+  - account_id → title 변환, money 콤마 포맷.
+  - `q` 로 HomeScreen 복귀.
+  - `+` 가 윈도우 확장 + 재로드 (start_date 가 더 이른 날짜).
+  - 단일 일자에 100건 = warn 클래스 + 메시지.
+  - 후잉 ToolError 시 error 클래스 + 0행.
+  - 빈 sections 상태에서 `action_open_entries` 가 push 거부 + status
+    error.
+
+### 수정
+
+- `src/whooing_tui/screens/home.py` — `e` 키 바인딩 + `action_open_entries`.
+  - `Binding(priority=True)` — OptionList / Tree focus 일 때도 화면
+    레벨 액션이 우선이도록.
+  - 활성 섹션 없으면 status error 로 안내, push 거부.
+  - 지연 import (`from .entries import EntriesScreen`) 로 패키지 초기화
+    분리.
+- `CHANGELOG.md` / `DESIGN.md` / `MEMORY.md` — Phase 2b 진행 상황 갱신.
+- `pyproject.toml` + `src/whooing_tui/__init__.py` — 0.2.0 → 0.3.0.
+
+### 검증
+
+  make test    60 passed in 2.55s (Phase 1 48 + HomeScreen 6 + EntriesScreen 6)
+
+### 의도적 누락 (다음 CL 로)
+
+- EntryEditDialog (거래 추가/수정) + WhooingClient 의 POST/PUT/DELETE.
+- 로컬 sqlite 캐시.
+- 화면 도움말 (`?` 모달).
+- 날짜 범위 직접 입력 dialog (`d` 키 — bindings 자리 잡힘, dialog 미구현).
+
+### 학습된 함정
+
+- `DataTable.column_count` 속성은 textual 8.x 에 없음 — `len(table.columns)`
+  사용. 후속 화면 테스트에 동일 적용.
+- `default = sections or [...]` 패턴은 빈 리스트도 falsy 로 잡아 default
+  로 덮어버림 → `is None` 분기 필수. 후속 FakeClient 재사용 시 주의.
+- OptionList / Tree 안에서 화면 레벨 단축키를 잡으려면
+  `Binding(priority=True)` 필요. Phase 2a 의 `r` 도 함께 priority=True 로
+  승격해 두었다.
+
 ## CL #50935 — 0.2.0 — Phase 2a: HomeScreen (2026-05-10)
 
 ### 추가
