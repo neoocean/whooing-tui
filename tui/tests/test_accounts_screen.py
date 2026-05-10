@@ -135,6 +135,76 @@ async def _open_accounts(app, pilot) -> AccountsScreen:
     return app.screen  # type: ignore[return-value]
 
 
+# ---- CL #51131+ AccountsScreen 메뉴바 통합 -----------------------------
+
+
+@pytest.mark.asyncio
+async def test_accounts_screen_has_menubar():
+    """AccountsScreen 도 Header 아래 MenuBar 가 보여야 함."""
+    from whooing_tui.widgets import MenuBar
+    fake = FakeClient()
+    app = WhooingTuiApp(client=fake)  # type: ignore[arg-type]
+    async with app.run_test() as pilot:
+        screen = await _open_accounts(app, pilot)
+        bar = screen.query_one("#accounts-menubar", MenuBar)
+        rendered = str(bar.render())
+        assert "파일" in rendered
+        assert "입력" in rendered
+        assert "도움말" in rendered
+
+
+@pytest.mark.asyncio
+async def test_accounts_screen_f10_opens_menu():
+    """F10 → AccountsScreen 의 첫 메뉴 popup."""
+    from whooing_tui.widgets.menubar import MenuPopup
+    fake = FakeClient()
+    app = WhooingTuiApp(client=fake)  # type: ignore[arg-type]
+    async with app.run_test() as pilot:
+        await _open_accounts(app, pilot)
+        await pilot.press("f10")
+        await pilot.pause()
+        assert isinstance(app.screen, MenuPopup)
+        assert app.screen.spec.name == "파일"
+
+
+def test_accounts_screen_menu_includes_new_account():
+    """메뉴 정의에 new_account 항목 — wiring 안전망."""
+    menus = AccountsScreen._build_menus()
+    flat = [(m.name, it.action_id) for m in menus for it in m.items]
+    assert any(action == "new_account" for _, action in flat)
+    assert any(action == "refresh" for _, action in flat)
+    assert any(action == "back" for _, action in flat)
+
+
+@pytest.mark.asyncio
+async def test_accounts_menu_dispatch_calls_action_refresh():
+    """메뉴 dispatch('refresh') → AccountsScreen.action_refresh 호출
+    (mixin default — `action_<id>` lookup). 검증은 spy 로 직접.
+    """
+    fake = FakeClient()
+    app = WhooingTuiApp(client=fake)  # type: ignore[arg-type]
+    async with app.run_test() as pilot:
+        screen = await _open_accounts(app, pilot)
+        called = {"yes": False}
+        screen.action_refresh = lambda: called.update(yes=True)  # type: ignore[method-assign]
+        screen._dispatch_menu_action("refresh")
+        await pilot.pause()
+        assert called["yes"] is True
+
+
+@pytest.mark.asyncio
+async def test_accounts_menu_dispatch_calls_action_back():
+    """메뉴 dispatch('back') → AccountsScreen.action_back → pop_screen → EntriesScreen."""
+    fake = FakeClient()
+    app = WhooingTuiApp(client=fake)  # type: ignore[arg-type]
+    async with app.run_test() as pilot:
+        screen = await _open_accounts(app, pilot)
+        screen._dispatch_menu_action("back")
+        await pilot.pause()
+        # back → pop → EntriesScreen 으로.
+        assert isinstance(app.screen, EntriesScreen)
+
+
 # ---- 트리 렌더 + 진입 흐름 ---------------------------------------------
 
 

@@ -28,6 +28,40 @@ from __future__ import annotations
 from textual.binding import Binding
 
 
+# Hangul Syllables block (U+AC00 ~ U+D7A3) — 11,172 음절.
+_HANGUL_BASE = 0xAC00
+_HANGUL_LAST = 0xD7A3
+
+# 초성 (Choseong) 19 자 — Unicode 분해 알고리즘에서 syllable_index // 588.
+_CHOSEONG: tuple[str, ...] = (
+    "ㄱ", "ㄲ", "ㄴ", "ㄷ", "ㄸ", "ㄹ", "ㅁ", "ㅂ", "ㅃ", "ㅅ",
+    "ㅆ", "ㅇ", "ㅈ", "ㅉ", "ㅊ", "ㅋ", "ㅌ", "ㅍ", "ㅎ",
+)
+
+
+def choseong_of(ch: str) -> str:
+    """단일 글자의 초성 — 한글 음절이면 자모 1개, 그 외는 그대로.
+
+    예: '스' → 'ㅅ', '벅' → 'ㅂ', 'A' → 'A', '!' → '!'.
+    """
+    if not ch:
+        return ""
+    c = ord(ch[0])
+    if _HANGUL_BASE <= c <= _HANGUL_LAST:
+        i = c - _HANGUL_BASE
+        return _CHOSEONG[i // 588]
+    return ch[0]
+
+
+def to_choseong_string(s: str) -> str:
+    """문자열 전체의 초성 만 — 한글은 자모, 영문/숫자/punct 는 그대로.
+
+    예: '스타벅스' → 'ㅅㅌㅂㅅ', '카페' → 'ㅋㅍ',
+        '한국T맵' → 'ㅎㄱTㅁ', 'ABC' → 'ABC'.
+    """
+    return "".join(choseong_of(c) for c in (s or ""))
+
+
 # 두벌식 표준: 영문 (소문자) → 한글 자모.
 # Shift 조합 (대문자 → 쌍자음 / 합쳐진 모음) 은 우리 단축키에 쓰이지
 # 않으므로 생략. 합쳐진 모음 (예: ㅢ = ㅡ + ㅣ) 도 단일 자모 매핑이

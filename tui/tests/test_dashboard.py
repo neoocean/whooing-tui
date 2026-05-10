@@ -50,7 +50,7 @@ def test_gather_stats_empty_db_path_includes_default(isolated):
 def test_gather_stats_after_init_returns_zeroes(isolated):
     tui_data.init_shared_schema()
     stats = gather_stats()
-    assert stats["schema_version"] == 4
+    assert stats["schema_version"] == 7
     assert stats["import_total"] == 0
     assert stats["annotation_count"] == 0
     assert stats["attachment_count"] == 0
@@ -93,7 +93,7 @@ def test_gather_stats_with_data(isolated, tmp_path):
         )
 
     stats = gather_stats()
-    assert stats["schema_version"] == 4
+    assert stats["schema_version"] == 7
     assert stats["import_total"] == 1
     assert stats["import_by_status"]["inserted"] == 1
     assert stats["annotation_count"] == 2
@@ -111,10 +111,35 @@ def test_render_dashboard_includes_path_and_version(isolated):
     tui_data.init_shared_schema()
     s = render_dashboard(gather_stats())
     assert "schema" in s
-    assert "v4" in s
+    assert "v7" in s
     assert "whooing-data.sqlite" in s
 
 
 def test_render_dashboard_no_db(isolated):
     s = render_dashboard(gather_stats())
     assert "db 미생성" in s
+
+
+# ---- CL #51133+ (H2) section 필터 ---------------------------------------
+
+
+def test_gather_stats_section_filter_isolates_hashtags(isolated):
+    """`section_id` 명시 시 그 섹션의 hashtag/annotation 만 집계."""
+    tui_data.init_shared_schema()
+    with tui_data.open_rw() as conn:
+        core_db.upsert_annotation(conn, entry_id="e1", section_id="s9046", note="m1")
+        core_db.set_hashtags(conn, "e1", ["식비"])
+        core_db.upsert_annotation(conn, entry_id="e2", section_id="s133178", note="m2")
+        core_db.set_hashtags(conn, "e2", ["테스트", "식비"])
+    # 전체 — 종전 동작.
+    all_stats = gather_stats()
+    assert dict(all_stats["top_hashtags"]) == {"식비": 2, "테스트": 1}
+    assert all_stats["annotation_count"] == 2
+    # s9046 만.
+    s9046 = gather_stats(section_id="s9046")
+    assert dict(s9046["top_hashtags"]) == {"식비": 1}
+    assert s9046["annotation_count"] == 1
+    # s133178 만.
+    s133178 = gather_stats(section_id="s133178")
+    assert dict(s133178["top_hashtags"]) == {"식비": 1, "테스트": 1}
+    assert s133178["annotation_count"] == 1

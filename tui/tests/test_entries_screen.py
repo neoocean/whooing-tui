@@ -1286,3 +1286,247 @@ async def test_money_column_uses_right_justified_text():
                 f"money cell row={row} should be Text, got {type(cell)}"
             )
             assert cell.justify == "right"
+
+
+# ---- CL #51123+ 첨부파일 wiring ('f' 키) -----------------------------
+
+
+@pytest.mark.asyncio
+async def test_f_key_on_real_entry_pushes_attachment_browser():
+    """선택된 실 거래에서 `f` (또는 ㄹ) → AttachmentBrowserScreen push.
+
+    CL #51123 사용자 요청: "거래내역에 파일을 첨부할 수 있도록 수정하세요."
+    EntriesScreen 의 첫 행 (실 거래) 위에서 'f' 한 번이면 첨부 화면으로
+    들어가야 한다.
+    """
+    fake = FakeClient(entries_by_section={"s1": _sample_entries()})
+    app = WhooingTuiApp(client=fake)  # type: ignore[arg-type]
+    async with app.run_test() as pilot:
+        from whooing_tui.screens.attachment_browser import AttachmentBrowserScreen
+        from whooing_tui.screens.entries import EntriesScreen
+        await _wait_for(
+            lambda: isinstance(app.screen, EntriesScreen)
+            and app.screen.last_entry_count == 2,
+            timeout=3.0,
+        )
+        es: EntriesScreen = app.screen  # type: ignore[assignment]
+        # default cursor = row 0 = e1 (sentinel 숨김 — entries 비어있지 않음).
+        es.action_open_attachments()
+        await pilot.pause()
+        assert isinstance(app.screen, AttachmentBrowserScreen)
+        # screen 이 올바른 entry_id 를 들고 들어갔는지 확인.
+        ab: AttachmentBrowserScreen = app.screen  # type: ignore[assignment]
+        assert ab.entry_id == "e1"
+        assert ab.section_id == "s1"
+
+
+@pytest.mark.asyncio
+async def test_f_key_on_sentinel_is_noop_with_status_warning():
+    """sentinel row (새 거래 추가 자리) 위에서 `f` 누르면 첨부 대상이 없으니
+    화면 push X + status 안내. CL #51123."""
+    fake = FakeClient(entries_by_section={"s1": []})
+    app = WhooingTuiApp(client=fake)  # type: ignore[arg-type]
+    async with app.run_test() as pilot:
+        from whooing_tui.screens.entries import EntriesScreen
+        await _wait_for(
+            lambda: isinstance(app.screen, EntriesScreen)
+            and len(fake.list_entries_calls) >= 1,
+            timeout=3.0,
+        )
+        es: EntriesScreen = app.screen  # type: ignore[assignment]
+        # entries 비어있어 sentinel 만 보이고 cursor 가 그 위.
+        assert es._is_on_sentinel_row()
+        es.action_open_attachments()
+        await pilot.pause()
+        # 여전히 EntriesScreen — 다른 화면으로 push 안 됨.
+        assert isinstance(app.screen, EntriesScreen)
+        assert "첨부 대상이 아닙니다" in es.last_status
+
+
+# ---- CL #51126+ F10 메뉴바 통합 ------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_menubar_is_visible_under_header():
+    """EntriesScreen mount 후 MenuBar 위젯이 화면에 존재 — 항상 노출."""
+    from whooing_tui.screens.entries import EntriesScreen
+    from whooing_tui.widgets import MenuBar
+    fake = FakeClient(entries_by_section={"s1": _sample_entries()})
+    app = WhooingTuiApp(client=fake)  # type: ignore[arg-type]
+    async with app.run_test() as pilot:
+        await _wait_for(
+            lambda: isinstance(app.screen, EntriesScreen)
+            and app.screen.last_entry_count == 2,
+            timeout=3.0,
+        )
+        bar = app.screen.query_one("#entries-menubar", MenuBar)
+        rendered = str(bar.render())
+        # 4개 메뉴 모두 노출.
+        for name in ("파일", "입력", "화면", "도움말"):
+            assert name in rendered
+
+
+@pytest.mark.asyncio
+async def test_f10_opens_menu_popup():
+    """F10 → MenuPopup push, 첫 메뉴 (파일) 의 항목이 보임."""
+    from whooing_tui.screens.entries import EntriesScreen
+    from whooing_tui.widgets.menubar import MenuPopup
+    fake = FakeClient(entries_by_section={"s1": _sample_entries()})
+    app = WhooingTuiApp(client=fake)  # type: ignore[arg-type]
+    async with app.run_test() as pilot:
+        await _wait_for(
+            lambda: isinstance(app.screen, EntriesScreen)
+            and app.screen.last_entry_count == 2,
+            timeout=3.0,
+        )
+        await pilot.press("f10")
+        await pilot.pause()
+        assert isinstance(app.screen, MenuPopup)
+        assert app.screen.spec.name == "파일"
+
+
+@pytest.mark.asyncio
+async def test_menu_dispatch_calls_existing_action():
+    """메뉴에서 'open_sections' 선택 → SectionPickerScreen 으로 push.
+
+    내부 dispatch 가 기존 action_open_sections() 를 호출하는지를 마지막
+    push 화면 type 으로 검증.
+    """
+    from whooing_tui.screens.entries import EntriesScreen
+    from whooing_tui.screens.sections import SectionPickerScreen
+    fake = FakeClient(entries_by_section={"s1": _sample_entries()})
+    app = WhooingTuiApp(client=fake)  # type: ignore[arg-type]
+    async with app.run_test() as pilot:
+        await _wait_for(
+            lambda: isinstance(app.screen, EntriesScreen)
+            and app.screen.last_entry_count == 2,
+            timeout=3.0,
+        )
+        es: EntriesScreen = app.screen  # type: ignore[assignment]
+        es._dispatch_menu_action("open_sections")
+        await pilot.pause()
+        assert isinstance(app.screen, SectionPickerScreen)
+
+
+@pytest.mark.asyncio
+async def test_menu_dispatch_unknown_action_sets_error_status():
+    """정의 안 된 action_id → error status, push X — 안전망 검증."""
+    from whooing_tui.screens.entries import EntriesScreen
+    fake = FakeClient(entries_by_section={"s1": _sample_entries()})
+    app = WhooingTuiApp(client=fake)  # type: ignore[arg-type]
+    async with app.run_test() as pilot:
+        await _wait_for(
+            lambda: isinstance(app.screen, EntriesScreen)
+            and app.screen.last_entry_count == 2,
+            timeout=3.0,
+        )
+        es: EntriesScreen = app.screen  # type: ignore[assignment]
+        es._dispatch_menu_action("__nonexistent__")
+        await pilot.pause()
+        assert "__nonexistent__" in es.last_status
+
+
+def test_menu_structure_includes_card_statement_import():
+    """메뉴 정의 자체에 명세서 import 항목이 포함됐는지 — wiring 안전망."""
+    from whooing_tui.screens.entries import EntriesScreen
+    menus = EntriesScreen._build_menus()
+    flat = [(m.name, it.action_id) for m in menus for it in m.items]
+    assert any(
+        action == "import_card_statement" for _, action in flat
+    ), f"메뉴 항목 누락: {flat}"
+
+
+@pytest.mark.asyncio
+async def test_f_key_without_entry_id_shows_error():
+    """entry_id 가 비어있는 거래는 첨부 불가 — error status. CL #51123."""
+    no_id_entries = [
+        {
+            "entry_id": "", "entry_date": "20260510",
+            "money": 1000, "l_account_id": "x20", "r_account_id": "x11",
+            "item": "x", "memo": "",
+        },
+    ]
+    fake = FakeClient(entries_by_section={"s1": no_id_entries})
+    app = WhooingTuiApp(client=fake)  # type: ignore[arg-type]
+    async with app.run_test() as pilot:
+        from whooing_tui.screens.entries import EntriesScreen
+        await _wait_for(
+            lambda: isinstance(app.screen, EntriesScreen)
+            and app.screen.last_entry_count == 1,
+            timeout=3.0,
+        )
+        es: EntriesScreen = app.screen  # type: ignore[assignment]
+        es.action_open_attachments()
+        await pilot.pause()
+        assert isinstance(app.screen, EntriesScreen)
+        assert "entry_id 가 없습니다" in es.last_status
+
+
+# ---- CL #51134+ (A6) 첨부 indicator -------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_attachment_indicator_appears_in_item_cell():
+    """첨부가 있는 거래의 item 셀에 📎N prefix."""
+    from whooing_core import attachments as core_attach
+    from whooing_tui import data as tui_data
+
+    fake = FakeClient(entries_by_section={"s1": _sample_entries()})
+    app = WhooingTuiApp(client=fake)  # type: ignore[arg-type]
+    async with app.run_test() as pilot:
+        from whooing_tui.screens.entries import EntriesScreen
+        await _wait_for(
+            lambda: isinstance(app.screen, EntriesScreen)
+            and app.screen.last_entry_count == 2,
+            timeout=3.0,
+        )
+        # e1 에 첨부 1개 시드.
+        tui_data.init_shared_schema()
+        root = tui_data.attachments_root()
+        src = tui_data.db_path().parent / "x.pdf"
+        src.write_bytes(b"PDF")
+        copied, sha, size = core_attach.copy_to_attachments(
+            src, attachments_root=root, attach_date="2026-05-10",
+        )
+        rel = str(copied.relative_to(root))
+        with tui_data.open_rw() as conn:
+            core_attach.upsert_attachment(
+                conn, entry_id="e1", section_id="s1",
+                file_path=rel, original_path=str(src),
+                original_filename="x.pdf",
+                file_size_bytes=size, file_sha256=sha,
+                mime_type="application/pdf", note=None,
+            )
+        # refresh 로 batch fetch + 재렌더.
+        es = app.screen  # type: ignore[assignment]
+        es.action_refresh()
+        await _wait_for(
+            lambda: es._entry_attachment_counts.get("e1", 0) >= 1, timeout=3.0,
+        )
+        table = es.query_one("#entries-table", DataTable)
+        # row 0 = e1 (가장 최근 entry_date). item col index = 4.
+        cell = str(table.get_cell_at((0, 4)))
+        assert cell.startswith("📎1"), f"expected 📎 prefix, got {cell!r}"
+        # row 1 = e2 (첨부 없음).
+        cell2 = str(table.get_cell_at((1, 4)))
+        assert "📎" not in cell2
+
+
+@pytest.mark.asyncio
+async def test_no_indicator_when_zero_attachments():
+    """첨부 없는 거래의 item 셀에는 📎 미표시 — 종전 동작 유지."""
+    fake = FakeClient(entries_by_section={"s1": _sample_entries()})
+    app = WhooingTuiApp(client=fake)  # type: ignore[arg-type]
+    async with app.run_test() as pilot:
+        from whooing_tui.screens.entries import EntriesScreen
+        await _wait_for(
+            lambda: isinstance(app.screen, EntriesScreen)
+            and app.screen.last_entry_count == 2,
+            timeout=3.0,
+        )
+        es = app.screen  # type: ignore[assignment]
+        assert es._entry_attachment_counts == {}
+        table = es.query_one("#entries-table", DataTable)
+        for row in range(table.row_count):
+            cell = str(table.get_cell_at((row, 4)))
+            assert "📎" not in cell

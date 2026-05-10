@@ -92,20 +92,55 @@ def filter_tags(
 ) -> list[str]:
     """`query` 가 포함된 태그만 (대소문자 무시) — 정렬 보존.
 
-    빈 query 면 입력 그대로. prefix 우선, 그 다음 substring (안정 정렬).
+    매칭 우선순위 (CL #51138+ H8 — 초성 검색 추가):
+      1. prefix (대소문자 무시).
+      2. substring (대소문자 무시).
+      3. **초성 substring** — query 가 한글 자모 (ㅎ/ㄱ 등) 또는 영문이면
+         태그의 초성 표현 ('스타벅스' → 'ㅅㅌㅂㅅ') 에 substring 으로.
+      4. **초성 subsequence** — 위 3 매칭 안 되면, query 자모가 순서대로
+         등장 (인접 X 도 OK). 예: 'ㅅㅂ' → '스타벅스' (ㅅ . ㅂ . 순).
+
+    빈 query 면 입력 그대로.
     """
+    from whooing_tui.ime import to_choseong_string
+
     q = (query or "").strip().lower()
     if not q:
         return list(tags)
+
     prefix: list[str] = []
     sub: list[str] = []
+    cho_sub: list[str] = []
+    cho_seq: list[str] = []
+    # query 자체가 한글 음절을 포함 안 할 때만 초성 매칭.
+    q_choseong_target = to_choseong_string(q)
+    use_choseong = (q_choseong_target == q)
+
+    def _is_subsequence(needle: str, haystack: str) -> bool:
+        i = 0
+        n = len(needle)
+        if n == 0:
+            return True
+        for c in haystack:
+            if c == needle[i]:
+                i += 1
+                if i == n:
+                    return True
+        return False
+
     for t in tags:
         tl = t.lower()
         if tl.startswith(q):
             prefix.append(t)
         elif q in tl:
             sub.append(t)
-    return prefix + sub
+        elif use_choseong:
+            t_cho = to_choseong_string(tl)
+            if q in t_cho:
+                cho_sub.append(t)
+            elif _is_subsequence(q, t_cho):
+                cho_seq.append(t)
+    return prefix + sub + cho_sub + cho_seq
 
 
 class TagsPickerScreen(ModalScreen[str | None]):

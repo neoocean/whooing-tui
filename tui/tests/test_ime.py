@@ -130,3 +130,36 @@ async def test_korean_letter_binding_fires_via_pilot_press():
         app.last = ""
         await pilot.press("ㅂ")
         assert app.last == "ko"
+
+
+# ---- CL #51138+ (H8) 초성 분해 -----------------------------------------
+
+
+def test_choseong_of_hangul():
+    from whooing_tui.ime import choseong_of
+    assert choseong_of("스") == "ㅅ"
+    assert choseong_of("벅") == "ㅂ"
+    assert choseong_of("가") == "ㄱ"
+    assert choseong_of("힣") == "ㅎ"
+
+
+def test_choseong_of_non_hangul_passthrough():
+    from whooing_tui.ime import choseong_of
+    assert choseong_of("A") == "A"
+    assert choseong_of("1") == "1"
+    assert choseong_of("!") == "!"
+    assert choseong_of("") == ""
+
+
+def test_to_choseong_string_korean_brand():
+    from whooing_tui.ime import to_choseong_string
+    assert to_choseong_string("스타벅스") == "ㅅㅌㅂㅅ"
+    assert to_choseong_string("맥도날드") == "ㅁㄷㄴㄷ"
+    assert to_choseong_string("카페") == "ㅋㅍ"
+
+
+def test_to_choseong_string_mixed():
+    from whooing_tui.ime import to_choseong_string
+    assert to_choseong_string("한국T맵") == "ㅎㄱTㅁ"
+    assert to_choseong_string("ABC") == "ABC"
+    assert to_choseong_string("") == ""

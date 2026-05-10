@@ -42,13 +42,13 @@ def test_init_shared_schema_creates_db_and_dirs(isolated_data_dir):
     assert p == isolated_data_dir / "whooing-data.sqlite"
     assert p.exists()
     assert (isolated_data_dir / "attachments").exists()
-    assert data.schema_version() == 4
+    assert data.schema_version() == 7
 
 
 def test_init_shared_schema_idempotent(isolated_data_dir):
     data.init_shared_schema()
     data.init_shared_schema()
-    assert data.schema_version() == 4
+    assert data.schema_version() == 7
 
 
 def test_open_rw_yields_sqlite_connection(isolated_data_dir):
@@ -120,3 +120,40 @@ def test_init_runs_legacy_migration_when_env_unset(tmp_path, monkeypatch):
     data.init_shared_schema()
     assert called["yes"] is True
     assert called["target"] == tmp_path
+
+
+# ---- CL #51123+ 첨부파일 위치 분리 (project/attachment, 단수) ------------
+
+
+def test_attachments_root_uses_attachments_env(tmp_path, monkeypatch):
+    """`$WHOOING_ATTACHMENTS_DIR` 가 있으면 그 값을 그대로 사용 — 첨부 전용
+    격리 환경 변수 (CL #51123+)."""
+    monkeypatch.setenv("WHOOING_ATTACHMENTS_DIR", str(tmp_path / "att"))
+    monkeypatch.setenv("WHOOING_DATA_DIR", str(tmp_path / "data"))
+    assert data.attachments_root() == tmp_path / "att"
+
+
+def test_attachments_root_falls_back_to_data_dir_when_only_data_env(
+    tmp_path, monkeypatch,
+):
+    """`$WHOOING_ATTACHMENTS_DIR` 가 없으면 `$WHOOING_DATA_DIR/attachments` —
+    기존 471 테스트 / conftest 격리 패턴 backward compat."""
+    monkeypatch.delenv("WHOOING_ATTACHMENTS_DIR", raising=False)
+    monkeypatch.setenv("WHOOING_DATA_DIR", str(tmp_path))
+    assert data.attachments_root() == tmp_path / "attachments"
+
+
+def test_attachments_root_default_is_project_attachment_singular(monkeypatch):
+    """env 가 모두 unset 일 때 monorepo 안에서는 `<project_root>/attachment`
+    (단수형) 로 떨어진다 — production default. 사용자 요청 CL #51123:
+    db/attachment 가 아니라 project root 직속 attachment 디렉터리."""
+    monkeypatch.delenv("WHOOING_ATTACHMENTS_DIR", raising=False)
+    monkeypatch.delenv("WHOOING_DATA_DIR", raising=False)
+    p = data.attachments_root()
+    # monorepo 안에서 실행 중이면 이름이 'attachment' (단수, db 와 분리).
+    # monorepo 외부 (pip install) fallback 일 때는 ~/.whooing/attachments.
+    assert p.name in {"attachment", "attachments"}
+    if p.name == "attachment":
+        # production default — db 디렉터리 (`db/`) 아래가 절대 아니어야 함.
+        assert p.parent.name != "db"
+        assert (p.parent / "tui").is_dir() and (p.parent / "core").is_dir()

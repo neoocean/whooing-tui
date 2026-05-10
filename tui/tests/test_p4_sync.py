@@ -48,6 +48,52 @@ def test_describe_deleted():
     assert out == "[whooing-tui] entry e123 deleted"
 
 
+# ---- CL #51141+ (H10) hashtag diff in P4 description --------------------
+
+
+def test_describe_with_added_tags():
+    out = p4_sync.describe_annotation(
+        entry_id="e1", memo_changed=False, tags=["식비", "외식"],
+        previous_tags=["식비"],
+    )
+    assert out == "[whooing-tui] entry e1 hashtags set [식비, 외식] (+외식)"
+
+
+def test_describe_with_removed_tags():
+    out = p4_sync.describe_annotation(
+        entry_id="e1", memo_changed=False, tags=["외식"],
+        previous_tags=["식비", "외식"],
+    )
+    assert out == "[whooing-tui] entry e1 hashtags set [외식] (-식비)"
+
+
+def test_describe_with_added_and_removed():
+    out = p4_sync.describe_annotation(
+        entry_id="e1", memo_changed=False, tags=["외식", "카페"],
+        previous_tags=["식비", "외식"],
+    )
+    # 추가 (+카페) + 제거 (-식비). 순서: added 먼저, removed 나중.
+    assert "+카페" in out
+    assert "-식비" in out
+
+
+def test_describe_no_diff_when_unchanged():
+    out = p4_sync.describe_annotation(
+        entry_id="e1", memo_changed=False, tags=["식비"],
+        previous_tags=["식비"],
+    )
+    # 변경 없음 — 괄호 부분 없음.
+    assert out == "[whooing-tui] entry e1 hashtags set [식비]"
+
+
+def test_describe_previous_tags_none_disables_diff():
+    """previous_tags=None — 종전 동작 (괄호 X)."""
+    out = p4_sync.describe_annotation(
+        entry_id="e1", memo_changed=False, tags=["식비"],
+    )
+    assert out == "[whooing-tui] entry e1 hashtags set [식비]"
+
+
 def test_describe_noop_fallback():
     """memo 도 tags 도 없고 deleted 도 아니면 noop — 호출자 버그 노출용."""
     out = p4_sync.describe_annotation(
@@ -232,3 +278,215 @@ def test_submit_runs_reconcile_and_submit_when_mapped(monkeypatch, tmp_path):
     assert any(line.startswith("where ") for line in log_lines)
     assert any("reconcile" in line for line in log_lines)
     assert any("submit -d" in line and desc in line for line in log_lines)
+
+
+# ---- CL #51124+ 첨부 description / 다중 파일 submit ---------------------
+
+
+def test_describe_attachment_add_full_meta():
+    out = p4_sync.describe_attachment_add(
+        entry_id="e123", filename="invoice.pdf",
+        size_bytes=12345, sha256="ab12cd34ef567890" * 4,  # 64 chars
+    )
+    assert out == (
+        "[whooing-tui] entry e123 attachment add: invoice.pdf "
+        "(12345 bytes, sha256=ab12cd34)"
+    )
+
+
+def test_describe_attachment_add_no_size_no_sha():
+    """defensive — caller 가 stat 못 한 경우 size/sha 부분 생략."""
+    out = p4_sync.describe_attachment_add(
+        entry_id="e1", filename="x.pdf", size_bytes=None, sha256=None,
+    )
+    assert out == "[whooing-tui] entry e1 attachment add: x.pdf"
+
+
+def test_describe_attachment_add_size_only():
+    out = p4_sync.describe_attachment_add(
+        entry_id="e1", filename="x.pdf", size_bytes=100, sha256=None,
+    )
+    assert out == "[whooing-tui] entry e1 attachment add: x.pdf (100 bytes)"
+
+
+def test_describe_attachment_delete_simple():
+    out = p4_sync.describe_attachment_delete(
+        entry_id="e123", filename="invoice.pdf",
+    )
+    assert out == "[whooing-tui] entry e123 attachment delete: invoice.pdf"
+
+
+def test_describe_attachment_delete_dedup_kept():
+    """dedup 으로 디스크 파일이 보존되면 description 에 명시."""
+    out = p4_sync.describe_attachment_delete(
+        entry_id="e123", filename="invoice.pdf", kept_other_refs=2,
+    )
+    assert out == (
+        "[whooing-tui] entry e123 attachment delete "
+        "(db only, file kept — 2 other refs): invoice.pdf"
+    )
+
+
+def test_submit_files_to_p4_passes_all_paths_to_reconcile_and_submit(
+    monkeypatch, tmp_path,
+):
+    """다중 파일 submit — reconcile / submit 양쪽 명령에 모든 path 가 인자로
+    전달되는지 (한 CL 묶음 보장). 사용자 요청 CL #51124."""
+    log_file = tmp_path / "p4-calls.txt"
+    fake_p4 = tmp_path / "p4"
+    fake_p4.write_text(f"#!/bin/sh\necho \"$@\" >> {log_file}\nexit 0\n")
+    fake_p4.chmod(0o755)
+    monkeypatch.setenv("WHOOING_P4_BIN", str(fake_p4))
+    db = tmp_path / "db.sqlite"
+    db.write_bytes(b"")
+    att = tmp_path / "x.pdf"
+    att.write_bytes(b"PDF")
+    desc = "[whooing-tui] entry e1 attachment add: x.pdf (3 bytes, sha256=abcd1234)"
+    p4_sync.submit_files_to_p4([db, att], desc, blocking=True)
+    lines = log_file.read_text().strip().splitlines()
+    # 두 path 모두에 where 호출.
+    where_lines = [l for l in lines if l.startswith("where ")]
+    assert len(where_lines) == 2
+    assert any(str(db) in l for l in where_lines)
+    assert any(str(att) in l for l in where_lines)
+    # reconcile 한 번에 두 path 다 포함.
+    reconcile = next(l for l in lines if "reconcile" in l)
+    assert str(db) in reconcile
+    assert str(att) in reconcile
+    # submit 한 번에 두 path 다 + description.
+    submit = next(l for l in lines if "submit -d" in l)
+    assert desc in submit
+    assert str(db) in submit
+    assert str(att) in submit
+
+
+def test_submit_files_to_p4_skips_unmapped_paths(monkeypatch, tmp_path):
+    """매핑 안 된 path 는 silent skip — 매핑된 path 만 reconcile/submit 인자."""
+    log_file = tmp_path / "p4-calls.txt"
+    fake_p4 = tmp_path / "p4"
+    # where: 첫 인자가 db 면 0, 그 외 path 면 1 (매핑 외).
+    db = tmp_path / "db.sqlite"
+    db.write_bytes(b"")
+    att = tmp_path / "x.pdf"
+    att.write_bytes(b"PDF")
+    fake_p4.write_text(
+        f"#!/bin/sh\n"
+        f"echo \"$@\" >> {log_file}\n"
+        f"if [ \"$1\" = \"where\" ] && [ \"$2\" != \"{db}\" ]; then\n"
+        f"  exit 1\n"
+        f"fi\n"
+        f"exit 0\n",
+    )
+    fake_p4.chmod(0o755)
+    monkeypatch.setenv("WHOOING_P4_BIN", str(fake_p4))
+    p4_sync.submit_files_to_p4([db, att], "test", blocking=True)
+    lines = log_file.read_text().strip().splitlines()
+    # reconcile/submit 모두 db 만 포함, att 는 빠짐.
+    reconcile = next(l for l in lines if "reconcile" in l)
+    assert str(db) in reconcile
+    assert str(att) not in reconcile
+    submit = next(l for l in lines if "submit -d" in l)
+    assert str(db) in submit
+    assert str(att) not in submit
+
+
+def test_submit_files_to_p4_silent_when_no_paths_mapped(monkeypatch, tmp_path):
+    """모든 path 가 매핑 외 → reconcile/submit 호출 없이 silent return."""
+    log_file = tmp_path / "p4-calls.txt"
+    fake_p4 = tmp_path / "p4"
+    fake_p4.write_text(
+        f"#!/bin/sh\n"
+        f"echo \"$@\" >> {log_file}\n"
+        f"if [ \"$1\" = \"where\" ]; then exit 1; fi\n"
+        f"exit 0\n",
+    )
+    fake_p4.chmod(0o755)
+    monkeypatch.setenv("WHOOING_P4_BIN", str(fake_p4))
+    p4_sync.submit_files_to_p4(
+        [tmp_path / "db.sqlite", tmp_path / "x.pdf"], "test", blocking=True,
+    )
+    lines = log_file.read_text().splitlines()
+    # tmp_path 자체에 'submit'/'reconcile' 부분 문자열이 들어갈 수 있어 (테스트
+    # 이름 기반) 정확한 명령 prefix 로 검사. p4 호출 첫 인자가 명령 이름.
+    assert all(not l.startswith("reconcile ") for l in lines)
+    assert all(not l.startswith("submit ") for l in lines)
+
+
+def test_submit_files_to_p4_empty_list_is_noop(monkeypatch, tmp_path):
+    """paths 가 빈 리스트 — p4 실행 자체 X."""
+    log_file = tmp_path / "p4-calls.txt"
+    fake_p4 = tmp_path / "p4"
+    fake_p4.write_text(f"#!/bin/sh\necho \"$@\" >> {log_file}\nexit 0\n")
+    fake_p4.chmod(0o755)
+    monkeypatch.setenv("WHOOING_P4_BIN", str(fake_p4))
+    p4_sync.submit_files_to_p4([], "test", blocking=True)
+    # 빈 list → bin 호출조차 없음.
+    assert not log_file.exists() or log_file.read_text() == ""
+
+
+def test_submit_db_to_p4_still_works_via_files_wrapper(monkeypatch, tmp_path):
+    """submit_db_to_p4 가 submit_files_to_p4 의 1-원소 wrapper 로 동작 — 기존
+    호출자 (entries 의 _persist_local) 회귀 보호."""
+    log_file = tmp_path / "p4-calls.txt"
+    fake_p4 = tmp_path / "p4"
+    fake_p4.write_text(f"#!/bin/sh\necho \"$@\" >> {log_file}\nexit 0\n")
+    fake_p4.chmod(0o755)
+    monkeypatch.setenv("WHOOING_P4_BIN", str(fake_p4))
+    db = tmp_path / "db.sqlite"
+    db.write_bytes(b"")
+    p4_sync.submit_db_to_p4(db, "[whooing-tui] entry e1 memo upsert", blocking=True)
+    lines = log_file.read_text().strip().splitlines()
+    assert any("submit -d" in l and str(db) in l for l in lines)
+
+
+# ---- CL #51136+ (A4) on_complete callback ------------------------------
+
+
+def test_submit_callback_invoked_with_status_no_p4(monkeypatch, tmp_path):
+    """p4 부재 → callback 이 'no-p4' 로 호출."""
+    monkeypatch.delenv("WHOOING_P4_BIN", raising=False)
+    statuses = []
+    with patch("whooing_tui.p4_sync.shutil.which", return_value=None):
+        p4_sync.submit_files_to_p4(
+            [tmp_path / "x.sqlite"], "test",
+            blocking=True, on_complete=statuses.append,
+        )
+    assert statuses == ["no-p4"]
+
+
+def test_submit_callback_invoked_with_status_unmapped(monkeypatch, tmp_path):
+    """매핑 외 → 'unmapped'."""
+    fake_p4 = tmp_path / "p4"
+    fake_p4.write_text("#!/bin/sh\nif [ \"$1\" = \"where\" ]; then exit 1; fi\nexit 0\n")
+    fake_p4.chmod(0o755)
+    monkeypatch.setenv("WHOOING_P4_BIN", str(fake_p4))
+    statuses = []
+    p4_sync.submit_files_to_p4(
+        [tmp_path / "x.sqlite"], "test",
+        blocking=True, on_complete=statuses.append,
+    )
+    assert statuses == ["unmapped"]
+
+
+def test_submit_callback_invoked_with_status_ok(monkeypatch, tmp_path):
+    """모든 단계 OK → 'ok'."""
+    fake_p4 = tmp_path / "p4"
+    fake_p4.write_text("#!/bin/sh\nexit 0\n")
+    fake_p4.chmod(0o755)
+    monkeypatch.setenv("WHOOING_P4_BIN", str(fake_p4))
+    statuses = []
+    db = tmp_path / "x.sqlite"
+    db.write_bytes(b"")
+    p4_sync.submit_files_to_p4(
+        [db], "test", blocking=True, on_complete=statuses.append,
+    )
+    assert statuses == ["ok"]
+
+
+def test_submit_callback_with_empty_paths_returns_noop(tmp_path):
+    """paths 빈 list → 'noop'."""
+    statuses = []
+    p4_sync.submit_files_to_p4(
+        [], "test", blocking=True, on_complete=statuses.append,
+    )
+    assert statuses == ["noop"]

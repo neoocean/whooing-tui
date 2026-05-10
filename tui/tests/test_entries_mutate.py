@@ -269,7 +269,10 @@ async def test_update_persists_memo_and_tags_to_local_sqlite():
 
 @pytest.mark.asyncio
 async def test_delete_purges_local_annotation_and_tags():
-    """CL #51076+: 거래 삭제 시 로컬 annotation/해시태그도 함께 정리."""
+    """CL #51076+: 거래 삭제 시 로컬 annotation/해시태그도 함께 정리.
+    CL #51132+ (A1): 첨부 row + 디스크 파일도 함께 정리 — orphan 방지.
+    """
+    from whooing_core import attachments as core_attach
     from whooing_core import db as core_db
     from whooing_tui import data as tui_data
 
@@ -277,13 +280,30 @@ async def test_delete_purges_local_annotation_and_tags():
     app = WhooingTuiApp(client=fake)  # type: ignore[arg-type]
     async with app.run_test() as pilot:
         es = await _open_entries(app, pilot)
-        # 먼저 annotation 을 db 에 심어둔다 — 삭제가 정말 정리하는지 확인.
         tui_data.init_shared_schema()
+        # annotation + 해시태그 + 첨부 모두 심어둠.
         with tui_data.open_rw() as conn:
             core_db.upsert_annotation(
                 conn, entry_id="e1", section_id="s1", note="기존메모",
             )
             core_db.set_hashtags(conn, "e1", ["삭제전"])
+        # 첨부 디스크 + db row 모두.
+        root = tui_data.attachments_root()
+        src = tui_data.db_path().parent / "test_receipt.pdf"
+        src.write_bytes(b"PDF FAKE")
+        copied, sha, size = core_attach.copy_to_attachments(
+            src, attachments_root=root, attach_date="2026-05-10",
+        )
+        rel = str(copied.relative_to(root))
+        with tui_data.open_rw() as conn:
+            core_attach.upsert_attachment(
+                conn, entry_id="e1", section_id="s1",
+                file_path=rel, original_path=str(src),
+                original_filename="test_receipt.pdf",
+                file_size_bytes=size, file_sha256=sha,
+                mime_type="application/pdf", note=None,
+            )
+        # 거래 삭제.
         es.action_delete_entry()
         await pilot.pause()
         assert isinstance(app.screen, ConfirmModal)
@@ -296,9 +316,13 @@ async def test_delete_purges_local_annotation_and_tags():
             lambda: app.screen.query_one("#entries-table", DataTable).row_count == 0,
             timeout=2.0,
         )
+        # annotation + tag + 첨부 row + 디스크 파일 모두 정리.
         with tui_data.open_ro() as conn:
             info = core_db.get_annotations_for(conn, ["e1"])
+            attach = core_attach.list_attachments_for(conn, ["e1"])
         assert info == {}
+        assert attach == {}
+        assert not copied.exists()
 
 
 @pytest.mark.asyncio
@@ -354,3 +378,62 @@ async def test_delete_with_no_selection_shows_error():
         # ConfirmModal 이 뜨면 안 됨
         assert not isinstance(app.screen, ConfirmModal)
         assert "선택된 거래가 없습니다" in es.last_status
+
+
+# ---- CL #51149+ (H7) tag inline hint -----------------------------------
+
+
+@pytest.mark.asyncio
+async def test_tags_input_typing_shows_hint():
+    """타이핑 중 매칭 태그가 hint Static 에 표시 — Enter 안 눌러도."""
+    from whooing_tui.screens.entries import EntriesScreen
+    from whooing_tui.screens.edit_entry import EntryEditDialog
+    from textual.widgets import Input, Static
+
+    fake = FakeClient()
+    app = WhooingTuiApp(client=fake)  # type: ignore[arg-type]
+    async with app.run_test() as pilot:
+        es = await _open_entries(app, pilot)
+        # 기존 태그 시드 — _all_tags_db 에 들어가도록 db.
+        from whooing_core import db as core_db
+        from whooing_tui import data as tui_data
+        with tui_data.open_rw() as conn:
+            core_db.set_hashtags(conn, "e_seed_1", ["식비", "식권", "교통비"])
+            core_db.upsert_annotation(
+                conn, entry_id="e_seed_1", section_id="s1", note=None,
+            )
+        es.action_edit_entry()
+        await pilot.pause()
+        dialog = app.screen
+        assert isinstance(dialog, EntryEditDialog)
+        tags_input = dialog.query_one("#f-tags", Input)
+        # 사용자가 "식" 까지 타이핑.
+        tags_input.value = "#식"
+        # on_input_changed 가 호출돼 hint 갱신.
+        await pilot.pause()
+        hint = dialog.query_one("#f-tags-hint", Static)
+        rendered = str(hint.render())
+        # 매칭 후보 (식비, 식권) 가 hint 에.
+        assert "식비" in rendered or "식권" in rendered
+
+
+@pytest.mark.asyncio
+async def test_tags_input_empty_clears_hint():
+    """입력란 비면 hint 도 빈 문자열."""
+    from whooing_tui.screens.entries import EntriesScreen
+    from whooing_tui.screens.edit_entry import EntryEditDialog
+    from textual.widgets import Input, Static
+
+    fake = FakeClient()
+    app = WhooingTuiApp(client=fake)  # type: ignore[arg-type]
+    async with app.run_test() as pilot:
+        es = await _open_entries(app, pilot)
+        es.action_edit_entry()
+        await pilot.pause()
+        dialog = app.screen
+        assert isinstance(dialog, EntryEditDialog)
+        tags_input = dialog.query_one("#f-tags", Input)
+        tags_input.value = ""
+        await pilot.pause()
+        hint = dialog.query_one("#f-tags-hint", Static)
+        assert str(hint.render()).strip() == ""

@@ -121,10 +121,34 @@ async def _extract_rows(
 
 
 def _dedup(
-    rows: list[CSVRow], ledger: list[dict[str, Any]], tolerance_days: int = 2,
-) -> tuple[list[dict[str, Any]], list[CSVRow]]:
-    """(matched_existing, new_proposals) — same date±N + same amount → matched."""
-    from datetime import datetime, timedelta
+    rows: list[CSVRow],
+    ledger: list[dict[str, Any]],
+    tolerance_days: int = 2,
+    *,
+    section_id: str | None = None,
+    check_import_log: bool = True,
+) -> tuple[list[dict[str, Any]], list[CSVRow], list[CSVRow]]:
+    """(matched_existing, previously_imported, new_proposals).
+
+    CL #51129+ dedup 강화: 종전엔 ledger 매칭 (현재 후잉 거래) 만 했으나,
+    `statement_import_log` 의 자연키 매칭 (date+amount+merchant) 도 검사 —
+    같은 명세서를 두 번 import 하거나 두 명세서가 동일 거래를 보고할 때
+    **이미 import 했음** 안내 + skip.
+
+    분류 우선순위:
+      1. **previously_imported** — `statement_import_log` 의 'inserted' /
+         'matched_existing' 상태 row 가 같은 (entry_date, total_amount=
+         row.amount, merchant=row.merchant) 로 존재. ledger 매칭보다 강함
+         (사용자가 명시적으로 "이미 입력했음" 을 신호한 기록).
+      2. **matched_existing** — ledger (현재 후잉 거래) 에 (date±N, amount)
+         매칭. 종전 동작 그대로.
+      3. **new** — 둘 다 매칭 안 된 신규 후보.
+
+    `section_id` / `check_import_log` 는 caller (StatementImportScreen) 가
+    open_ro 연결을 들고 있을 때만 의미 있는 — 매개변수로 분리해 단위 테스트
+    (검사 off) 와 통합 흐름 (검사 on) 양쪽 깨끗하게.
+    """
+    from datetime import datetime
 
     def _parse(d: str) -> datetime | None:
         try:
@@ -132,10 +156,36 @@ def _dedup(
         except (ValueError, TypeError):
             return None
 
+    # 1) previously_imported — import_log 자연키 매칭.
+    previously_imported: list[CSVRow] = []
+    new_after_log: list[CSVRow] = []
+    if check_import_log:
+        try:
+            from whooing_tui import data as tui_data
+            with tui_data.open_ro() as conn:
+                for r in rows:
+                    hits = core_db.find_imports_by_natural_key(
+                        conn,
+                        entry_date=r.date,
+                        total_amount=r.amount,
+                        merchant=r.merchant,
+                        section_id=section_id,
+                    )
+                    if hits:
+                        previously_imported.append(r)
+                    else:
+                        new_after_log.append(r)
+        except Exception:  # pragma: no cover — db 부재 시 silent fallback.
+            log.debug("import_log dedup 실패 — silent fallback", exc_info=True)
+            new_after_log = list(rows)
+    else:
+        new_after_log = list(rows)
+
+    # 2) matched_existing — ledger 기반.
     matched: list[dict[str, Any]] = []
     new: list[CSVRow] = []
     used_ids: set[str] = set()
-    for r in rows:
+    for r in new_after_log:
         rdate = _parse(r.date)
         if not rdate:
             new.append(r)
@@ -163,7 +213,7 @@ def _dedup(
             matched.append({"row": r, "ledger": match})
         else:
             new.append(r)
-    return matched, new
+    return matched, previously_imported, new
 
 
 # ---- Main screen ----------------------------------------------------
@@ -219,6 +269,7 @@ class StatementImportScreen(Screen):
         self.issuer: str | None = None
         self.rows: list[CSVRow] = []
         self.matched: list[dict[str, Any]] = []
+        self.previously_imported: list[CSVRow] = []   # CL #51129+: import_log dedup.
         self.proposals: list[CSVRow] = []
 
     def compose(self) -> ComposeResult:
@@ -286,10 +337,18 @@ class StatementImportScreen(Screen):
             start_date=d0.strftime("%Y%m%d"),
             end_date=d1.strftime("%Y%m%d"),
         )
-        self.matched, self.proposals = _dedup(self.rows, ledger)
+        # CL #51129+: 3-tuple — (ledger 매칭, import_log 매칭, 신규).
+        self.matched, self.previously_imported, self.proposals = _dedup(
+            self.rows, ledger, section_id=self.section_id,
+        )
 
+        prev_part = (
+            f" / {len(self.previously_imported)} 이미 import"
+            if self.previously_imported else ""
+        )
         self._set_status(
-            f"{len(self.rows)} 건 추출 → {len(self.matched)} 기존 / {len(self.proposals)} 신규 (Ctrl+Enter 로 입력)"
+            f"{len(self.rows)} 건 추출 → {len(self.matched)} 기존 ledger"
+            f"{prev_part} / {len(self.proposals)} 신규 (Ctrl+Enter 로 입력)"
         )
         self._populate_table()
 
@@ -301,6 +360,12 @@ class StatementImportScreen(Screen):
             table.add_row(
                 "matched", r.date, r.merchant[:30],
                 f"{r.amount:,}", f"= entry {e.get('entry_id')}",
+            )
+        for r in self.previously_imported:
+            # CL #51129+: import_log 매칭 — 이미 import 된 거래.
+            table.add_row(
+                "prev", r.date, r.merchant[:30],
+                f"{r.amount:,}", "(이미 import 됨 — skip)",
             )
         for r in self.proposals:
             table.add_row(

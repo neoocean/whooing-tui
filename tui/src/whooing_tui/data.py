@@ -6,15 +6,27 @@ wrapper (whooing-mcp-server-wrapper) 가 같은 db 를 read-only 로 SELECT
 경로의 외부 사용자는 없다. `open_ro()` API 는 안전성 / 명분 분리를 위해
 그대로 유지 (다른 도구가 미래에 합류할 가능성).
 
-Path 정책 (v0.15.0+, monorepo, CL #51107+):
-  $WHOOING_DATA_DIR > <project_root>/db/ > ~/.whooing/   (default)
-   └─ whooing-data.sqlite            sqlite db (annotations / hashtags /
-                                     entry_attachments / statement_import_log)
-   └─ attachments/YYYY/YYYY-MM-DD/   sha256 dedup file storage
+Path 정책 (v0.18.0+, monorepo, CL #51123+):
 
-CL #51107 부터 default 가 `<project>/db/` 로 변경 — db 파일이 P4 에 들어가
-변경 이벤트가 발생할 때마다 자동 submit (mutation 추적 / 원격 동기화 목적).
+  db 위치  ($WHOOING_DATA_DIR > <project_root>/db/ > ~/.whooing/):
+    whooing-data.sqlite              sqlite db (annotations / hashtags /
+                                     entry_attachments / statement_import_log)
+
+  첨부파일 위치  (db 와 분리 — 사용자 요청 CL #51123):
+    $WHOOING_ATTACHMENTS_DIR
+      > $WHOOING_DATA_DIR/attachments  (테스트 격리 — env set 시 backward compat)
+      > <project_root>/attachment/     (production default — db/ 와 분리, 단수)
+      > ~/.whooing/attachments         (fallback)
+        └─ YYYY/YYYY-MM-DD/<filename>  sha256 dedup file storage
+
+CL #51107 부터 db default 가 `<project>/db/` 로 변경 — db 파일이 P4 에
+들어가 변경 이벤트가 발생할 때마다 자동 submit (mutation 추적 / 원격 동기화).
 기존 `~/.whooing/whooing-data.sqlite` 가 있으면 1회 마이그레이션.
+
+CL #51123 부터 첨부파일 default 가 `<project>/attachment/` (단수) — db 디렉토리
+와 분리. db 파일은 SQLite 단일 binary 라 P4 변경 추적이 단순하지만, 첨부는
+바이너리 N 개라 별도 디렉토리에서 별도 lifecycle (사용자 의도). 기존
+`<data_dir>/attachments/` 위치는 env override 시에만 유지.
 """
 
 from __future__ import annotations
@@ -100,8 +112,29 @@ def db_path() -> Path:
 
 
 def attachments_root() -> Path:
-    """첨부 storage root (TUI write, wrapper read-only)."""
-    return data_dir() / "attachments"
+    """첨부 storage root (TUI write, wrapper read-only).
+
+    우선순위 (CL #51123+):
+      1. `$WHOOING_ATTACHMENTS_DIR` (명시 override — 첨부 전용 격리).
+      2. `$WHOOING_DATA_DIR/attachments` — data dir 만 격리할 때 (테스트
+         conftest 의 일반 패턴) backward compat 로 그 안에 attachments 를
+         둔다. 기존 471 테스트가 이 path 를 가정하므로 깨지면 안 됨.
+      3. `<project_root>/attachment` — production default. **단수형** (`attachment`)
+         이고 `db/` 와 분리. 사용자 요청 CL #51123: "첨부파일은 프로젝트
+         루트 하위의 attachment 입니다 ... 첨부파일은 db/attachment 하위가
+         아닙니다."
+      4. `~/.whooing/attachments` — monorepo 외부 (pip install) fallback.
+    """
+    explicit = os.getenv("WHOOING_ATTACHMENTS_DIR")
+    if explicit:
+        return Path(explicit).expanduser()
+    explicit_data = os.getenv("WHOOING_DATA_DIR")
+    if explicit_data:
+        return Path(explicit_data).expanduser() / "attachments"
+    project = _project_root()
+    if project is not None:
+        return project / "attachment"
+    return _legacy_home_dir() / "attachments"
 
 
 def init_shared_schema() -> Path:

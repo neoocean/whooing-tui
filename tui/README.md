@@ -9,7 +9,50 @@
 > [`mcp/`](../mcp) 에 보존되며, TUI 의 `mcp_bridge.py` 가 그 `OfficialMcpClient`
 > 를 한정적으로 호출 (deprecated, 후속 정리 예정).
 
-**현재 0.17.2 (CL #51122)** — Phase 1~6 + 다음 누적 변경:
+**현재 0.50.0 (CL #51158)** — Phase 1~7 + 다음 누적 변경.
+
+> **0.18.0 ~ 0.50.0 핵심 변경 요약** (CL #51123~#51158, 2026-05-10~11):
+> - **첨부 (CL #51123~#51124, #51132~)**: 거래 ↔ 파일 1:N 첨부. 저장 위치
+>   `<project>/attachment/YYYY/YYYY-MM-DD/`. sha256 dedup + db row 함께 P4
+>   자동 submit. 신규 keys: `f`(첨부 화면) / `a`(추가) / `d`(삭제) / `o`
+>   (외부 viewer) / `e`(note 편집). 거래 row 의 item 컬럼 prefix `📎N`.
+>   휴지통 (`WHOOING_ATTACHMENT_TRASH=1`) / size cap (`WHOOING_MAX_ATTACHMENT
+>   _BYTES=...` default 100MB) / paste 자동 / FilePicker / GC CLI
+>   (`make gc-attachments[-go]`) / export CLI (`make export-attachments
+>   ENTRY=eN OUT=x.zip`) / audit log (`attachment_audit_log` 테이블).
+> - **좁은 터미널 4단계 (CL #51125)**: ≥80 정상 / <80 memo 숨김 / <60
+>   left·right 약어 (헤더 L/R, 한글 2글자) / <45 right 숨김 / <35 left 숨김.
+> - **한국식 줄임말 (CL #51127, #51130)**: `(주)스타벅스` → "스벅",
+>   `스타벅스코리아` → "스벅". 회사 prefix/suffix strip + 4글자 1+3 + 5+
+>   first 2.
+> - **F10 풀다운 메뉴 (CL #51126, #51131)**: Header 아래 항상 노출.
+>   파일/입력/화면/도움말. EntriesScreen + AccountsScreen 둘 다.
+> - **카드 명세서 import (CL #51126)**: 메뉴 → 입력 → "카드 명세서 import"
+>   → 파일 경로 → 카드 계정 → `StatementImportScreen` (HTML/CSV/PDF 5개
+>   카드사). dedup 강화 (CL #51129) — `statement_import_log` 자연키 매칭.
+> - **PDF 영수증 자동 매칭/첨부 (CL #51128)**: 메뉴 → 입력 → "PDF 영수증
+>   첨부" → 추출 (date/amount/merchant) → 후잉 거래 ±7d 매칭 → 자동 첨부
+>   또는 거래 제안 dialog (prefilled).
+> - **해시태그 강화 (CL #51133, #51135, #51138, #51141, #51151)**:
+>   section_id 인덱싱, rename/merge/delete (메뉴 화면 → 해시태그 관리…),
+>   초성 검색 (`ㅅㅂ` → 스벅), inline limit env, P4 desc diff (+/-),
+>   tag colors (`tag_meta` 테이블).
+> - **multi-select + 일괄 태그 (CL #51145)**: space 토글, `#` 일괄 적용.
+> - **예산/목표/매월입력 (CL #51152~#51154)**: 메뉴 → 화면 → 예산 편집…
+>   / 목표 편집… (Tab 으로 장기↔월별), 입력 → 매월입력 거래 관리. mutating
+>   endpoint 는 *추정* — 라이브 검증 필요.
+> - **F10 메뉴바 mixin (CL #51131)**: `MenuBarMixin` + `menubar_bindings()`.
+> - **첨부 orphan 정리 + GC (CL #51132)**: `_purge_local` 이 첨부도 정리,
+>   `make gc-attachments` 로 stale orphan 청소.
+> - **schema v4 → v7 (CL #51155)**: lightweight migration (entry_hashtags
+>   .section_id / attachment_audit_log / tag_meta).
+> - **코드 정리 (CL #51155~#51158)**: P0 fixes (schema bump / receipt
+>   mirror / p4 thread isolation), widget 통합 (InputModal / ConfirmModal),
+>   테스트 helper 통합, entries.py pure helper 추출 (entries_compact).
+
+**과거 버전 핵심:**
+
+
 
 - **Phase 1**: 핵심 라이브러리 + 헤드리스 CLI (CL #50931+, 0.1.0)
 - **Phase 2a**: HomeScreen → CL #51023 부터 EntriesScreen 으로 흡수 (자체 부팅).

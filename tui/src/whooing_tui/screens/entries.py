@@ -15,6 +15,10 @@ accounts / entries 를 chain 으로 부팅한다 (별도 HomeScreen 없이):
   s   SectionPickerScreen 으로 push — 섹션 선택 후 dismiss → 자동 재부팅.
   a   AccountsScreen 으로 push — 계정과목 조회 / 추가 / 수정 / 삭제.
       돌아온 후 자동으로 entries 재로드 (cache 가 invalidate 됐을 수 있음).
+  f   AttachmentBrowserScreen — 선택된 거래의 첨부파일 list / 추가 / 삭제 /
+      열기. 파일은 `<project_root>/attachment/YYYY/YYYY-MM-DD/<filename>`
+      에 sha256 dedup 저장, 거래 ↔ 파일 1:N 관계는 sqlite `entry_attachments`
+      테이블 (CL #51123+).
 
 키 바인딩 (Footer 가 표시):
   q / escape       앱 종료 (initial screen 이므로 pop 이 아닌 exit).
@@ -22,6 +26,7 @@ accounts / entries 를 chain 으로 부팅한다 (별도 HomeScreen 없이):
   + / -            윈도우 ±7일.
   s / a            섹션 picker / 계정과목 화면 push.
   n / Enter / d    거래 추가 / 수정 / 삭제 (EntryEditDialog / Confirm).
+  f                선택 거래의 첨부파일 화면 (AttachmentBrowserScreen).
   ?                화면 도움말 (HelpModal).
 
 DataTable 컬럼:
@@ -40,10 +45,10 @@ from rich.text import Text
 from textual import work
 from textual.app import ComposeResult
 from textual.binding import Binding
-from textual.containers import Vertical
+from textual.containers import Container, Horizontal, Vertical
 from textual.coordinate import Coordinate
-from textual.screen import Screen
-from textual.widgets import DataTable, Footer, Header, Static
+from textual.screen import ModalScreen, Screen
+from textual.widgets import Button, DataTable, Footer, Header, Input, Label, Static
 
 from whooing_core import db as core_db
 
@@ -61,6 +66,14 @@ from whooing_tui.state import (
     default_section_id_from_env,
     load_last_section_id,
     save_last_section_id,
+)
+from whooing_tui.widgets import (
+    MenuBar,
+    MenuBarMixin,
+    MenuItem,
+    MenuPopup,
+    MenuSpec,
+    menubar_bindings,
 )
 
 log = logging.getLogger(__name__)
@@ -93,8 +106,8 @@ def _fmt_date(v: Any) -> str:
     return s
 
 
-class EntriesScreen(Screen):
-    """활성 섹션의 거래내역 화면."""
+class EntriesScreen(MenuBarMixin, Screen):
+    """활성 섹션의 거래내역 화면. F10 메뉴바 (MenuBarMixin)."""
 
     DEFAULT_CSS = """
     EntriesScreen {
@@ -157,6 +170,9 @@ class EntriesScreen(Screen):
         Binding("enter", "context_enter", "Enter", show=True, priority=True),
         *bind_ko("e", "edit_entry", "Edit", show=True, priority=True),
         *bind_ko("d", "delete_entry", "Delete", show=True, priority=True),
+        # CL #51123+: 'f' (또는 ㄹ) — 선택 거래의 첨부파일 browser. sentinel
+        # row 또는 entry_id 가 없으면 status 안내 후 noop.
+        *bind_ko("f", "open_attachments", "Files", show=True, priority=True),
         *bind_ko("r", "refresh", "Refresh", show=True, priority=True),
         *bind_ko("c", "clear_filter", "Clear", show=True, priority=True),
         Binding("left", "prev_column", "←", show=False, priority=True),
@@ -169,6 +185,11 @@ class EntriesScreen(Screen):
         Binding("plus", "extend_window", "+7d", show=True),
         Binding("minus", "shrink_window", "-7d", show=True),
         Binding("equals_sign", "extend_window", "", show=False),  # '+' 키 (no shift)
+        # CL #51145+ (H6) multi-select — space 토글 / # 일괄 태그.
+        Binding("space", "toggle_selection", "Sel", show=True, priority=True),
+        Binding("number_sign", "batch_tag", "Batch tag", show=True, priority=True),
+        # CL #51126+ F10 메뉴 — CL #51131+ 부터 menubar_bindings() 로 추출.
+        *menubar_bindings(),
     ]
 
     # DataTable 의 컬럼 순서 — _active_col index 와 1:1 매핑. _render_table /
@@ -197,11 +218,92 @@ class EntriesScreen(Screen):
     # 에 경고 띄움 (DESIGN §4.3 + MEMORY §7).
     _SERVER_PAGE_CAP = 100
 
-    # CL #51120+: 좁은 터미널 컴팩트 모드 임계값. 미만이면 left/right/memo
-    # 컬럼을 width=0 으로 시각상 숨김 (iPhone Blink 세로 ~40-50 셀 우선).
-    # 임계값 60 = "기본 6 컬럼이 모두 보이려면 최소 이 정도 폭" 의 보수
-    # 추정 (left=12 + 다른 5 컬럼 자동 + 테두리 = ~58+).
-    _NARROW_THRESHOLD = 60
+    # CL #51126+: F10 풀다운 메뉴바. 사용자 요청 — 기능이 늘어나면서 모든
+    # 진입점을 한 곳에. 메뉴는 모듈 함수 _build_menus 가 list 로 반환 —
+    # 화면이 메뉴 항목 선택 (action_id) 을 받아 기존 action_* 또는 신규
+    # action_import_card_statement 등으로 dispatch.
+    @staticmethod
+    def _build_menus() -> tuple[MenuSpec, ...]:
+        return (
+            MenuSpec(
+                name="파일",
+                items=(
+                    MenuItem("재로드 (r)", "refresh"),
+                    MenuItem("종료 (q)", "back"),
+                ),
+            ),
+            MenuSpec(
+                name="입력",
+                items=(
+                    MenuItem("새 거래 (n)", "new_entry"),
+                    MenuItem("카드 명세서 import…", "import_card_statement"),
+                    MenuItem("PDF 영수증/인보이스 첨부…", "attach_receipt"),
+                    MenuItem("매월입력 거래 관리…", "open_monthly"),
+                ),
+            ),
+            MenuSpec(
+                name="화면",
+                items=(
+                    MenuItem("섹션 (s)", "open_sections"),
+                    MenuItem("계정과목 (a)", "open_accounts"),
+                    MenuItem("보고서 / 통계 (t)", "open_reports"),
+                    MenuItem("선택 거래 첨부 (f)", "open_attachments"),
+                    MenuItem("해시태그 관리…", "open_tag_management"),
+                    MenuItem("예산 편집…", "open_budget_edit"),
+                    MenuItem("목표 편집…", "open_goal_edit"),
+                ),
+            ),
+            MenuSpec(
+                name="도움말",
+                items=(
+                    MenuItem("키보드 단축키 (?)", "help"),
+                ),
+            ),
+        )
+
+    # CL #51120: 좁은 터미널 단일 임계값 60. CL #51125 사용자 요청으로
+    # 4단계 점진 축소 정책으로 확장:
+    #   level 0 (>=80): 정상 (6 컬럼).
+    #   level 1 (<80) : memo 숨김.
+    #   level 2 (<60) : + left/right 헤더 'L'/'R' 약어, 셀은 한글 2글자.
+    #   level 3 (<45) : + right 컬럼 숨김.
+    #   level 4 (<35) : + left 컬럼도 숨김.
+    # _NARROW_THRESHOLD 는 후방 호환 — `_compact` boolean property 와 함께
+    # 기존 호출자/테스트가 깨지지 않도록 유지 (level >= 2 가 종래 의미의
+    # 컴팩트). 임계값 자체는 _COMPACT_THRESHOLDS 가 source of truth.
+    _COMPACT_THRESHOLDS: tuple[int, ...] = (80, 60, 45, 35)
+    _NARROW_THRESHOLD: int = 60  # legacy alias — _COMPACT_THRESHOLDS[1].
+
+    # CL #51125+: left/right 셀 약어 시 사전 제거할 괄호류. 한글 인용부호
+    # (「」 『』) 까지 — 사용자 답변에서 명시. isalnum 일반화는 보수성을
+    # 위해 안 함 (whitespace / 다른 punct 보존). 셀에서 한 번에 strip.
+    _ABBREV_BRACKETS: str = "()[]{}「」『』"
+    # CL #51127+: 회사 식별자 prefix — strip 후 본 이름만 남기고 줄임.
+    # "(주)스타벅스" → "(주)" strip 후 "스타벅스" → 한국식 4글자 약어 "스벅".
+    # 선두 매칭만 (어디 가운데에 있어도 strip X). tuple 순서가 곧 시도 순서 —
+    # 더 긴 prefix 부터 두어 부분 매칭 회피 (예: "주식회사" 가 "(주)" 보다 먼저).
+    _ABBREV_COMPANY_PREFIXES: tuple[str, ...] = (
+        "주식회사 ", "주식회사",
+        "유한회사 ", "유한회사",
+        "재단법인 ", "재단법인",
+        "사단법인 ", "사단법인",
+        "(주)", "(유)", "(재)", "(사)",
+    )
+    # CL #51130+: 회사명 끝의 의미상 *부가어* — strip 후 한국식 약어 적용.
+    # "스타벅스코리아" → "코리아" strip → "스타벅스" (4자) → 1+3 = "스벅".
+    # 사용자 답변에서 미리 합의된 list — 너무 공격적이면 일반 한글 단어
+    # ("강남" / "서울" 등) 도 잘릴 수 있어 *대문자 회사 명사* 만 보수적으로.
+    # 더 긴 suffix 부터 시도 ("인터내셔널" > "내셔널" 같은 부분 매칭 회피).
+    _ABBREV_COMPANY_SUFFIXES: tuple[str, ...] = (
+        "엔터프라이즈", "인터내셔널",
+        "코퍼레이션", "이노베이션",
+        "홀딩스", "그룹", "글로벌", "코리아",
+    )
+    # 한글 음절 범위 (Hangul Syllables block, U+AC00~U+D7A3) — 첫 글자가
+    # 한글이면 한국식 줄임말 규칙 적용, 그 외 (영문/숫자/혼합) 면 단순 [:2].
+    _HANGUL_FIRST = 0xAC00
+    _HANGUL_LAST = 0xD7A3
+    _ABBREV_CHARS: int = 2
 
     def __init__(self, client: WhooingClient) -> None:
         super().__init__()
@@ -246,22 +348,33 @@ class EntriesScreen(Screen):
         # core_db.get_annotations_for 로 batch fetch 해서 채운다. 비어있으면
         # item 컬럼에 태그 인라인 표시 X / 태그 단위 네비 X.
         self._entry_tags: dict[str, list[str]] = {}
+        # CL #51134+ (A6): entry_id → 첨부 개수. 0 이면 indicator 미표시.
+        # refresh_entries 가 list_attachments_for 한 번으로 batch fetch.
+        self._entry_attachment_counts: dict[str, int] = {}
+        # CL #51145+ (H6): 일괄 작업용 multi-select. space 토글, '#' = 일괄 태그.
+        # entry_id 의 set — refresh 시 reset (사라진 entry 의 stale 방지).
+        self._selected_entry_ids: set[str] = set()
+        # CL #51151+ (H11): tag → color (Rich/Textual 색명).
+        self._tag_colors: dict[str, str] = {}
         # 태그 단위 column 네비 — `_active_col == _COL_INDEX["item"]` +
         # `_column_active=True` 인 상태에서 → 한 번 더 누르면 0 부터 그 row
         # 의 태그 개수 - 1 까지 sliding. None = 태그 모드 아님 (item 셀 자체
         # marker). row 가 ↑/↓ 로 바뀌면 None 으로 reset (각 row 의 태그
         # 개수가 달라 index 보존이 의미 없음).
         self._tag_index: int | None = None
-        # CL #51120+: 좁은 터미널 (iPhone Blink 등) 컴팩트 모드. on_resize
-        # 가 임계값 (`_NARROW_THRESHOLD`) 미만이면 True 로 토글, 컬럼 width
-        # 를 좁히거나 0 으로 (시각상 숨김) — left/right/memo 우선 축소.
-        # _COLUMN_NAMES 의 인덱스 정의는 유지 (네비 / marker 코드 안 깨지게).
-        self._compact: bool = False
+        # CL #51120 / CL #51125+: 좁은 터미널 컴팩트 모드. 종전엔 boolean
+        # 이었으나 사용자 요청으로 4단계로 확장 (`_COMPACT_THRESHOLDS` 참고).
+        # 0 = 정상, 1 = memo 숨김, 2 = + L/R 약어, 3 = + right 숨김,
+        # 4 = + left 숨김. _COLUMN_NAMES 의 인덱스 정의는 유지 (네비/marker
+        # 코드 안 깨지게).
+        self._compact_level: int = 0
 
     # ---- compose -------------------------------------------------------
 
     def compose(self) -> ComposeResult:
         yield Header(show_clock=True)
+        # CL #51126+: 메뉴바는 Header 와 본문 사이 — 항상 visible.
+        yield MenuBar(self._build_menus(), id="entries-menubar")
         with Vertical(id="entries-body"):
             yield DataTable(id="entries-table", zebra_stripes=True, cursor_type="row")
         yield Static("", id="status")
@@ -289,50 +402,166 @@ class EntriesScreen(Screen):
         table.add_column("right")
         table.add_column("item")
         table.add_column("memo")
-        # CL #51120+: 초기 size 기준으로 컴팩트 여부 결정 + 컬럼 width 적용.
-        self._compact = self._is_narrow_size()
+        # CL #51120 / CL #51125+: 초기 size 기준으로 level 결정 + 컬럼 적용.
+        self._compact_level = self._compute_compact_level()
         self._apply_column_widths_for_size()
         self.set_status("거래내역 로드 중…")
         self.refresh_entries()
         table.focus()
 
-    # ---- 좁은 터미널 (iPhone Blink 등) 적응 (CL #51120+) ----------------
+    # ---- 좁은 터미널 (iPhone Blink 등) 적응 (CL #51120 / CL #51125+) ------
+
+    @property
+    def _compact(self) -> bool:
+        """후방 호환 — `_compact_level >= 2` 가 종래 의미의 "컴팩트 모드"
+        (left/right 가 약어 또는 hidden 으로 시각이 줄어든 상태). level 1
+        (memo 만 숨김) 은 여전히 left/right 가 정상 표시라 종래 호출자
+        (네비 hidden-skip 등) 입장에서 "정상 모드".
+        """
+        return self._compact_level >= 2
 
     def _is_narrow_size(self) -> bool:
-        """현재 터미널 너비가 컴팩트 임계값 미만인지."""
+        """후방 호환 — 종래 단일 임계값 기준 boolean. 신규 코드는
+        `_compute_compact_level()` 직접 사용."""
+        return self._compute_compact_level() >= 2
+
+    def _compute_compact_level(self) -> int:
+        """현재 터미널 너비로 컴팩트 단계 (0~4) 계산. CL #51125+ /
+        #51158+ (review C4): pure logic 은 entries_compact.compute_compact_level.
+        본 method 는 self.app.size.width 회수 + side-effect 처리.
+        """
+        from whooing_tui.screens.entries_compact import compute_compact_level
         try:
-            return self.app.size.width < self._NARROW_THRESHOLD
+            w = self.app.size.width
         except Exception:  # pragma: no cover — size 미정의 환경
-            return False
+            return 0
+        return compute_compact_level(w)
+
+    @classmethod
+    def _is_hangul(cls, ch: str) -> bool:
+        """단일 글자가 한글 음절 (Hangul Syllables block) 인지.
+
+        CL #51158+ (review C4): pure helper 가 entries_compact 로 이동.
+        본 method 는 후방 호환 wrapper.
+        """
+        from whooing_tui.screens.entries_compact import is_hangul
+        return is_hangul(ch)
+
+    @classmethod
+    def _abbreviate_account_name(cls, name: str) -> str:
+        """계정명을 좁은 컬럼용으로 약어. CL #51125 (단순 [:2]) → CL #51127
+        한국식 줄임말 규칙으로 강화 (사용자 요청).
+
+        절차:
+          1. 회사 식별자 prefix strip (선두에 있을 때만):
+             "(주)", "(유)", "주식회사", "유한회사" 등 — `_ABBREV_COMPANY_
+             PREFIXES` 의 첫 매칭. 한 번만 strip (중복 매칭 X).
+          2. 잔여 괄호류 (`(){}[]「」『』`) 모두 제거 + strip 공백.
+          3. 길이 + 첫 글자가 한글인지로 분기:
+             - 빈 문자열 → "".
+             - 첫 글자 한글 + 길이 4 → 1번째 + 3번째 글자 (한국식: 스타
+               벅스→스벅, 맥도날드→맥날, 삼성전자→삼전).
+             - 첫 글자 한글 + 길이 3 → 앞 2글자 (교통비→교통).
+             - 첫 글자 한글 + 길이 2 이하 → 그대로 (식비→식비).
+             - 첫 글자 한글 + 길이 5 이상 → 앞 2글자 보수 fallback
+               (현대자동차→현대).
+             - 첫 글자 비-한글 (영문/숫자/혼합) → 앞 2글자 (Starbucks→St).
+               한국식 1+3 규칙은 의미 단위 분할 가정이라 영문엔 부적용.
+
+        예:
+          "(주)스타벅스"      → "스벅"
+          "스타벅스"          → "스벅"
+          "맥도날드"          → "맥날"
+          "삼성전자"          → "삼전"
+          "주식회사 카카오"   → "카카"
+          "교통비"            → "교통"
+          "식비"              → "식비"
+          "현대자동차"        → "현대"
+          "[자산]현금"        → "자산"   # prefix 아닌 일반 괄호.
+          "Starbucks"         → "St"
+          "T맵"               → "T맵"   # 첫 글자 영문 → [:2] = "T맵".
+          ""                  → ""
+        """
+        # CL #51158+ (review C4): pure helper 가 entries_compact 로 이동.
+        # 본 method 는 후방 호환 wrapper.
+        from whooing_tui.screens.entries_compact import abbreviate_account_name
+        return abbreviate_account_name(name)
+
+    # 단계별 컬럼 표시 정책 — _apply_column_widths_for_size + _column_is_visible
+    # 둘 다 본 표를 참고. 인덱스 (left=2, right=3, memo=5) 는 _COLUMN_NAMES
+    # 와 1:1 매핑. width 값 의미: >0 = 고정 폭, 0 = auto_width 면 콘텐츠 만큼,
+    # auto_width=False 면 강제 hidden. 본 표는 설정 결과를 의미상 명시.
+    #
+    # level 0 (>=80)  | left=12, right=auto,  memo=auto, headers normal
+    # level 1 (<80)   | left=12, right=auto,  memo=hidden
+    # level 2 (<60)   | left=4,  right=4,     memo=hidden, headers L/R, 셀 약어
+    # level 3 (<45)   | left=4,  right=hidden, memo=hidden, header L,    셀 약어
+    # level 4 (<35)   | left=hidden, right=hidden, memo=hidden
+    _ABBREV_COL_WIDTH: int = 4  # 한글 2글자 = display 폭 4 (CJK wide).
 
     def _apply_column_widths_for_size(self) -> None:
-        """컴팩트 여부에 따라 left/right/memo 컬럼을 0 또는 정상 width 로.
+        """현재 `_compact_level` 에 맞춰 컬럼 width / label / auto_width 를
+        runtime 변경. 호출 후 `_render_table(self._entries)` 가 셀 내용도
+        재포맷해야 약어/숨김이 시각상 반영된다 — `on_resize` 가 책임짐.
 
-        DataTable.columns 의 width 를 직접 조정 — `add/remove_column` 보다
-        가벼움. 컬럼 인덱스 (`_COLUMN_NAMES`) 는 그대로라 네비/marker 코드
-        는 안 깨진다 (해당 컬럼이 width=0 이라 시각상 안 보일 뿐).
+        Textual `Column.width` 정책:
+          - width=0, auto_width=True  → 콘텐츠 폭으로 자람 (visible).
+          - width>0                   → 고정 폭 (visible).
+          - width=0, auto_width=False → strict hidden (콘텐츠 무시).
         """
         try:
             table = self.query_one("#entries-table", DataTable)
         except Exception:  # pragma: no cover
             return
-        # DataTable.columns 는 OrderedDict[ColumnKey, Column]. 순서가 곧
-        # _COLUMN_NAMES 의 인덱스.
         cols = list(table.columns.values())
         if len(cols) < len(self._COLUMN_NAMES):
             return
-        if self._compact:
-            # 컴팩트: date / money / item 만 보임. left=12→0, right→0, memo→0.
-            cols[2].width = 0  # left
-            cols[3].width = 0  # right
-            cols[5].width = 0  # memo
+        # 매 호출마다 일관된 baseline 으로 reset — 이전 level 의 잔재 제거.
+        # 각 컬럼은 (width, auto_width, label) 셋을 명시.
+        from rich.text import Text  # 지역 import — 모듈 import 비용 회피.
+
+        lvl = self._compact_level
+        # date(0) / money(1) / item(4) 는 모든 level 에서 visible — 변경 X.
+        # 단 헤더 label 은 처음 add_column 으로 설정된 그대로.
+
+        # --- left (col 2) ---
+        if lvl >= 4:
+            cols[2].width = 0
+            cols[2].auto_width = False
+            cols[2].label = Text("left")
+        elif lvl >= 2:
+            cols[2].width = self._ABBREV_COL_WIDTH
+            cols[2].auto_width = False
+            cols[2].label = Text("L")
         else:
-            cols[2].width = 12  # left (CL #51051 기본값 복원)
-            cols[3].width = 0   # 'auto' 는 width=0 + auto_width=True 가 default 처리
+            cols[2].width = 12
+            cols[2].auto_width = False
+            cols[2].label = Text("left")
+
+        # --- right (col 3) ---
+        if lvl >= 3:
+            cols[3].width = 0
+            cols[3].auto_width = False
+            cols[3].label = Text("right")
+        elif lvl >= 2:
+            cols[3].width = self._ABBREV_COL_WIDTH
+            cols[3].auto_width = False
+            cols[3].label = Text("R")
+        else:
+            cols[3].width = 0
+            cols[3].auto_width = True
+            cols[3].label = Text("right")
+
+        # --- memo (col 5) ---
+        if lvl >= 1:
             cols[5].width = 0
-            # 자동 width 컬럼은 명시적으로 0 으로 하면 콘텐츠 너비로 자라남
-            # (textual DataTable 의 internal logic). 즉 cols[3]/cols[5] 는
-            # 정상 모드에서도 0 으로 둬도 자동으로 넓어진다.
+            cols[5].auto_width = False
+            cols[5].label = Text("memo")
+        else:
+            cols[5].width = 0
+            cols[5].auto_width = True
+            cols[5].label = Text("memo")
+
         # 강제 refresh — DataTable 이 layout 을 다시 계산.
         try:
             table.refresh(layout=True)
@@ -340,17 +569,32 @@ class EntriesScreen(Screen):
             pass
 
     def on_resize(self, event) -> None:
-        """터미널 resize → 컴팩트 토글 + 컬럼 width 재적용."""
-        new_compact = self._is_narrow_size()
-        if new_compact == self._compact:
+        """터미널 resize → 컴팩트 단계 변경 + 컬럼 width 재적용 + 재렌더.
+
+        CL #51125+: 단계 전환 시 left/right 셀 내용도 약어/원본을 다시 채워
+        넣어야 하므로 `_render_table(self._entries)` 호출.
+        """
+        new_lvl = self._compute_compact_level()
+        if new_lvl == self._compact_level:
             return
-        self._compact = new_compact
+        prev_lvl = self._compact_level
+        self._compact_level = new_lvl
         self._apply_column_widths_for_size()
-        # 사용자에게 시각상 알림 (status bar).
-        if self._compact:
-            self.set_status("컴팩트 모드 — 좌/우 항목 + 메모 숨김 (좁은 터미널)")
-        else:
-            self.set_status("정상 모드 — 모든 컬럼 표시")
+        # 셀 내용을 단계에 맞게 다시 — 약어 ↔ 원본 전환 시 필수.
+        if self._entries or self._show_sentinel:
+            try:
+                self._render_table(self._entries)
+            except Exception:  # pragma: no cover
+                log.debug("re-render after resize failed", exc_info=True)
+        # 사용자에게 시각상 알림 (status bar). 단계별로 의미가 다르므로 분기.
+        msgs = {
+            0: "정상 모드 — 모든 컬럼 표시",
+            1: "컴팩트(1) — memo 숨김",
+            2: "컴팩트(2) — memo 숨김 + L/R 약어 (한글 2글자)",
+            3: "컴팩트(3) — memo + right 숨김, L 약어",
+            4: "컴팩트(4) — memo + right + left 모두 숨김",
+        }
+        self.set_status(msgs.get(new_lvl, msgs[0]))
 
     # ---- actions -------------------------------------------------------
 
@@ -362,6 +606,125 @@ class EntriesScreen(Screen):
         """현재 화면의 BINDINGS 를 모달로 보여줌."""
         from whooing_tui.screens.help import HelpModal
         self.app.push_screen(HelpModal("EntriesScreen", list(self.BINDINGS)))
+
+    # ---- CL #51126+ 풀다운 메뉴 (F10) — MenuBarMixin 기반 (CL #51131+) -
+
+    def _menubar_widget_id(self) -> str:
+        """본 화면의 MenuBar id — MenuBarMixin 의 query 가 사용."""
+        return "entries-menubar"
+
+    def action_attach_receipt(self) -> None:
+        """메뉴 → PDF 영수증/인보이스 첨부 wizard.
+
+        파일 경로 모달 → ReceiptAttachScreen push (자동 추출 / 후잉 거래
+        매칭 / 사용자 선택으로 첨부 또는 신규 거래 제안).
+        """
+        self._attach_receipt_wizard()
+
+    @work(exclusive=True, group="wizard", name="attach_receipt")
+    async def _attach_receipt_wizard(self) -> None:
+        from whooing_tui.screens.receipt_attach import ReceiptAttachScreen
+        session = self.app.session  # type: ignore[attr-defined]
+        if not session.section_id:
+            self.set_status(
+                "활성 섹션이 없습니다 — `s` 로 먼저 선택하세요.", error=True,
+            )
+            return
+        path = await self.app.push_screen_wait(_FilePathModal(
+            title="PDF 영수증 / 인보이스 파일 경로",
+            placeholder="/Users/me/Downloads/receipt.pdf",
+        ))
+        if not path:
+            self.set_status("영수증 첨부 취소.")
+            return
+        self.app.push_screen(ReceiptAttachScreen(
+            client=self._client, session=session, file_path=path,
+        ))
+
+    def action_import_card_statement(self) -> None:
+        """메뉴 wizard 진입 — 실제 흐름은 worker 안 (push_screen_wait)."""
+        self._import_card_statement_wizard()
+
+    @work(exclusive=True, group="wizard", name="import_card_statement")
+    async def _import_card_statement_wizard(self) -> None:
+        """카드사 명세서 (HTML / CSV / PDF) → 거래로 import wizard.
+
+        CL #51126+ 사용자 요청: "신용카드회사의 암호화된 명세서 파일을
+        입력하면 암호화를 해제해 중복 없이 누락된 항목을 가계부에 입력하는
+        기능". 본 wizard 는 다음 3단계:
+
+          1. 파일 경로 입력 modal — 절대 경로.
+          2. AccountPickerScreen (side="right") — 카드 계정 선택.
+          3. StatementImportScreen push — 자동 detect + extract + dedup +
+             Ctrl+Enter 로 입력.
+
+        HTML 보안메일 비밀번호는 `.env` 의 `WHOOING_CARD_HTML_PASSWORD` 에
+        있으면 자동 사용 (사용자 답변 — 매번 입력 X). 없으면 import 화면
+        안의 PasswordModal 이 fallback 으로 묻는다.
+
+        취소 또는 실패 시 status 안내, 화면은 entries 그대로.
+        """
+        from whooing_tui.screens.account_picker import AccountPickerScreen
+        from whooing_tui.screens.statement_import import StatementImportScreen
+
+        session = self.app.session  # type: ignore[attr-defined]
+        if not session.section_id:
+            self.set_status("활성 섹션이 없습니다 — `s` 로 먼저 선택하세요.", error=True)
+            return
+
+        # 1단계 — 파일 경로.
+        path = await self.app.push_screen_wait(_FilePathModal(
+            title="카드 명세서 파일 경로",
+            placeholder="/Users/me/Downloads/statement.html",
+        ))
+        if not path:
+            self.set_status("명세서 import 취소됨.")
+            return
+
+        # 2단계 — 카드 계정 선택 (대변).
+        picked = await self.app.push_screen_wait(
+            AccountPickerScreen(session, side="right"),
+        )
+        if not picked:
+            self.set_status("카드 계정 미선택 — import 취소.")
+            return
+        # AccountPickerScreen 의 dismiss = (account_id, type, title).
+        try:
+            r_account_id = picked[0]
+        except Exception:  # pragma: no cover
+            self.set_status("카드 계정 형식 오류 — import 취소.", error=True)
+            return
+
+        # 3단계 — StatementImportScreen push (이후 흐름은 그 화면이 책임).
+        self.app.push_screen(StatementImportScreen(
+            client=self._client,
+            section_id=session.section_id,
+            r_account_id=r_account_id,
+            file_path=path,
+            card_label=picked[2] if len(picked) > 2 else None,
+        ))
+
+    def _dispatch_menu_action(self, action_id: str) -> None:
+        """메뉴 항목 선택 → 기존 action_* 메서드 또는 신규 액션으로 위임.
+
+        대부분 항목은 키보드 단축키가 있는 기존 action 과 1:1 매핑 — 이름
+        규칙 그대로 `action_<id>` 호출. 예외는 별도 분기.
+        """
+        # 명시 분기 (메서드명이 다르거나 별도 wizard 가 필요한 경우).
+        special = {
+            "import_card_statement": self.action_import_card_statement,
+        }
+        if action_id in special:
+            special[action_id]()
+            return
+        method_name = f"action_{action_id}"
+        method = getattr(self, method_name, None)
+        if callable(method):
+            method()
+        else:  # pragma: no cover — 메뉴 정의 ↔ action 누락 시 안전망.
+            self.set_status(
+                f"메뉴 액션 구현 안 됨: {action_id}", error=True,
+            )
 
     def action_open_sections(self) -> None:
         """섹션 picker 모달 push. 사용자가 다른 섹션을 고르면 자동 재로드."""
@@ -433,6 +796,168 @@ class EntriesScreen(Screen):
             )
 
         self.app.push_screen(ReportsMenuScreen(), _on_pick)
+
+    # ---- CL #51145+ (H6) multi-select + batch tagging ------------------
+
+    def action_toggle_selection(self) -> None:
+        """현재 cursor 의 entry 를 selection set 에 토글. sentinel 은 무시."""
+        target = self._selected_entry()
+        if target is None:
+            return
+        eid = str(target.get("entry_id") or "")
+        if not eid:
+            return
+        if eid in self._selected_entry_ids:
+            self._selected_entry_ids.discard(eid)
+        else:
+            self._selected_entry_ids.add(eid)
+        n = len(self._selected_entry_ids)
+        self.set_status(
+            f"선택 {n}건. space=토글 / #=일괄 태그 / Esc=해제"
+        )
+
+    def action_batch_tag(self) -> None:
+        """선택 entry 들에 tag 일괄 추가/제거 — TagsPickerScreen 재사용."""
+        if not self._selected_entry_ids:
+            # 선택 0이면 현재 cursor entry 만 (편의).
+            target = self._selected_entry()
+            if target is None or not target.get("entry_id"):
+                self.set_status(
+                    "선택된 거래가 없습니다 — space 로 1건 이상 선택.",
+                    error=True,
+                )
+                return
+            self._selected_entry_ids.add(str(target["entry_id"]))
+        self._batch_tag_worker()
+
+    @work(exclusive=True, group="batch", name="batch_tag")
+    async def _batch_tag_worker(self) -> None:
+        from whooing_tui.screens.tags_picker import TagsPickerScreen
+        eids = sorted(self._selected_entry_ids)
+        if not eids:
+            return
+        # TagsPicker 로 단일 태그 선택. 사용자에게 "어떤 태그를 추가/제거할지".
+        existing = self._fetch_all_tags_db()
+        tag = await self.app.push_screen_wait(TagsPickerScreen(
+            item="(일괄)", memo=f"{len(eids)}건 선택됨",
+            existing=existing,
+        ))
+        if not tag:
+            self.set_status("일괄 태그 취소.")
+            return
+        # 추가/제거 confirm — 단순화: 항상 추가. 제거는 별도 키 (후속).
+        session = self.app.session  # type: ignore[attr-defined]
+        try:
+            with tui_data.open_rw() as conn:
+                added = core_db.add_tag_to_entries(
+                    conn, eids, tag, section_id=session.section_id,
+                )
+        except Exception as ex:
+            self.set_status(f"일괄 태그 실패: {ex}", error=True)
+            return
+        from whooing_tui import p4_sync
+        p4_sync.submit_db_to_p4(
+            tui_data.db_path(),
+            f"[whooing-tui] batch tag add #{tag}: {added}/{len(eids)} entries "
+            f"(section={session.section_id})",
+        )
+        self.set_status(
+            f"#{tag} → {added}건 추가 (이미 있던 {len(eids) - added}건 skip). "
+            f"selection 해제."
+        )
+        self._selected_entry_ids.clear()
+        self.refresh_entries()
+
+    def action_open_monthly(self) -> None:
+        """CL #51152+: 매월입력 거래 관리 화면."""
+        from whooing_tui.screens.monthly_entries import MonthlyEntriesScreen
+        session = self.app.session  # type: ignore[attr-defined]
+        if not session.section_id:
+            self.set_status(
+                "활성 섹션이 없습니다 — `s` 로 먼저 선택하세요.", error=True,
+            )
+            return
+        self.app.push_screen(MonthlyEntriesScreen(self._client, session))
+
+    def action_open_budget_edit(self) -> None:
+        """CL #51153+: 예산 입력/편집 화면."""
+        from whooing_tui.screens.budget_edit import BudgetEditScreen
+        session = self.app.session  # type: ignore[attr-defined]
+        if not session.section_id:
+            self.set_status(
+                "활성 섹션이 없습니다 — `s` 로 먼저 선택하세요.", error=True,
+            )
+            return
+        self.app.push_screen(BudgetEditScreen(self._client, session))
+
+    def action_open_goal_edit(self) -> None:
+        """CL #51154+: 목표 (장기 + 월별 자본) 편집 화면."""
+        from whooing_tui.screens.goal_edit import GoalEditScreen
+        session = self.app.session  # type: ignore[attr-defined]
+        if not session.section_id:
+            self.set_status(
+                "활성 섹션이 없습니다 — `s` 로 먼저 선택하세요.", error=True,
+            )
+            return
+        self.app.push_screen(GoalEditScreen(self._client, session))
+
+    def action_open_tag_management(self) -> None:
+        """CL #51135+ (H5): 해시태그 일괄 관리 화면 push.
+
+        현재 활성 섹션의 태그만 — cross-section 오염 방지. 섹션 미선택이면 안내.
+        """
+        from whooing_tui.screens.tag_management import TagManagementScreen
+        session = self.app.session  # type: ignore[attr-defined]
+        if not session.section_id:
+            self.set_status("활성 섹션이 없습니다 — `s` 로 먼저 선택하세요.", error=True)
+            return
+
+        def _on_close(_: Any) -> None:
+            # 태그 변경 후 entries 의 inline 표시도 fresh 하게.
+            self.refresh_entries()
+
+        self.app.push_screen(
+            TagManagementScreen(section_id=session.section_id),
+            _on_close,
+        )
+
+    def action_open_attachments(self) -> None:
+        """CL #51123+: 선택 거래의 첨부파일 browser 로 push.
+
+        sentinel row (새 거래 추가 자리) 또는 entry_id 가 비어있는 거래는
+        첨부 대상 자체가 없으므로 status 안내 후 noop. 실 거래라면
+        AttachmentBrowserScreen 이 a/d/o/r 로 추가/삭제/열기/새로고침을
+        제공한다. 파일 본체는 `<project_root>/attachment/YYYY/YYYY-MM-DD/`
+        에 sha256 dedup 저장 (`whooing_tui.data.attachments_root()` 결정).
+        화면을 닫고 돌아오면 entries 목록은 그대로 — 첨부 변경은 후잉 거래
+        자체에 영향을 주지 않으므로 재로드 불필요.
+        """
+        from whooing_tui.screens.attachment_browser import AttachmentBrowserScreen
+
+        # sentinel row 면 entry 없음 — 안내.
+        if self._is_on_sentinel_row():
+            self.set_status(
+                "새 거래 추가 자리는 첨부 대상이 아닙니다 — 거래를 먼저 만드세요.",
+                warn=True,
+            )
+            return
+        target = self._selected_entry()
+        if target is None:
+            self.set_status("선택된 거래가 없습니다.", error=True)
+            return
+        eid = target.get("entry_id")
+        if not eid:
+            self.set_status(
+                "이 거래에는 entry_id 가 없습니다 — 첨부 불가.", error=True,
+            )
+            return
+        session = self.app.session  # type: ignore[attr-defined]
+        self.app.push_screen(
+            AttachmentBrowserScreen(
+                entry_id=str(eid),
+                section_id=session.section_id,
+            ),
+        )
 
     def action_refresh(self) -> None:
         # 사용자가 'r' = "지금 즉시 후잉 데이터" — 캐시가 있으면 invalidate.
@@ -524,16 +1049,11 @@ class EntriesScreen(Screen):
     def _column_is_visible(self, col_index: int) -> bool:
         """해당 컬럼이 시각상 보이는지 — `width=0` 인 컬럼은 컴팩트에서 숨김.
 
-        Note: width=0 의 의미는 모드별로 다르다.
-          * 정상 모드: `cols[2].width = 12` (left), `cols[3]`/`cols[5]` 는
-            기본 0 인데 DataTable 의 auto-width 가 작동해 콘텐츠 만큼 자란다.
-          * 컴팩트 모드: `cols[2/3/5]` 모두 강제 0 — 시각상 숨김.
-
-        둘을 구분하려면 `_compact` 도 본다 — 컴팩트에서 col∈{2,3,5} 만 hidden.
+        Note: 컬럼 visibility 는 `_compact_level` 단계별로 다르다 (CL #51125+).
+        CL #51158+ (review C4): pure logic 은 entries_compact 모듈로.
         """
-        if not self._compact:
-            return True
-        return col_index not in (2, 3, 5)  # left / right / memo 가 컴팩트에서 숨김
+        from whooing_tui.screens.entries_compact import column_is_visible
+        return column_is_visible(col_index, self._compact_level)
 
     def _next_visible_col(self, start: int, step: int) -> int:
         """`start` 부터 `step` (+1 또는 -1) 방향으로 다음 visible 컬럼 인덱스.
@@ -1272,6 +1792,42 @@ class EntriesScreen(Screen):
             if info.get("hashtags")
         }
 
+    def _fetch_all_attachment_counts(
+        self, entry_ids: list[str],
+    ) -> dict[str, int]:
+        """CL #51134+ (A6): entry_id list → {entry_id: count}.
+
+        한 query 로 모든 entry 의 첨부 개수 — `_format_cell` 의 item 컬럼
+        prefix `📎N`. 실패는 fatal 이 아니다 (db 없음 / 권한) — 빈 사전.
+
+        CL #51144+ (A5): 활성 섹션의 첨부만 — cross-section 누수 방지.
+        """
+        if not entry_ids:
+            return {}
+        session = self.app.session  # type: ignore[attr-defined]
+        sid = session.section_id or None
+        try:
+            from whooing_core import attachments as core_attach
+            with tui_data.open_ro() as conn:
+                m = core_attach.list_attachments_for(
+                    conn, entry_ids, section_id=sid,
+                )
+        except Exception:  # pragma: no cover
+            log.exception("fetch_all_attachment_counts failed")
+            return {}
+        return {eid: len(rows) for eid, rows in m.items() if rows}
+
+    def _fetch_tag_colors(self) -> dict[str, str]:
+        """CL #51151+ (H11): {tag: color} batch fetch (활성 섹션)."""
+        session = self.app.session  # type: ignore[attr-defined]
+        try:
+            with tui_data.open_ro() as conn:
+                return core_db.get_tag_colors(
+                    conn, section_id=session.section_id or None,
+                )
+        except Exception:  # pragma: no cover
+            return {}
+
     def _fetch_all_tags_db(self) -> dict[str, int]:
         """전체 해시태그 사전 — `{tag: count}`. TagsPickerScreen 의 *추천*
         + *자주 쓰는 태그* 섹션 출처. db 가 비어있으면 빈 사전 (모달은
@@ -1303,19 +1859,28 @@ class EntriesScreen(Screen):
         """
         if not entry_id:
             return
+        previous_tags: list[str] = []  # CL #51141+ (H10) — P4 desc diff.
         try:
             with tui_data.open_rw() as conn:
+                # 변경 전 hashtag list 회수 — diff 계산.
+                prev = core_db.get_annotations_for(conn, [str(entry_id)])
+                previous_tags = list(
+                    prev.get(str(entry_id), {}).get("hashtags", []) or []
+                )
                 core_db.upsert_annotation(
                     conn,
                     entry_id=str(entry_id),
                     section_id=section_id or None,
                     note=memo or None,
                 )
-                core_db.set_hashtags(conn, str(entry_id), list(tags or []))
+                core_db.set_hashtags(
+                    conn, str(entry_id), list(tags or []),
+                    section_id=section_id or None,
+                )
         except Exception:  # pragma: no cover
             log.exception("persist_local annotation/hashtags failed")
             return
-        # P4 자동 submit — 환경 없으면 silent. blocking=False (background).
+        # P4 자동 submit.
         from whooing_tui import p4_sync
         p4_sync.submit_db_to_p4(
             tui_data.db_path(),
@@ -1323,26 +1888,43 @@ class EntriesScreen(Screen):
                 entry_id=str(entry_id),
                 memo_changed=bool(memo),
                 tags=list(tags or []),
+                previous_tags=previous_tags,  # CL #51141+ (H10) diff.
             ),
         )
 
     def _purge_local(self, entry_id: str) -> None:
-        """삭제된 거래의 annotation / 해시태그 정리. CASCADE 가 처리하므로
-        upsert 의 역으로 `remove_annotation` 만 호출.
+        """삭제된 거래의 annotation / 해시태그 / 첨부 정리.
 
         CL #51107+: db 변경 직후 P4 자동 submit.
+        CL #51132+ (A1): 종전엔 `entry_attachments` 가 FK 없이 entry_id 만
+        보관 → 거래 삭제 시 row + 디스크 파일이 orphan 으로 남았다. 본 함수가
+        의미적으로 강제 — `purge_attachments_for_entry` 호출 후 사라진 파일들의
+        path 도 P4 submit 에 포함시켜 reconcile -d 가 작동.
         """
         if not entry_id:
             return
+        deleted_files: list = []  # 디스크에서 unlink 된 attachment full path 들.
         try:
+            from whooing_core import attachments as core_attach
+            root = tui_data.attachments_root()
             with tui_data.open_rw() as conn:
                 core_db.remove_annotation(conn, str(entry_id))
+                # 첨부도 같이 — 거래가 사라진 이상 파일도 의미 없음.
+                purged = core_attach.purge_attachments_for_entry(
+                    conn, str(entry_id),
+                    attachments_root=root,
+                )
+                for p in purged:
+                    if p.get("file_deleted"):
+                        deleted_files.append(root / p["file_path"])
         except Exception:  # pragma: no cover
-            log.exception("purge_local annotation failed")
+            log.exception("purge_local annotation/attachments failed")
             return
         from whooing_tui import p4_sync
-        p4_sync.submit_db_to_p4(
-            tui_data.db_path(),
+        # db + 사라진 첨부 파일 path 들을 한 CL 로 submit.
+        paths = [tui_data.db_path(), *deleted_files]
+        p4_sync.submit_files_to_p4(
+            paths,
             p4_sync.describe_annotation(
                 entry_id=str(entry_id), memo_changed=False, tags=None,
                 deleted=True,
@@ -1484,9 +2066,15 @@ class EntriesScreen(Screen):
         # CL #51102+: 로컬 sqlite 의 해시태그를 batch fetch 해 entry_id →
         # tag list 사전 보관. _format_cell 의 item 컬럼에 인라인 표시 + 태그
         # 단위 column 네비 + tag 필터 의 단일 source.
-        self._entry_tags = self._fetch_all_entry_tags(
-            [str(e.get("entry_id") or "") for e in entries_sorted if e.get("entry_id")],
-        )
+        eids = [str(e.get("entry_id") or "") for e in entries_sorted if e.get("entry_id")]
+        self._entry_tags = self._fetch_all_entry_tags(eids)
+        # CL #51134+ (A6): item 컬럼에 📎N prefix 표시 — 첨부 발견성.
+        self._entry_attachment_counts = self._fetch_all_attachment_counts(eids)
+        # CL #51151+ (H11): 태그 색 batch fetch — inline 표시에 적용.
+        self._tag_colors = self._fetch_tag_colors()
+        # CL #51145+ (H6): 사라진 entry 의 stale selection 정리.
+        valid_eids = set(eids)
+        self._selected_entry_ids &= valid_eids
         self._render_table(entries_sorted)
         self._update_window_status(start_date, end_date, entries_sorted)
 
@@ -1494,6 +2082,18 @@ class EntriesScreen(Screen):
 
     # CL #51102+: item 셀 안에 인라인 태그가 너무 많아질 때 보여줄 최대 개수.
     # 그 이상은 마지막 옵션으로 `#…(N)` 한 토큰만 추가.
+    # CL #51141+ (H9): 환경 변수 `WHOOING_ITEM_TAG_INLINE_LIMIT` 로 override.
+    @classmethod
+    def _item_tag_inline_limit(cls) -> int:
+        import os
+        raw = os.getenv("WHOOING_ITEM_TAG_INLINE_LIMIT")
+        if raw:
+            try:
+                return max(0, int(raw))
+            except ValueError:
+                pass
+        return cls._ITEM_TAG_INLINE_LIMIT
+
     _ITEM_TAG_INLINE_LIMIT = 2
 
     def _format_cell(self, entry: dict[str, Any], col_index: int) -> Any:
@@ -1509,29 +2109,55 @@ class EntriesScreen(Screen):
         """
         session = self.app.session  # type: ignore[attr-defined]
         col = self._COLUMN_NAMES[col_index]
+        lvl = self._compact_level
         if col == "date":
             return _fmt_date(entry.get("entry_date"))
         if col == "money":
             return Text(_fmt_money(entry.get("money")), justify="right")
         if col == "left":
+            # CL #51125+: lvl >= 4 면 hidden — 빈 문자열, lvl >= 2 면 약어.
+            if lvl >= 4:
+                return ""
             l_id = entry.get("l_account_id") or ""
-            return session.title_of(l_id) if l_id else ""
+            full = session.title_of(l_id) if l_id else ""
+            return self._abbreviate_account_name(full) if lvl >= 2 else full
         if col == "right":
+            if lvl >= 3:
+                return ""
             r_id = entry.get("r_account_id") or ""
-            return session.title_of(r_id) if r_id else ""
+            full = session.title_of(r_id) if r_id else ""
+            return self._abbreviate_account_name(full) if lvl >= 2 else full
         if col == "item":
             item_text = entry.get("item") or ""
-            tags = self._entry_tags.get(str(entry.get("entry_id") or "")) or []
+            eid = str(entry.get("entry_id") or "")
+            # CL #51134+ (A6): 첨부 indicator.
+            attach_n = self._entry_attachment_counts.get(eid, 0)
+            attach_prefix = f"📎{attach_n} " if attach_n > 0 else ""
+            # CL #51145+ (H6): selection indicator (▣ if selected).
+            sel_prefix = "▣ " if eid in self._selected_entry_ids else ""
+            attach_prefix = sel_prefix + attach_prefix
+            tags = self._entry_tags.get(eid) or []
             if not tags:
-                return item_text
-            shown = tags[: self._ITEM_TAG_INLINE_LIMIT]
+                return f"{attach_prefix}{item_text}"
+            limit = self._item_tag_inline_limit()
+            shown = tags[: limit]
             extra = len(tags) - len(shown)
-            tag_tokens = [f"#{t}" for t in shown]
+            # CL #51151+ (H11): 태그 색 적용 (Rich markup).
+            tag_tokens: list[str] = []
+            for t in shown:
+                color = self._tag_colors.get(t)
+                if color:
+                    tag_tokens.append(f"[{color}]#{t}[/{color}]")
+                else:
+                    tag_tokens.append(f"#{t}")
             if extra > 0:
                 tag_tokens.append(f"#…({extra})")
             tag_str = " ".join(tag_tokens)
-            return f"{item_text} {tag_str}".strip()
+            return f"{attach_prefix}{item_text} {tag_str}".strip()
         if col == "memo":
+            # CL #51125+: lvl >= 1 부터 memo 숨김 (사용자 요청 1단계).
+            if lvl >= 1:
+                return ""
             return entry.get("memo") or ""
         return ""
 
@@ -1674,3 +2300,78 @@ class EntriesScreen(Screen):
             bar.add_class("error")
         elif warn:
             bar.add_class("warn")
+
+
+# ---- CL #51126+ 일반 파일 경로 입력 모달 (메뉴 wizard 등 재사용) -----------
+
+
+class _FilePathModal(ModalScreen[str | None]):
+    """절대 경로를 한 줄 입력받는 단순 modal. 메뉴 wizard 등에서 재사용.
+
+    `attachment_browser._AddPathModal` 과 형태가 비슷하지만 본 모듈의 메뉴
+    wizard 가 자체 진입점으로 사용 (지역 import 회피).
+    """
+
+    BINDINGS = [Binding("escape", "cancel", "취소")]
+
+    DEFAULT_CSS = """
+    _FilePathModal {
+        align: center middle;
+    }
+    #filepath_box {
+        background: $panel;
+        border: thick $primary;
+        padding: 1;
+        width: 95%;
+        max-width: 80;
+        min-width: 30;
+        height: auto;
+    }
+    """
+
+    def __init__(
+        self,
+        *,
+        title: str = "파일 경로",
+        placeholder: str = "/path/to/file",
+    ) -> None:
+        super().__init__()
+        self._title = title
+        self._placeholder = placeholder
+
+    def compose(self) -> ComposeResult:
+        with Container(id="filepath_box"):
+            yield Label(self._title)
+            yield Input(placeholder=self._placeholder, id="filepath_input")
+            with Horizontal():
+                yield Button("OK", id="filepath_ok", variant="primary")
+                # CL #51139+ (A7): Browse 버튼 — FilePickerScreen 으로 navigation.
+                yield Button("Browse…", id="filepath_browse")
+                yield Button("Cancel", id="filepath_cancel")
+
+    def on_mount(self) -> None:
+        try:
+            self.query_one("#filepath_input", Input).focus()
+        except Exception:  # pragma: no cover
+            pass
+
+    def on_input_submitted(self, event: Input.Submitted) -> None:
+        self.dismiss((event.value or "").strip() or None)
+
+    async def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "filepath_ok":
+            value = self.query_one("#filepath_input", Input).value.strip()
+            self.dismiss(value or None)
+        elif event.button.id == "filepath_browse":
+            from whooing_tui.screens.file_picker import FilePickerScreen
+            chosen = await self.app.push_screen_wait(FilePickerScreen(
+                title=self._title,
+            ))
+            if chosen:
+                # 사용자가 picker 에서 선택했으면 바로 dismiss.
+                self.dismiss(chosen)
+        else:
+            self.dismiss(None)
+
+    def action_cancel(self) -> None:
+        self.dismiss(None)

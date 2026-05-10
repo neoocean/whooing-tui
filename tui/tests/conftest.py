@@ -23,3 +23,34 @@ def _isolated_user_state(monkeypatch, tmp_path):
     monkeypatch.setenv("WHOOING_DATA_DIR", str(tmp_path / "whooing"))
     monkeypatch.delenv("WHOOING_SECTION_ID", raising=False)
     yield
+
+
+@pytest.fixture(autouse=True)
+def _isolate_p4_pending():
+    """CL #51155+ (review C3): p4_sync._PENDING 글로벌 thread list 격리.
+
+    종전엔 한 테스트의 `submit_db_to_p4` 가 thread 를 spawn 하면 다음 테스트
+    까지 살아있을 수 있었음. daemon=False 라 main thread 를 막을 위험 + 다른
+    테스트의 `wait_for_pending` 결과 오염.
+
+    각 테스트 시작 전후로 join + clear 로 격리. 테스트 자체가 fake_p4 + env
+    분리를 안 하면 실 p4 호출이 일어날 수 있어 join 의 timeout 도 짧게.
+    """
+    # 시작 전 — 이전 테스트의 잔여 thread 정리.
+    try:
+        from whooing_tui import p4_sync
+        # 빠르게 join (default 30s 는 너무 길어 명시 1s).
+        p4_sync.wait_for_pending(timeout_per_thread=1.0)
+        with p4_sync._PENDING_LOCK:
+            p4_sync._PENDING.clear()
+    except Exception:  # pragma: no cover
+        pass
+    yield
+    # 종료 후 — 이 테스트가 spawn 한 thread 정리.
+    try:
+        from whooing_tui import p4_sync
+        p4_sync.wait_for_pending(timeout_per_thread=1.0)
+        with p4_sync._PENDING_LOCK:
+            p4_sync._PENDING.clear()
+    except Exception:  # pragma: no cover
+        pass

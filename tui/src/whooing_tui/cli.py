@@ -103,6 +103,46 @@ def _build_parser() -> argparse.ArgumentParser:
         help="종료일 YYYYMMDD. --start 와 함께 사용.",
     )
 
+    # CL #51132+ (A2) — 첨부 orphan 정리.
+    gc = sub.add_parser(
+        "gc-attachments",
+        help="후잉에 없는 entry_id 의 첨부 row + 디스크 파일 정리.",
+    )
+    gc.add_argument(
+        "--section", dest="section_id", default=None,
+        help="섹션 ID. 미지정 시 .env 또는 첫 섹션.",
+    )
+    gc.add_argument(
+        "--days", type=int, default=365,
+        help="후잉에서 fetch 할 entries 윈도우 (기본 365). orphan 판정의 valid set.",
+    )
+    gc.add_argument(
+        "--dry-run", action="store_true",
+        help="실제 삭제하지 않고 후보만 표시.",
+    )
+    gc.add_argument(
+        "--keep-files", action="store_true",
+        help="db row 만 삭제하고 디스크 파일은 보존.",
+    )
+
+    # CL #51146+ (A17) — 첨부파일 export.
+    ex = sub.add_parser(
+        "export-attachments",
+        help="첨부파일을 zip 으로 export (entry 별 또는 section 별).",
+    )
+    ex.add_argument(
+        "--entry", dest="entry_id", default=None,
+        help="단일 entry_id 의 첨부만.",
+    )
+    ex.add_argument(
+        "--section", dest="section_id", default=None,
+        help="섹션 ID 의 모든 첨부 (--entry 와 둘 중 하나만).",
+    )
+    ex.add_argument(
+        "--out", dest="out_path", required=True,
+        help="출력 zip 파일 경로.",
+    )
+
     return p
 
 
@@ -247,6 +287,157 @@ async def _cmd_entries_list(args: argparse.Namespace) -> int:
 
 # ---- entry point --------------------------------------------------------
 
+async def _cmd_gc_attachments(args: argparse.Namespace) -> int:
+    """CL #51132+ (A2) — 후잉 ledger 에 없는 첨부 row + 디스크 파일 청소.
+
+    절차:
+      1. 후잉 entries (지정 섹션, 최근 N 일) fetch → valid_entry_ids set.
+      2. core_attach.cleanup_orphan_attachments(dry_run=...) 호출.
+      3. 결과 print + (실 삭제 시) P4 자동 submit (db + 사라진 파일 path).
+    """
+    from datetime import datetime, timedelta
+    from whooing_core import attachments as core_attach
+    from whooing_tui import data as tui_data
+    from whooing_tui import p4_sync
+    from whooing_tui.auth import load_auth_from_env
+    from whooing_tui.client import WhooingClient
+
+    # 1. ledger fetch.
+    auth = load_auth_from_env()
+    client = WhooingClient(auth)
+    section_id = await _resolve_section_id(client, args.section_id)
+    end_d = datetime.now()
+    start_d = end_d - timedelta(days=max(1, args.days))
+    entries = await client.list_entries(
+        section_id=section_id,
+        start_date=start_d.strftime("%Y%m%d"),
+        end_date=end_d.strftime("%Y%m%d"),
+    )
+    valid = {str(e.get("entry_id")) for e in entries if e.get("entry_id")}
+    print(
+        f"섹션 {section_id} 의 최근 {args.days}일 거래 {len(entries)}건 fetch — "
+        f"valid_entry_id {len(valid)}개"
+    )
+
+    # 2. cleanup.
+    tui_data.init_shared_schema()
+    root = tui_data.attachments_root()
+    deleted_paths: list = []
+    with tui_data.open_rw() as conn:
+        result = core_attach.cleanup_orphan_attachments(
+            conn, valid,
+            attachments_root=root,
+            delete_files=not args.keep_files,
+            dry_run=args.dry_run,
+        )
+        # 사라진 파일 path 수집 — P4 submit 용.
+        if not args.dry_run and not args.keep_files:
+            for o in result["orphans"]:
+                # cleanup 이 실제 unlink 했는지는 result 에 없지만 path 는 명확.
+                deleted_paths.append(root / o["file_path"])
+
+    # 3. 보고.
+    print(
+        f"orphan {result['orphan_count']}건 발견 — "
+        f"db row 삭제 {result['rows_deleted']} / "
+        f"파일 삭제 {result['files_deleted']} / "
+        f"dedup 보존 {result['files_kept_dedup']}"
+        + (" (DRY RUN)" if args.dry_run else "")
+    )
+    for o in result["orphans"][:10]:
+        print(
+            f"  - id={o['id']} entry={o['entry_id']} "
+            f"file={o['file_path']} {o.get('original_filename') or ''}"
+        )
+    if len(result["orphans"]) > 10:
+        print(f"  ... +{len(result['orphans']) - 10} more")
+
+    # 4. P4 submit (실 삭제 시만).
+    if not args.dry_run and result["rows_deleted"] > 0:
+        p4_sync.submit_files_to_p4(
+            [tui_data.db_path(), *deleted_paths],
+            f"[whooing-tui] gc-attachments: orphan {result['rows_deleted']} rows + "
+            f"{result['files_deleted']} files (section={section_id})",
+            blocking=True,
+        )
+    return 0
+
+
+def _cmd_export_attachments(args: argparse.Namespace) -> int:
+    """CL #51146+ (A17) — entry 또는 section 의 첨부를 zip 으로 export.
+
+    포함:
+      - 디스크 파일들 (각 첨부의 file_path).
+      - `manifest.json` — entry/section/sha256/size/note 등 메타.
+    """
+    import json
+    import zipfile
+    from pathlib import Path
+    from whooing_core import attachments as core_attach
+    from whooing_tui import data as tui_data
+
+    if not args.entry_id and not args.section_id:
+        print("error: --entry 또는 --section 중 하나 필수", file=sys.stderr)
+        return 2
+    if args.entry_id and args.section_id:
+        print("error: --entry / --section 동시 지정 불가", file=sys.stderr)
+        return 2
+
+    tui_data.init_shared_schema()
+    root = tui_data.attachments_root()
+    out_path = Path(args.out_path).expanduser().resolve()
+
+    rows: list[dict[str, Any]] = []
+    with tui_data.open_ro() as conn:
+        if args.entry_id:
+            m = core_attach.list_attachments_for(
+                conn, [args.entry_id], section_id=args.section_id,
+            )
+            rows = m.get(args.entry_id, [])
+        else:
+            # section 전체 — 모든 entry_id 의 첨부.
+            cur = conn.execute(
+                "SELECT * FROM entry_attachments WHERE section_id = ? "
+                "ORDER BY entry_id, attached_at",
+                (args.section_id,),
+            )
+            rows = [dict(r) for r in cur.fetchall()]
+
+    if not rows:
+        print(
+            f"export 할 첨부 0건 (entry={args.entry_id or '-'}, "
+            f"section={args.section_id or '-'})"
+        )
+        return 0
+
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    written = 0
+    skipped = 0
+    with zipfile.ZipFile(out_path, "w", zipfile.ZIP_DEFLATED) as zf:
+        for r in rows:
+            full = root / r["file_path"]
+            if not full.exists():
+                skipped += 1
+                continue
+            arcname = f"files/{r['file_path']}"
+            zf.write(full, arcname=arcname)
+            written += 1
+        # manifest — caller 가 entry_id / sha256 / note 등을 zip 안에서 회수.
+        manifest = {
+            "schema_version": tui_data.schema_version(),
+            "entry_id": args.entry_id,
+            "section_id": args.section_id,
+            "rows": rows,
+        }
+        zf.writestr("manifest.json", json.dumps(manifest, ensure_ascii=False, indent=2))
+
+    print(
+        f"export 완료: {out_path} — {written} 파일 + manifest "
+        f"(skipped: {skipped})"
+    )
+    return 0
+
+
 async def _dispatch_async(args: argparse.Namespace) -> int:
     if args.command == "sections" and args.sections_command == "list":
         return await _cmd_sections_list(args)
@@ -254,6 +445,11 @@ async def _dispatch_async(args: argparse.Namespace) -> int:
         return await _cmd_accounts_list(args)
     if args.command == "entries" and args.entries_command == "list":
         return await _cmd_entries_list(args)
+    if args.command == "gc-attachments":
+        return await _cmd_gc_attachments(args)
+    if args.command == "export-attachments":
+        # CL #51146+ (A17) — sync (zip + db SELECT 만, 후잉 호출 없음).
+        return _cmd_export_attachments(args)
     # parser 가 required=True 로 막기 때문에 도달 불가
     raise ToolError("INTERNAL", f"unknown command path: {args!r}")
 

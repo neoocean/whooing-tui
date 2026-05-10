@@ -43,37 +43,58 @@ wrapper 가 의도적으로 코드 중복** 으로 공유하기 위해 만들어
 
 ## 3. 아키텍처
 
-### 3.0 모듈 인벤토리 (0.17.x)
+### 3.0 모듈 인벤토리 (0.50.0)
 
 | 모듈 | 책무 |
 | --- | --- |
 | `__init__.py` | 버전 |
 | `__main__.py` | 엔트리: `python -m whooing_tui` |
-| `cli.py` | argparse + 헤드리스 서브커맨드 dispatch |
+| `cli.py` | argparse + 헤드리스 서브커맨드 dispatch (`sections` / `accounts` / `entries` / `gc-attachments` / `export-attachments`) |
 | `auth.py` | `WhooingAuth` — 토큰 헤더 + 마스크 |
-| `client.py` | httpx 기반 후잉 REST 클라이언트 + `CachedWhooingClient` |
+| `client.py` | httpx 기반 후잉 REST + `CachedWhooingClient`. mutating endpoints: entries / accounts / monthly / budget / goal (CL #51152~#51154 의 monthly/budget/goal setter 는 endpoint 추정) |
 | `config.py` | TOML config 로더 |
 | `dates.py` | KST YYYYMMDD/YYYYMM 유틸 + 1년 분할 |
 | `errors.py` | HTTP → `ToolError` 매핑 + secret 마스크 |
 | `models.py` | Pydantic `Section` / `Account` / `Entry` / `ToolError` |
 | `state.py` | `SessionState` (활성 섹션 + 계정 캐시 + 양방향 인덱스) |
 | `cache.py` | `CacheStore` — sqlite 기반 accounts/entries 캐시 (Phase 3) |
-| `data.py` | 로컬 sqlite + 첨부 storage 위치 + 마이그레이션 + P4 sync hook |
+| `data.py` | 로컬 sqlite + 첨부 storage 위치 (`<project>/attachment/`) + 마이그레이션 + P4 sync hook (CL #51123+) |
 | `filters.py` | column-별 필터 술어 (date/left/right/item) |
-| `ime.py` | 한글 ↔ 영문 두벌식 매핑 + `bind_ko` 헬퍼 |
-| `p4_sync.py` | **P4 자동 동기화** (0.15.0+, CL #51114+) — sync_db_from_p4 / submit_db_to_p4 / wait_for_pending / flush_on_exit / describe_annotation |
-| `app.py` | Textual App — `WhooingTuiApp(client=…)` + `on_unmount`(P4 flush) |
+| `ime.py` | 한글 ↔ 영문 두벌식 + `bind_ko` + 초성 분해 (`choseong_of` / `to_choseong_string`, CL #51138+) |
+| `p4_sync.py` | P4 자동 동기화 — `submit_files_to_p4`(다중 파일, CL #51124+) + describe_annotation/attachment_add/attachment_delete + `on_complete` callback (CL #51136+) |
+| `app.py` | Textual App + `on_unmount`(P4 flush) |
+| **`widgets/menubar.py`** | F10 풀다운 메뉴바 (CL #51126+, MenuBar/MenuPopup/MenuBarMixin/menubar_bindings) |
+| **`widgets/input_modal.py`** | 통합 입력 modal (CL #51156+, InputModal/TextAreaModal) |
+| **`widgets/confirm.py`** | 통합 yes/no modal (CL #51156+, ConfirmModal) |
 | `screens/__init__.py` | Screen 패키지 |
-| `screens/entries.py` | **EntriesScreen** — 거래내역 표 + 컬럼 marker + sentinel + 인라인 해시태그 + 컴팩트 모드 + 가로 스크롤 |
-| `screens/sections.py` | `SectionPickerScreen` (모달, `s` 키) |
-| `screens/accounts.py` | `AccountsScreen` (`a` 키) + `AccountEditDialog` |
-| `screens/edit_entry.py` | `EntryEditDialog` + `_DateInput` / `_MoneyInput` / `_AccountButton` 위젯 + `ConfirmModal` |
-| `screens/account_picker.py` | `AccountPickerScreen` (트리, EntryEditDialog 의 left/right) |
-| `screens/tags_picker.py` | `TagsPickerScreen` (해시태그 입력 보조) |
-| `screens/reports.py` | **ReportsMenuScreen** + `ReportResultScreen` (0.16.0+, `t` 키) |
-| `screens/help.py` | `HelpModal` (`?` 키) |
-| `screens/annotator.py` / `attachment_browser.py` / `statement_import.py` | 첨부/명세서 import (Phase 6) |
-| `theming.tcss` | 전역 스타일 (Header/Footer dock + 색) |
+| `screens/entries.py` | EntriesScreen — 거래내역 표 + 메뉴바 + 컴팩트 + 첨부 indicator (📎N) + multi-select (▣) + 6+ wizard |
+| `screens/entries_compact.py` | **신규 (CL #51158+)** pure helpers: 약어 / 임계값 / 컬럼 visibility |
+| `screens/sections.py` | SectionPickerScreen (`s`) |
+| `screens/accounts.py` | AccountsScreen (`a`) + AccountEditDialog + 메뉴바 통합 (CL #51131+) |
+| `screens/edit_entry.py` | EntryEditDialog + 위젯 + tags inline 힌트 (CL #51149+) |
+| `screens/account_picker.py` | AccountPickerScreen (트리) |
+| `screens/tags_picker.py` | TagsPickerScreen + 초성 검색 매칭 (CL #51138+) |
+| `screens/reports.py` | ReportsMenuScreen (11 항목, `t`) + ReportResultScreen |
+| `screens/help.py` | HelpModal (`?`) |
+| `screens/attachment_browser.py` | 첨부 list/추가/삭제/note-편집/paste-자동 (`f` 키) |
+| `screens/file_picker.py` | **신규 (CL #51139+)** 디렉터리 navigation modal |
+| `screens/statement_import.py` | 카드 명세서 import (HTML/CSV/PDF) + dedup (CL #51129+) |
+| `screens/receipt_attach.py` | **신규 (CL #51128+)** PDF 영수증 자동 매칭/첨부 + 거래 제안 |
+| `screens/tag_management.py` | **신규 (CL #51135+)** 태그 rename/merge/delete + 색상 (CL #51151+) |
+| `screens/monthly_entries.py` | **신규 (CL #51152+)** 매월입력 (정기) 거래 |
+| `screens/budget_edit.py` | **신규 (CL #51153+)** 예산 입력/편집 |
+| `screens/goal_edit.py` | **신규 (CL #51154+)** 장기/월별 목표 입력/편집 |
+| `theming.tcss` | 전역 스타일 |
+
+### 3.0a core 모듈 인벤토리
+
+| 모듈 | 책무 |
+| --- | --- |
+| `core/db.py` | SQLite schema v7 + migrations + annotation/hashtag/tag_meta/import_log/audit_log CRUD |
+| `core/attachments.py` | sha256 dedup storage + trash + GC + audit |
+| `core/dates.py` | KST helper |
+| `core/csv_adapters/*` / `core/html_adapters/*` / `core/pdf_adapters/*` | 카드 명세서 어댑터 (현대/하나/신한/국민/삼성) |
+| `core/receipt/extractor.py` | **신규 (CL #51128+)** PDF 영수증 regex 추출 (date/amount/merchant) |
 
 ### 3.1 호출 그래프
 

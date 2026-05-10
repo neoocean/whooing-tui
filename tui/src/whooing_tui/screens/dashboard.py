@@ -22,11 +22,16 @@ from whooing_tui import data as tui_data
 log = logging.getLogger(__name__)
 
 
-def gather_stats() -> dict[str, Any]:
-    """통계 한 번에. db 없으면 빈 결과 (각 키 = 0/[])."""
+def gather_stats(*, section_id: str | None = None) -> dict[str, Any]:
+    """통계 한 번에. db 없으면 빈 결과 (각 키 = 0/[]).
+
+    CL #51133+ (H2): `section_id` 명시 시 해당 섹션의 hashtag / attachment 만
+    집계 — cross-section 통계 오염 방지. None 이면 종전 동작 (모든 섹션 합).
+    """
     out: dict[str, Any] = {
         "schema_version": None,
         "db_path": str(tui_data.db_path()),
+        "section_id": section_id,
         "import_total": 0,
         "import_by_status": {},
         "annotation_count": 0,
@@ -42,32 +47,64 @@ def gather_stats() -> dict[str, Any]:
 
     try:
         with tui_data.open_ro() as conn:
-            # imports
-            for r in conn.execute(
-                "SELECT status, COUNT(*) AS n FROM statement_import_log GROUP BY status"
-            ):
+            # imports — section 필터.
+            if section_id is None:
+                imp_rows = conn.execute(
+                    "SELECT status, COUNT(*) AS n FROM statement_import_log "
+                    "GROUP BY status"
+                )
+            else:
+                imp_rows = conn.execute(
+                    "SELECT status, COUNT(*) AS n FROM statement_import_log "
+                    "WHERE section_id = ? GROUP BY status",
+                    (section_id,),
+                )
+            for r in imp_rows:
                 out["import_by_status"][r["status"]] = r["n"]
                 out["import_total"] += r["n"]
             # annotations
-            row = conn.execute(
-                "SELECT COUNT(*) AS n, COUNT(note) AS m FROM entry_annotations"
-            ).fetchone()
-            out["annotation_count"] = row["n"]
-            out["annotation_with_memo"] = row["m"]
-            # top hashtags
-            tag_rows = conn.execute(
-                "SELECT tag, COUNT(*) AS n FROM entry_hashtags "
-                "GROUP BY tag ORDER BY n DESC LIMIT 10"
-            ).fetchall()
+            if section_id is None:
+                ann_row = conn.execute(
+                    "SELECT COUNT(*) AS n, COUNT(note) AS m FROM entry_annotations"
+                ).fetchone()
+            else:
+                ann_row = conn.execute(
+                    "SELECT COUNT(*) AS n, COUNT(note) AS m FROM entry_annotations "
+                    "WHERE section_id = ?",
+                    (section_id,),
+                ).fetchone()
+            out["annotation_count"] = ann_row["n"]
+            out["annotation_with_memo"] = ann_row["m"]
+            # top hashtags — section 필터 (CL #51133+ H2).
+            if section_id is None:
+                tag_rows = conn.execute(
+                    "SELECT tag, COUNT(*) AS n FROM entry_hashtags "
+                    "GROUP BY tag ORDER BY n DESC LIMIT 10"
+                ).fetchall()
+            else:
+                tag_rows = conn.execute(
+                    "SELECT tag, COUNT(*) AS n FROM entry_hashtags "
+                    "WHERE section_id = ? GROUP BY tag ORDER BY n DESC LIMIT 10",
+                    (section_id,),
+                ).fetchall()
             out["top_hashtags"] = [(r["tag"], r["n"]) for r in tag_rows]
-            # attachments
-            row = conn.execute(
-                "SELECT COUNT(*) AS n, COUNT(DISTINCT file_sha256) AS u, "
-                "COALESCE(SUM(file_size_bytes), 0) AS bytes FROM entry_attachments"
-            ).fetchone()
-            out["attachment_count"] = row["n"]
-            out["attachment_unique_files"] = row["u"]
-            out["attachment_total_bytes"] = row["bytes"]
+            # attachments — section 필터.
+            if section_id is None:
+                att_row = conn.execute(
+                    "SELECT COUNT(*) AS n, COUNT(DISTINCT file_sha256) AS u, "
+                    "COALESCE(SUM(file_size_bytes), 0) AS bytes "
+                    "FROM entry_attachments"
+                ).fetchone()
+            else:
+                att_row = conn.execute(
+                    "SELECT COUNT(*) AS n, COUNT(DISTINCT file_sha256) AS u, "
+                    "COALESCE(SUM(file_size_bytes), 0) AS bytes "
+                    "FROM entry_attachments WHERE section_id = ?",
+                    (section_id,),
+                ).fetchone()
+            out["attachment_count"] = att_row["n"]
+            out["attachment_unique_files"] = att_row["u"]
+            out["attachment_total_bytes"] = att_row["bytes"]
     except Exception as ex:
         log.exception("dashboard query failed: %s", ex)
     return out

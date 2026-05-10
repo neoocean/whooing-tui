@@ -31,6 +31,7 @@ from textual.widgets import (
 from whooing_tui.client import WhooingClient
 from whooing_tui.dates import parse_yyyymmdd, today_yyyymmdd
 from whooing_tui.ime import bind_ko
+from whooing_tui.widgets import MenuBar, MenuBarMixin, MenuItem, MenuSpec, menubar_bindings
 from whooing_tui.models import ToolError
 from whooing_tui.screens.edit_entry import ConfirmModal
 from whooing_tui.state import SessionState
@@ -252,8 +253,35 @@ class AccountEditDialog(ModalScreen[AccountDraft | None]):
 # ---- AccountsScreen ----------------------------------------------------
 
 
-class AccountsScreen(Screen):
-    """활성 섹션의 계정과목 트리 + CRUD."""
+class AccountsScreen(MenuBarMixin, Screen):
+    """활성 섹션의 계정과목 트리 + CRUD. CL #51131+ F10 메뉴바 통합."""
+
+    @staticmethod
+    def _build_menus() -> tuple[MenuSpec, ...]:
+        return (
+            MenuSpec(
+                name="파일",
+                items=(
+                    MenuItem("재로드 (r)", "refresh"),
+                    MenuItem("뒤로 (q)", "back"),
+                ),
+            ),
+            MenuSpec(
+                name="입력",
+                items=(
+                    MenuItem("새 계정과목 (n)", "new_account"),
+                ),
+            ),
+            MenuSpec(
+                name="도움말",
+                items=(
+                    MenuItem("키보드 단축키 (?)", "help"),
+                ),
+            ),
+        )
+
+    def _menubar_widget_id(self) -> str:
+        return "accounts-menubar"
 
     DEFAULT_CSS = """
     AccountsScreen {
@@ -288,6 +316,8 @@ class AccountsScreen(Screen):
         Binding("enter", "edit_account", "Edit", show=True, priority=True),
         *bind_ko("d", "delete_account", "Delete", show=True, priority=True),
         Binding("question_mark", "help", "Help", show=True, priority=True, key_display="?"),
+        # CL #51131+ F10 메뉴바.
+        *menubar_bindings(),
     ]
 
     def __init__(self, client: WhooingClient) -> None:
@@ -303,6 +333,8 @@ class AccountsScreen(Screen):
 
     def compose(self) -> ComposeResult:
         yield Header(show_clock=True)
+        # CL #51131+: F10 메뉴바 — Header 아래 항상 노출.
+        yield MenuBar(self._build_menus(), id="accounts-menubar")
         with Vertical(id="acc-body"):
             yield Tree("(섹션 미선택)", id="accounts-tree")
         yield Static("", id="acc-status")

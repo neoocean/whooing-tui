@@ -93,6 +93,38 @@ def test_filter_tags_case_insensitive():
     assert filter_tags("Co", ["coffee", "tea", "Cocoa"]) == ["coffee", "Cocoa"]
 
 
+# ---- CL #51138+ (H8) 초성 매칭 -----------------------------------------
+
+
+def test_filter_tags_choseong_jamo_matches_korean_brand():
+    """ㅅㅂ → '스벅' / '스타벅스' / '서비스' 모두 후보 (초성 substring)."""
+    out = filter_tags("ㅅㅂ", ["스벅", "스타벅스", "서비스", "카페", "커피"])
+    # prefix/substring 우선, 그 다음 cho 매칭. 본 케이스는 모두 cho.
+    assert "스벅" in out
+    assert "스타벅스" in out
+    assert "서비스" in out
+    assert "카페" not in out
+
+
+def test_filter_tags_choseong_three_jamo():
+    """3자모 — ㅅㅌㅂ → 스타벅스 (4음절) 만 매칭."""
+    out = filter_tags("ㅅㅌㅂ", ["스타벅스", "스벅", "스타", "타벅"])
+    assert "스타벅스" in out
+    assert "스벅" not in out  # 초성 ㅅㅂ 라 ㅅㅌㅂ 매칭 X.
+
+
+def test_filter_tags_substring_priority_over_choseong():
+    """음절 substring 이 있으면 그 결과 먼저, 초성 은 그 다음."""
+    out = filter_tags("스타", ["스타벅스", "스벅", "타스타"])
+    # query 자체가 음절 → choseong 매칭 안 함, prefix/substring 만.
+    assert out[:2] == ["스타벅스", "타스타"]
+
+
+def test_filter_tags_empty_query_returns_all():
+    out = filter_tags("", ["a", "b", "c"])
+    assert out == ["a", "b", "c"]
+
+
 # ---- 통합 (App.run_test) -----------------------------------------------
 
 

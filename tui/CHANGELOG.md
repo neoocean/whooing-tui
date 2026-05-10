@@ -2,6 +2,2036 @@
 
 각 항목은 Perforce CL 단위로 끊는다.
 
+> **0.17.x 이전** (CL #51119 ~ #1) 항목은 분량 정리 차원에서
+> [`CHANGELOG-archive-0.17.md`](./CHANGELOG-archive-0.17.md) 로 분리 보존.
+
+## CL #51160 — 0.51.0 — 리뷰 C13/C16: monthly TODO + CHANGELOG archive (2026-05-11)
+
+배경 (review C10~C14, C16 polish 묶음): 잔여 polish 항목을 합쳐 ship.
+
+### 동작
+
+- **C16 CHANGELOG archive**: 4532 줄 → 2182 줄 (-2350). 0.17.x 이전
+  (CL #51119~#1, 0.16.3 → 0.1.0) 을 `CHANGELOG-archive-0.17.md` 로 분리.
+  `CHANGELOG.md` 는 0.17.x 이후만 유지 + archive 링크.
+- **C13 (부분)**: `_MonthlyEditModal` 의 raw account_id 텍스트 입력에
+  TODO 주석 hint 추가. 본격 AccountPicker 통합은 후속 (큰 변경, EntryDraft
+  같은 데이터 모델 + state 흐름 필요).
+
+### 보류 (의도적)
+
+- **C10 typing**: client.py 의 `Any` 72회 → TypedDict. 작업량 대비 가치
+  중간 — 별도 CL.
+- **C11 pragma 줄이기**: 80개 중 일부 → 실 테스트. happy-path 분기 위주
+  로 점진적.
+- **C12 entries.py inline import 21회 정리**: circular dep 없는 것은
+  module-level 로 옮길 수 있으나 위험 vs 가치 trade-off — 별도 CL.
+- **C13 본격 AccountPicker 통합**: EntryEditDialog 의 패턴 (state 보존
+  + draft 변환) 을 monthly 화면에 도입 — 큰 변경, 별도 CL.
+- **C14 _normalize_collection module-level**: static method → 함수 변경
+  은 시그니처 호환 차이 발생. 가치 작아 보류.
+
+### 수정
+
+- `tui/CHANGELOG-archive-0.17.md` — 신규 (2359 줄, CL #51119~#1).
+- `tui/CHANGELOG.md` — 4532 → 2182 줄. 헤더에 archive 링크.
+- `tui/src/whooing_tui/screens/monthly_entries.py` — `_MonthlyEditModal`
+  의 compose 에 TODO C13 hint Label.
+- `tui/pyproject.toml` — 0.50.1 → 0.51.0.
+
+### 검증
+
+- 합계 — **764 passed in 47.85s** (회귀 없음).
+
+---
+
+## 6-CL 코드 리뷰 자율 진행 완료
+
+CL #51155~#51160. 16개 review 항목 중 8개 직접 처리 (P0 3건 + 통합 4건 +
+docs) + 8개 의도 보류 (가치 vs 위험). 코드 baseline 건강도 향상:
+
+- 코드 net: **-180+ 줄** (modal 통합 -100, helper 통합 ∼-20, entries 분리
+  -54, README/DESIGN 갱신, CHANGELOG -2350 → archive).
+- 테스트: 710 → **764 (+54)** — 신규 helper unit + entries_compact 단위.
+- silent bug 3건 fix (schema bump / receipt mirror / p4 격리).
+
+## CL #51159 — 0.50.1 — 리뷰 C15: README/DESIGN 갱신 (0.18.0 → 0.50.0 누적) (2026-05-11)
+
+배경 (review C15): README.md / DESIGN.md 가 CL #51122 (0.17.2) 기준. 그 후
+36 CL (CL #51123~#51158) 의 변경 미반영 — 다음 세션 시작 시 사용자가 docs
+보면 stale.
+
+### 수정
+
+- `tui/README.md` — 버전 0.17.2 → 0.50.0. 0.18.0~0.50.0 누적 변경 요약 11
+  카테고리 (첨부 / 4단계 컴팩트 / 한국식 약어 / F10 메뉴 / 카드 명세서 /
+  PDF 영수증 / 해시태그 강화 / multi-select / 예산·목표·매월 / mixin / GC
+  / 코드 정리).
+- `tui/DESIGN.md` — §3.0 모듈 인벤토리 0.17.x → 0.50.0:
+  - 신규 7 화면 (entries_compact, file_picker, receipt_attach, tag_management,
+    monthly_entries, budget_edit, goal_edit) + 3 widgets (input_modal,
+    confirm, menubar).
+  - 변경된 5 화면의 책무 갱신 (entries / accounts / edit_entry / tags_picker /
+    attachment_browser).
+  - core 모듈 인벤토리 §3.0a 추가 — db (v7) / attachments / receipt 등.
+- `tui/pyproject.toml` — 0.50.0 → 0.50.1.
+
+### 검증
+
+- 합계 — **764 passed** (회귀 없음, 코드 변경 없음).
+
+## CL #51158 — 0.50.0 — 리뷰 C4: entries.py pure helper 분리 (entries_compact) (2026-05-11)
+
+배경 (review C4): entries.py 가 2431 줄 / 80+ 메서드 = God Object. 가장
+side-effect-free 한 부분 (약어 / 임계값 / column visibility) 을 별도 모듈
+로 추출 — 단위 테스트 가능 + entries.py 가독성 향상.
+
+### 동작
+
+- `screens/entries_compact.py` 신규 — module-level pure helpers:
+  - `COMPACT_THRESHOLDS = (80, 60, 45, 35)`.
+  - `compute_compact_level(width)` — width → 단계 (0~4).
+  - `is_hangul(ch)` — Hangul Syllables 음절 판정.
+  - `abbreviate_account_name(name)` — 한국식 줄임말 (prefix/suffix strip
+    + 길이 분기).
+  - `hidden_columns_for_level(level)` / `column_is_visible(col, level)` —
+    네비 skip 정책.
+- EntriesScreen 의 해당 메서드 (`_compute_compact_level` / `_is_hangul` /
+  `_abbreviate_account_name` / `_column_is_visible`) 는 후방 호환 wrapper
+  로 단축 — 본문 1~3 줄.
+
+### 보류
+
+- *큰* 분리 (EntriesRenderer / EntriesActions / EntriesNavigator 클래스
+  단위 추출) 는 위험 vs 가치 trade-off. EntriesScreen 의 state 가 깊고
+  cross-method 호출 많아 잘못된 분리는 회귀 risk 큼. 본 CL 은 가장
+  안전한 pure helper 만.
+
+### 수정
+
+- `tui/src/whooing_tui/screens/entries_compact.py` — 신규 (140 줄).
+- `tui/src/whooing_tui/screens/entries.py`:
+  - `_compute_compact_level` — pure logic 위임 (10 줄 → 5 줄).
+  - `_is_hangul` — 위임.
+  - `_abbreviate_account_name` — 본문 (40 줄) 위임.
+  - `_column_is_visible` — 위임.
+  - 2431 → 2377 줄 (-54).
+- `tui/tests/test_entries_compact.py` — 신규 단위 (parametrize 포함 44
+  케이스).
+- `tui/pyproject.toml` — 0.49.0 → 0.50.0.
+
+### 검증
+
+- 합계 — **764 passed in 47.63s** (이전 720, 신규 44).
+- 기존 약어/단계 회귀 (test_narrow_terminal.py 의 18+) 그대로 통과 — wrapper
+  유지 덕분.
+
+## CL #51157 — 0.49.0 — 리뷰 C7+C8+C9: 테스트 helper 통합 (FakeWhooingClient + wait_for + make_fake_p4) (2026-05-11)
+
+배경 (review C7/C8/C9): 테스트 코드의 `_FakeClient` (10+ 파일) / `_wait_for`
+(10+ 파일) / fake_p4 shell script (15회 in test_p4_sync.py) 중복.
+
+### 동작
+
+- `tui/tests/_helpers.py` 신규 — single source:
+  - `wait_for(predicate, *, timeout=3, interval=0.02)` — async polling.
+  - `FakeWhooingClient` — 종전 `_FakeClient` 들의 union. 메서드:
+    list_sections / list_accounts / list_entries / create_entry / update_entry
+    / delete_entry / list_monthly / create_monthly / delete_monthly /
+    get_budget / set_budget / delete_budget / get_budget_goal / set_budget_goal
+    / get_goal / set_goal. 각 mutating 호출은 `*_calls` list 에 추적.
+  - `make_fake_p4(tmp_path, *, log_file=None, where_returns=0, other_returns=0)`
+    — 가짜 p4 shell script + chmod. 호출자가 monkeypatch.setenv 만.
+
+### 신규 테스트 채택 정책
+
+- 신규 테스트는 `from tests._helpers import (...)` 로 사용.
+- 기존 10+ 파일의 `_FakeClient` / `_wait_for` 는 working code 라 일괄 교체
+  보류 (risk vs 가치). 점진적 채택.
+
+### 수정
+
+- `tui/tests/_helpers.py` — 신규 (220 줄).
+- `tui/tests/test_helpers.py` — 신규 helper 자체 sanity (10 테스트).
+- `tui/pyproject.toml` — 0.48.0 → 0.49.0.
+
+### 검증
+
+- 합계 — **720 passed in 48.39s** (이전 710, 신규 10).
+
+## CL #51156 — 0.48.0 — 리뷰 C5+C6: widgets/input_modal + confirm 통합 (2026-05-11)
+
+배경 (review C5/C6): 7개 입력 modal + 3개 confirm modal 이 거의 동일 구조로
+분산. 단일 widgets module 로 base 통합.
+
+### 동작
+
+- `widgets/input_modal.py` 신규 — `_BaseInputModal` (OK/Cancel + Esc/Ctrl+S
+  공통) + `InputModal` (단일 라인) + `TextAreaModal` (multi-line).
+  `accept_empty` 옵션으로 빈 입력을 None vs "" 분기.
+- `widgets/confirm.py` 신규 — `ConfirmModal` (yes/no, y/n/Esc 키, error
+  variant 버튼, `title` 옵션).
+- `widgets/__init__.py` exports 갱신.
+- 사용처 교체:
+  - `tag_management._TagInputModal` (3 곳) → `InputModal` + `_strip_tag_input`
+    helper (태그 normalize: `#` strip).
+  - `tag_management._ConfirmModal` → `ConfirmModal`.
+  - `monthly_entries._ConfirmModal` → `ConfirmModal` (alias 로 호환 유지).
+
+### 보류 (의도적)
+
+- `_MonthlyEditModal` (8 fields) / `_GoalEditModal` (mode 분기) /
+  `_FilePathModal` (Browse 버튼) / `_AddPathModal` / `_AmountModal` /
+  `_NoteEditModal` 은 자체 fields/로직이 커서 통합 가치 < 복잡성. 종전대로.
+- `edit_entry.ConfirmModal` (public) 은 외부 import 가 광범 — 후방 호환
+  위해 그대로. 내부 동작이 widgets.ConfirmModal 과 사실상 같음.
+
+### 수정
+
+- `tui/src/whooing_tui/widgets/input_modal.py` — 신규 (170 줄).
+- `tui/src/whooing_tui/widgets/confirm.py` — 신규 (60 줄).
+- `tui/src/whooing_tui/widgets/__init__.py` — exports.
+- `tui/src/whooing_tui/screens/tag_management.py` — 2 modal 클래스 (130 줄)
+  제거 + InputModal/ConfirmModal 사용 (∼ 30 줄 net 감소).
+- `tui/src/whooing_tui/screens/monthly_entries.py` — `_ConfirmModal` (35 줄)
+  제거 + alias.
+- `tui/pyproject.toml` — 0.47.0 → 0.48.0.
+
+### 검증
+
+- 합계 — **710 passed in 47.15s** (회귀 없음).
+- 코드 net: -100 줄 정도 (modal 코드 + dup CSS 제거).
+
+## CL #51155 — 0.47.0 — 코드 리뷰 P0: schema bump + receipt mirror + p4 격리 (2026-05-11)
+
+배경 (review C1+C2+C3): 코드 전체 리뷰에서 발견한 silent bug 3건.
+
+### 수정
+
+- **C1**: `core.db.SCHEMA_VERSION` 4 → 7 — CL #51133 (entry_hashtags.section_id),
+  #51147 (attachment_audit_log), #51151 (tag_meta) 후 stale 이었음. wrapper
+  의 `current_version()` mismatch 감지가 무력화 됐던 보호 복원.
+  - `_apply_lightweight_migrations` 가 모든 변경을 멱등 적용해 v4 db 도
+    자동 v7 로.
+  - 모듈 docstring 에 v4→v7 변경 history 명시.
+- **C2**: `ReceiptAttachScreen.action_propose_new` 가 거래 생성 후 사용자가
+  입력한 `memo` / `tags` 를 로컬 sqlite (entry_annotations / entry_hashtags)
+  에 mirror — 종전엔 후잉에만 가고 로컬 인덱스 누락. `_persist_local_for_
+  new_entry` helper 추가, EntriesScreen._persist_local 와 동일 P4 자동 submit.
+- **C3**: `tui/tests/conftest.py` 에 `_isolate_p4_pending` autouse fixture —
+  `p4_sync._PENDING` thread list 를 각 테스트 전후로 join + clear. 종전엔
+  한 테스트의 worker 가 다음 테스트까지 살아있어 `wait_for_pending` 결과
+  오염 위험. timeout 1s 로 빠른 격리.
+- 테스트 의 `schema_version == 4` / `"v4"` 모두 7 로 갱신.
+
+### 검증
+
+- 합계 — **710 passed in 48.01s** (이전 710, 신규 0 — 회귀 fix 만).
+
+## CL #51152~#51154 — 0.46.0 — 후잉 coverage P0: 매월입력 / 예산 / 목표 입력 UI (2026-05-11)
+
+배경 (whooing.com 기능 coverage 검토): 종전엔 budget/goal 의 GET 만 있었고
+매월입력 (`/help/reports/insert/tools/monthly`) 은 missing. 본 CL 묶음이
+**3 신규 화면** + client setter 추정 endpoint 로 P0 3건 모두 cover.
+
+### 동작
+
+- **매월입력 (CL #51152)**:
+  - `client.list_monthly` / `create_monthly` / `delete_monthly` — 추정
+    endpoint `/monthly.json` (collection) + `/monthly/<id>.json`. path
+    helper `_monthly_collection_path` / `_monthly_path` 별도 — 라이브
+    검증 시 mismatch 면 1 줄 수정으로 즉시 작동.
+  - `MonthlyEntriesScreen` — list / 신규 (target_day + 계정 + 금액 + item) /
+    삭제 (Confirm). F10 메뉴 + ↑/↓/n/d/r/q.
+  - 메뉴: 입력 → "매월입력 거래 관리…".
+
+- **예산 (CL #51153)**:
+  - `client.set_budget` (POST `/budget/<account>.json`) / `delete_budget`
+    (DELETE 같은 path).
+  - `BudgetEditScreen` — list (account 토글: expenses / income, Tab 키) +
+    Enter 로 amount modal + d 로 제거. 0 입력 = 제거 신호.
+  - 메뉴: 화면 → "예산 편집…".
+
+- **목표 (CL #51154)**:
+  - `client.set_budget_goal` (POST `/budget_goal.json`) / `set_goal`
+    (POST `/goal.json` — month-별).
+  - `GoalEditScreen` — Tab 으로 장기목표 ↔ 월별 자본 모드 전환. Enter 로
+    `_GoalEditModal` (amount + target_date 또는 target_month).
+  - 메뉴: 화면 → "목표 편집…".
+
+### 추정 vs 검증
+
+후잉 공식 docs 가 JS 렌더라 mutating endpoint path 미공개 — 본 CL 의 `set_*`
+/ `create_*` / `delete_*` 는 모두 **REST 관습 추정**. 라이브 호출 실패 시:
+- `MonthlyEntriesScreen` / `BudgetEditScreen` / `GoalEditScreen` 모두 status
+  bar 에 `endpoint 추정 mismatch 가능 — client.py 의 ___ 확인` 안내.
+- 사용자가 Browser DevTools 로 실 path 확인 후 client 의 `_monthly_*_path`
+  같은 helper 또는 inline path string 만 수정.
+
+### 수정
+
+- `tui/src/whooing_tui/client.py` — 7개 신규 method (list_monthly /
+  create_monthly / delete_monthly / set_budget / delete_budget /
+  set_budget_goal / set_goal) + `_monthly_*_path` helper.
+- `tui/src/whooing_tui/screens/monthly_entries.py` — 신규 screen +
+  `_MonthlyEditModal` + `_ConfirmModal`.
+- `tui/src/whooing_tui/screens/budget_edit.py` — 신규 screen + `_AmountModal`.
+- `tui/src/whooing_tui/screens/goal_edit.py` — 신규 screen + `_GoalEditModal`.
+- `tui/src/whooing_tui/screens/entries.py` — 메뉴 3 항목 추가 + 3 action.
+- `tui/tests/test_monthly_entries.py` — 신규 4.
+- `tui/tests/test_budget_edit.py` — 신규 4.
+- `tui/tests/test_goal_edit.py` — 신규 3.
+- `tui/pyproject.toml` — 0.45.0 → 0.46.0.
+
+### 검증
+
+- 합계 — **710 passed in 55.93s** (이전 699, 신규 11).
+- 모든 client 호출은 FakeClient mock — 실 후잉 호출 없음.
+- 라이브 검증 절차: 후잉 가입 사용자가 메뉴 → 매월거래/예산/목표 한 번씩
+  실행 → status 메시지 확인. ENDPOINT mismatch 면 client.py 1 줄 수정.
+
+### 후잉 coverage 갱신
+
+| 분류 | 종전 (CL #51151) | 신규 (CL #51154) |
+|---|---|---|
+| 거래 입력 | 50% | **67%** (매월입력 추가) |
+| 예산·목표 | 0% (조회만) | **100%** (입력 UI 모두) |
+| 종합 | ~60% | **~75%** |
+
+## CL #51151 — 0.45.0 — H11: tag colors (tag_meta) (2026-05-11)
+
+배경 (review P3 마지막): 태그 시각 구분 부재. 카테고리별 색 분류로 누적
+사용자가 빠른 시각 인식 가능.
+
+### 동작
+
+- 신규 테이블 `tag_meta` (PK = (tag, section_id)): tag / section_id /
+  color / updated_at. NULL section_id = default (모든 섹션 적용).
+- core helpers:
+  - `set_tag_color(conn, tag, color, *, section_id=None)` — INSERT OR
+    REPLACE. `color=None` 또는 빈 문자열 → DELETE (기본 색으로 fallback).
+  - `get_tag_colors(conn, *, section_id=None)` — `{tag: color}`. 섹션
+    명시값이 default 를 override.
+- TagManagementScreen:
+  - `c` 키 (Color) — `_color_worker` 가 `_TagInputModal` 재사용 (입력 =
+    색명). 빈 입력 = 색 제거.
+  - 메뉴 "편집" 에 "색 변경 (c)" 항목.
+  - DataTable 의 tag 컬럼이 `[color]#tag[/color]` Rich markup 으로 렌더.
+- EntriesScreen:
+  - `_tag_colors: dict[str, str]` 인스턴스 필드.
+  - `_fetch_tag_colors()` — 활성 섹션의 색 batch fetch (refresh_entries
+    에서).
+  - `_format_cell` 의 item 컬럼 inline tag 표시에 색 적용.
+- 색명: Rich/Textual 표준 (red/cyan/magenta/yellow/blue/green/`#ff8800`
+  hex 등 모두 가능).
+
+### 수정
+
+- `core/src/whooing_core/db.py`:
+  - `_apply_lightweight_migrations` 에 `tag_meta` CREATE.
+  - `set_tag_color` / `get_tag_colors`.
+- `tui/src/whooing_tui/screens/tag_management.py`:
+  - BINDINGS 에 `c`, 메뉴에 "색 변경" 항목.
+  - `action_color` + `_color_worker`.
+  - `action_refresh` 가 색 batch fetch + Rich markup.
+- `tui/src/whooing_tui/screens/entries.py`:
+  - `_tag_colors` 필드 + `_fetch_tag_colors`.
+  - `refresh_entries` 가 호출.
+  - `_format_cell` 의 inline tag 가 색 markup.
+- `core/tests/test_db.py` — 신규 6 (set/get / hash strip / section override /
+  None remove / "" remove / 빈 fetch).
+- `tui/pyproject.toml` — 0.44.0 → 0.45.0.
+
+### 검증
+
+- 합계 — **699 passed in 45.81s** (이전 693, 신규 6).
+
+### 후속
+
+- TagsPickerScreen 의 옵션도 색 적용 — 본 CL 은 EntriesScreen + TagManagement
+  까지. 후속 polish.
+
+## CL #51150 — 0.44.0 — H4: tag case normalize 옵션 (env) (2026-05-11)
+
+배경 (review P3 보류분): `#Cafe` / `#cafe` 가 별개 태그 — 사용자 의도
+분리 (영문 회사명 vs 일반 명사). 강제 lower 는 데이터 손실 위험. 본 CL
+이 옵트인 env 옵션으로 expose.
+
+### 동작
+
+- `WHOOING_TAG_CASE_NORMALIZE` env 변수:
+  - `preserve` (default) — 입력 그대로. 종전 동작.
+  - `lower` — 모든 태그를 소문자.
+  - `upper` — 모든 태그를 대문자.
+  - 그 외 / 미설정 → preserve fallback.
+- `set_hashtags` 진입 시 `_tag_case_mode()` lookup + `_apply_tag_case` 적용.
+- 한글 음절 (Hangul Syllables) 은 case 개념 없음 — `lower`/`upper` 모두
+  영향 X (자동 무효).
+
+### 수정
+
+- `core/src/whooing_core/db.py`:
+  - `_tag_case_mode()` / `_apply_tag_case()` helpers.
+  - `set_hashtags` 가 case 적용 후 dedup.
+- `core/tests/test_db.py` — 신규 5 (default preserve / lower / upper /
+  잘못된 모드 fallback / 한글 보존).
+- `tui/pyproject.toml` — 0.43.0 → 0.44.0.
+
+### 검증
+
+- 합계 — **693 passed in 45.07s** (이전 688, 신규 5).
+
+### 주의
+
+- `lower` 모드 활성화 시 기존 db 의 `#Cafe` row 는 그대로 (legacy). 다음
+  set_hashtags 호출에서 lower 적용. 일괄 변환은 별도 — `tag_management`
+  의 rename_tag 로 사용자가 정리.
+
+## CL #51149 — 0.43.0 — H7: tag inline 힌트 (EntryEditDialog) (2026-05-11)
+
+배경 (review P2 보류분): tags Input 에서 typing 중에는 매칭 태그가 안
+보임. Enter 로 TagsPickerScreen 띄워야만 후보 확인 가능. Textual Input
+의 dropdown popup 은 미지원 — 대신 Input 아래 Static hint 로 대체.
+
+### 동작
+
+- EntryEditDialog 의 `compose` 에 tags Input 바로 아래 `#f-tags-hint`
+  Static 추가.
+- `on_input_changed` 가 `#f-tags` 변경 시 `_refresh_tags_hint()` 호출.
+- `_refresh_tags_hint`:
+  - tags Input 의 마지막 token (whitespace/콤마/`#` split) 만 prefix 매칭.
+  - `_all_tags_db` (이미 prefill) 에서 후보 — 이미 입력란에 있는 태그 제외.
+  - `tags_picker.filter_tags` (CL #51138 의 초성 검색 포함) 로 매칭 → top 3.
+  - "💡 추천: #식비(N) #식권(N) #저녁(N)" 형식으로 hint Static 갱신.
+  - 후보 0 → "(매칭 없음)" / 빈 입력 → 빈 hint.
+- Enter 동작 (TagsPicker push) 은 그대로 — hint 는 보조 기능.
+
+### 수정
+
+- `tui/src/whooing_tui/screens/edit_entry.py` — `compose` 에 `#f-tags-hint`,
+  `on_input_changed` 핸들러, `_refresh_tags_hint` 메서드.
+- `tui/tests/test_entries_mutate.py` — 신규 2 (typing 시 hint / 빈 입력 hint).
+- `tui/pyproject.toml` — 0.42.0 → 0.43.0.
+
+### 검증
+
+- 합계 — **688 passed in 45.82s** (이전 686, 신규 2).
+
+### 한계
+
+- 진짜 dropdown popup (선택 가능) 은 Textual Input 의 한계로 미구현.
+  hint Static 은 시각만 — 사용자가 Enter 로 TagsPicker 띄워야 선택.
+  hint 만으로 사용자가 직접 타이핑 완성 가능 — 정상 사용 흐름은 충분.
+
+## CL #51148 — 0.42.0 — A3: upsert_attachment 의 application-level CHECK (2026-05-11)
+
+배경 (review P3 보류분): `entry_attachments` 의 `file_size_bytes` /
+`file_sha256` 가 schema 에서 NOT NULL 강제 X — 잘못된 caller 가 NULL row
+를 넣으면 dedup / GC / audit 모두 무력화. SQLite 의 ALTER 한계로 schema
+rebuild 는 위험 → application-level CHECK 로 대체.
+
+### 동작
+
+- `core_attach.upsert_attachment` 가 함수 진입 시점에 검증:
+  - `entry_id` / `file_path` / `original_filename` 빈 문자열 → ValueError.
+  - `file_size_bytes` None 또는 음수 → ValueError.
+  - `file_sha256` 빈/None → ValueError.
+- 종전 caller (`add_attachment`) 는 모두 채우므로 무영향.
+- schema 자체는 변경 X (rebuild risk 회피) — 기존 row (NULL 포함) 그대로
+  유지.
+
+### 수정
+
+- `core/src/whooing_core/attachments.py` — `upsert_attachment` 진입 시
+  6 줄 검증.
+- `core/tests/test_attachments.py` — 신규 6 (entry_id / file_path / size_None
+  / size 음수 / sha 누락 / 정상 input).
+- `tui/pyproject.toml` — 0.41.0 → 0.42.0.
+
+### 검증
+
+- 합계 — **686 passed in 46.53s** (이전 680, 신규 6).
+
+### 한계
+
+- schema-level NOT NULL 은 여전히 미강제. SQLite ALTER 의 한계 (table
+  rebuild + INSERT SELECT 만 가능) 라 마이그레이션 risk 가 가치보다 큼.
+  application-level 가 *모든 신규 row* 보호 — 기존 NULL row 가 있다면
+  GC 또는 manual fix.
+
+## CL #51147 — 0.41.0 — A16: attachment_audit_log (timeline) (2026-05-11)
+
+배경 (review P3 보류분): 누가/언제/어떤 첨부를 add/delete/note_edit 했는지
+SQLite-side timeline 부재. P4 history 가 부분 기능을 하지만 sqlite-only
+사용자에겐 부족.
+
+### 동작
+
+- 신규 테이블 `attachment_audit_log` (lightweight migration 으로 추가):
+  - `id` PK, `attachment_id` (delete 후 NULL 가능), `entry_id`, `action`
+    (add/delete/note_edit/restore), `actor` (미래 다중 사용자 — 현재 NULL),
+    `ts`, `details_json` (자유 dict).
+  - 인덱스: `attachment_id`, `entry_id`.
+- `core_db.log_attachment_audit(conn, ...)` — JSON 직렬화 + INSERT.
+- `core_db.list_attachment_audit(conn, *, attachment_id=None, entry_id=None,
+  limit=100)` — 시간 역순. JSON 자동 파싱 → `details` 키.
+- TUI wrapper 갱신:
+  - `add_attachment` 가 row insert 후 audit `add` (filename/sha/size/section).
+  - `update_note` 가 audit `note_edit` (filename/note_before/note_after).
+  - `remove` 가 audit `delete` (filename/sha/trashed/kept_other_refs/trash_path).
+
+### 수정
+
+- `core/src/whooing_core/db.py` — `_apply_lightweight_migrations` 에
+  CREATE TABLE + 인덱스. `log_attachment_audit` / `list_attachment_audit`.
+- `tui/src/whooing_tui/screens/attachment_browser.py` — add/update_note/
+  remove 모두 audit 호출.
+- `core/tests/test_db.py` — 신규 4 (insert / 필터+order / JSON 파싱 / limit).
+- `tui/pyproject.toml` — 0.40.0 → 0.41.0.
+
+### 검증
+
+- 합계 — **680 passed in 45.32s** (이전 676, 신규 4).
+
+### 후속
+
+- audit 조회 UI — `whooing-tui audit-log` CLI 또는 `AttachmentBrowserScreen`
+  의 `h` (history) 키. 본 CL 은 데이터 layer 만.
+
+## CL #51146 — 0.40.0 — A17: export-attachments CLI (2026-05-11)
+
+배경 (review P3 보류분): 첨부파일 백업 / 다른 머신으로 복사 도구 부재.
+P4 가 보존하지만 zip 으로 휴대 가능한 단일 파일이 없음.
+
+### 동작
+
+- CLI: `whooing-tui export-attachments [--entry E | --section S] --out X.zip`.
+  - `--entry E1` — 단일 entry 의 첨부만.
+  - `--section S1` — 그 섹션의 모든 entry 첨부.
+  - 둘 중 정확히 하나 (둘 다 / 둘 다 없음 → 종료 코드 2).
+- zip 내용:
+  - `files/<file_path>` — 디스크 파일 그대로 (디렉터리 구조 보존).
+  - `manifest.json` — `{schema_version, entry_id, section_id, rows: [...]}`.
+    rows 는 entry_attachments row 그대로 → entry_id / sha256 / size / note /
+    attached_at 등 모두 회수 가능.
+- 첨부 0건 → 빈 zip 안 만들고 안내 + return 0 (no error).
+- Makefile: `make export-attachments SECTION=s9046 OUT=/tmp/x.zip` 또는
+  `ENTRY=e1234`.
+
+### 수정
+
+- `tui/src/whooing_tui/cli.py`:
+  - `export-attachments` subparser.
+  - `_cmd_export_attachments` (sync) — zipfile + json.
+  - `_dispatch_async` 에 분기.
+- `Makefile` — `export-attachments` target (SECTION/ENTRY/OUT 변수).
+- `tui/tests/test_export_attachments.py` — 신규 5 (entry export / section
+  export / no attachments / 인자 누락 / 인자 동시 지정).
+- `tui/pyproject.toml` — 0.39.0 → 0.40.0.
+
+### 검증
+
+- 합계 — **676 passed in 44.05s** (이전 671, 신규 5).
+
+## CL #51145 — 0.39.0 — H6: 일괄 태그 (multi-select + batch tagging) (2026-05-11)
+
+배경 (review P1 보류분): 명세서 import 직후 같은 카드 거래 N건에 #여행
+일괄 적용 같은 자주 발생 시나리오. 종전엔 entry 한 건씩 edit 해야 했음.
+
+### 동작
+
+- core helpers:
+  - `add_tag_to_entries(conn, entry_ids, tag, *, section_id=None)` —
+    각 entry 에 (entry_id, tag) row insert. 이미 있으면 skip. annotation
+    row 자동 생성 (FK). 새로 추가된 row 수 반환.
+  - `remove_tag_from_entries(conn, entry_ids, tag, *, section_id=None)` —
+    여러 entry 에서 같은 tag 일괄 제거.
+- `EntriesScreen` 의 multi-select:
+  - `_selected_entry_ids: set[str]` 인스턴스 필드.
+  - **Space** 키 — 현재 cursor entry 를 selection 에 토글.
+  - **#** 키 (`number_sign`) — `_batch_tag_worker` 가 TagsPickerScreen
+    push → 사용자가 태그 1개 선택 → 모든 selection 에 일괄 추가.
+  - selection 0인 상태에서 # 누르면 cursor entry 만 선택 (편의).
+  - item 셀 prefix `▣ ` (selected) — visual indicator.
+  - refresh 시 사라진 entry 의 stale selection 자동 정리.
+  - mutation 후 (`refresh_entries`) selection clear.
+- P4 자동 submit (db) — `[whooing-tui] batch tag add #N: A/B entries
+  (section=X)` description.
+
+### 수정
+
+- `core/src/whooing_core/db.py` — add_tag_to_entries / remove_tag_from_entries.
+- `tui/src/whooing_tui/screens/entries.py`:
+  - `_selected_entry_ids` 필드.
+  - BINDINGS 에 space / `number_sign`.
+  - `action_toggle_selection` / `action_batch_tag` / `_batch_tag_worker`.
+  - `_format_cell` 의 item 컬럼에 `▣ ` prefix.
+  - `refresh_entries` 가 stale selection 정리.
+- `core/tests/test_db.py` — 신규 6 (add 기본 / skip existing / hash strip /
+  section 기록 / remove subset / 빈 인자).
+- `tui/pyproject.toml` — 0.38.0 → 0.39.0.
+
+### 검증
+
+- 합계 — **671 passed in 44.86s** (이전 665, 신규 6).
+
+### 한계 / 후속
+
+- 일괄 *제거* UI 는 아직 없음 (core helper 는 준비). 제거는 add 와 같은
+  modal 의 별도 키 (예: `-`) 또는 별도 화면.
+- selection 시각 표시는 item 셀 텍스트 prefix — DataTable 의 row-level
+  highlight 는 Textual 한계로 미구현.
+
+## CL #51144 — 0.38.0 — A5: entry_attachments.section_id 실 사용 (cross-section 누수 방지) (2026-05-11)
+
+배경 (review 잔여 P0+): `entry_attachments.section_id` 컬럼이 채워지지만
+list/filter 에 안 쓰여 같은 entry_id 가 cross-section 으로 보일 위험 (후잉
+API 가 entry_id uniqueness 보장 안 한다는 가정).
+
+### 동작
+
+- `core_attach.list_attachments_for(conn, entry_ids, *, section_id=None)`:
+  명시 시 `section_id = X OR section_id IS NULL` — 그 섹션 + legacy NULL row.
+- `attachment_browser.list_for(entry_id, *, section_id=None)` 같은 시그니처.
+- 호출자 모두 갱신:
+  - `EntriesScreen._fetch_all_attachment_counts` 가 `app.session.section_id`.
+  - `AttachmentBrowserScreen.action_refresh` / `action_open` /
+    `action_edit_note` 가 `self.section_id` (생성자에서 받은 것).
+- None 매개변수는 종전 동작 (모든 섹션) — 후방 호환.
+
+### 수정
+
+- `core/src/whooing_core/attachments.py` — `list_attachments_for` 시그니처
+  + section 필터 SQL.
+- `tui/src/whooing_tui/screens/attachment_browser.py` — `list_for` 시그니처
+  + 3 개 caller 갱신.
+- `tui/src/whooing_tui/screens/entries.py` — `_fetch_all_attachment_counts`
+  가 session.section_id 전달.
+- `core/tests/test_attachments.py` — 신규 2 (filter_by_section /
+  empty_entry_ids).
+- `tui/pyproject.toml` — 0.37.0 → 0.38.0.
+
+### 검증
+
+- 합계 — **665 passed in 43.08s** (이전 663, 신규 2).
+
+## CL #51143 — 0.37.0 — A9: 첨부 note 사후 편집 (2026-05-11)
+
+배경 (review P2 보류분): `entry_attachments.note` 가 첨부 시점에만 입력
+가능했음. 일주일 후 메모 추가/수정 의도가 생기면 `d` 로 삭제 후 `a` 로
+재첨부 — 디스크 mv (휴지통) + db row 재발급 비용. note 만 단일 column
+UPDATE 로 충분한데도.
+
+### 동작
+
+- `core.attachments.update_attachment_note(conn, attachment_id, note)`:
+  단일 column UPDATE. 빈 문자열 / whitespace-only / `None` 모두 NULL 로
+  정규화. 매칭 row 없으면 None 반환.
+- `tui.screens.attachment_browser.update_note(attachment_id, note)`:
+  TUI wrapper. 성공 시 db P4 자동 submit (description = `[whooing-tui]
+  entry <eid> attachment <aid> note edit: <filename>`). 첨부 파일 자체는
+  변경 없으므로 paths = [db] 만.
+- `_NoteEditModal(ModalScreen[str | None])`: TextArea 기반 modal.
+  Ctrl+S 저장 / Esc 취소. dismiss 값 = note 또는 None.
+- `AttachmentBrowserScreen` 의 `e` 키 (Edit Note) — sync wrapper +
+  `_edit_note_worker` (`@work`) 가 `_NoteEditModal` push → save → wrapper
+  호출 → notify ("note 갱신: id=N" / "note 제거: id=N").
+- 빈 값 저장 시 note 가 사라짐 — 사용자 의도 (clear) 명확.
+
+### 수정
+
+- `core/src/whooing_core/attachments.py` — `update_attachment_note`.
+- `tui/src/whooing_tui/screens/attachment_browser.py`:
+  - `update_note` wrapper.
+  - `_NoteEditModal` (TextArea + Ctrl+S/Esc).
+  - BINDINGS 에 `Binding("e", "edit_note", "Note 편집")`.
+  - `action_edit_note` (sync) + `_edit_note_worker` (`@work`).
+  - `from textual import work` import 추가.
+- `core/tests/test_attachments.py` — 신규 5 (값 변경 / "" → NULL / None →
+  NULL / id 없음 / 다른 컬럼 보존).
+- `tui/tests/test_attachment_browser.py` — 신규 5 (wrapper 갱신 + P4
+  description / id 없음 silent / "" 로 clear / action_edit_note 가 modal
+  push + 저장 → db 갱신 / no-selection 가드).
+- `tui/pyproject.toml` — 0.36.0 → 0.37.0.
+
+### 검증
+
+- 합계 — **663 passed in 42.47s** (이전 653, 신규 10).
+
+## CL #51142 — 0.36.0 — A12: paste 자동 첨부 (AttachmentBrowserScreen) (2026-05-10)
+
+배경 (review P3 마지막): Textual 의 `Paste` event 를 흡수하면 사용자가 Cmd+V
+한 절대 경로 / 터미널 file-drop 의 path 가 자동 첨부 후보가 됨 — `a` →
+경로 입력 step 생략.
+
+### 동작
+
+- `AttachmentBrowserScreen.on_paste(event)` 핸들러:
+  - 첫 줄 strip + 따옴표 ('/'') strip + `file://` URL 파싱 (urllib).
+  - `Path(...).is_absolute() and is_file()` 확인. 둘 다 True 면 자동
+    `add_attachment` 호출 + notify "📋 paste 첨부: <name>".
+  - 상대 / 존재 안 함 / 빈 문자열 → silent (paste 가 다른 위젯으로 흐름).
+
+### 보류 (낮은 우선순위)
+
+- **H11 tag colors** — `tag_meta` 테이블 + 색 컬럼 + UI 전반 색 표시. schema
+  변경 + UI 변경 + color 사전 구축 모두 필요. 사용자 요구 시 별도 CL.
+
+### 수정
+
+- `tui/src/whooing_tui/screens/attachment_browser.py` — `on_paste` 추가
+  + docstring.
+- `tui/tests/test_attachment_browser.py` — 신규 3 (paste 절대경로 자동 /
+  path 정규화 단위 / 상대·없음 silent).
+- `tui/pyproject.toml` — 0.35.0 → 0.36.0.
+
+### 검증
+
+- 합계 — **653 passed in 42.89s** (이전 650, 신규 3).
+
+## CL #51141 — 0.35.0 — P3 features: A13 휴지통 + H9 inline limit + H10 P4 desc diff (2026-05-10)
+
+배경 (review P3 묶음): A13 (휴지통) / H9 (inline limit env) / H10 (P4 desc
+hashtag diff). A16 audit log / A17 export / H6 batch tagging 은 별도 CL
+(scope 큼).
+
+### 동작
+
+- **A13 휴지통**:
+  - `core.attachments._move_to_trash(full_path, *, attachments_root)` —
+    `<root>/.trash/YYYYMMDD/<filename>` 으로 mv. 같은 이름 충돌 시 timestamp
+    suffix.
+  - `delete_attachment(..., trash=True)` / `purge_attachments_for_entry`
+    내부에서 trash 옵션 (purge 는 추후).
+  - `purge_trash_older_than(root, days=30)` — 30일 초과 디렉터리 unlink CLI 용.
+  - TUI: `WHOOING_ATTACHMENT_TRASH=1` 환경변수 → `remove()` 가 영구 삭제 대신
+    trash 모드. default off (종전 영구 삭제).
+  - P4 submit 정책: `file_trashed=True` 도 `file_deleted` 와 동일 — reconcile -d.
+
+- **H9 inline limit env**: `WHOOING_ITEM_TAG_INLINE_LIMIT` 정수.
+  default 2. `EntriesScreen._item_tag_inline_limit()` classmethod 가 lookup.
+
+- **H10 P4 desc hashtag diff**:
+  - `describe_annotation(..., previous_tags=[...])` 매개변수 추가.
+  - 명시되면 added/removed 계산 → `(+외식 -식비)` 형식 suffix.
+  - `_persist_local` 가 set_hashtags 직전에 prev tags fetch 해서 넘김.
+  - 종전 호출자 (previous_tags=None) 는 영향 X — 후방 호환.
+
+### 보류 (별도 CL 권장)
+
+- **A16 audit log** — `attachment_audit_log` 테이블 schema 변경 필요. 현재
+  P4 history + import_log 가 부분 audit 역할. 사용자가 명시 요청 시 수행.
+- **A17 export** — entry zip 도구. 별도 CLI subcommand 1개 (~100 줄).
+- **H6 batch tagging** — EntriesScreen 의 multi-select 도입 큰 변경. UI
+  re-design 필요 — 별도 CL.
+
+### 수정
+
+- `core/src/whooing_core/attachments.py`:
+  - `_move_to_trash` / `purge_trash_older_than` 신규.
+  - `delete_attachment` 에 `trash=False` 매개변수.
+- `tui/src/whooing_tui/screens/attachment_browser.py`:
+  - `_trash_enabled()` env reader.
+  - `remove(..., trash=None)` 매개변수 + env 기본값.
+  - P4 submit 분기에 `file_trashed` 케이스 포함.
+- `tui/src/whooing_tui/screens/entries.py`:
+  - `_item_tag_inline_limit()` classmethod (env override).
+  - `_format_cell` 가 limit 사용.
+  - `_persist_local` 가 prev_tags fetch + describe_annotation 에 전달.
+- `tui/src/whooing_tui/p4_sync.py`:
+  - `describe_annotation` 에 `previous_tags=None` 매개변수 + diff 표기.
+- `core/tests/test_attachments.py` — 신규 2 (trash mv / purge_old_dirs).
+- `tui/tests/test_p4_sync.py` — 신규 5 (added / removed / both / no-diff /
+  None backward compat).
+- `tui/pyproject.toml` — 0.34.0 → 0.35.0.
+
+### 검증
+
+- 합계 — **650 passed in 42.43s** (이전 643, 신규 7).
+
+## CL #51140 — 0.34.0 — P3 polish: A10/A14/A15/H3 (2026-05-10)
+
+배경 (review P3 묶음): 안 막히지만 polish 가 필요한 작은 결함들.
+
+### 동작
+
+- **A10 Windows open** — `open_externally` 가 `os.startfile` (PEP 277) 으로
+  win32 지원. macOS / linux 종전 동작 유지.
+- **A14 filename collision** — 종전 `<stem>-1.<ext>` `<stem>-2.<ext>` ...
+  카운터 (충돌 시마다 sha 재계산) → `<stem>-<sha8>.<ext>` 1회 prefix 로
+  견고. 같은 sha8 이 또 충돌하면 16자로 fallback (매우 드문 케이스).
+- **A15 dedup 사용자 메시지** — `add_attachment` 가 같은 (entry_id, sha)
+  매칭 시 기존 row 그대로 반환. UI 가 이를 명시 — `attached_at` 이 5초
+  이상 과거면 "이미 첨부됨 (id=…, attached_at=…)" warning notify.
+- **H3 set_hashtags 입력 검증** — 공백/콤마 포함 단일 토큰을 split:
+  `["식비 외식"]` → `["식비", "외식"]`. None 토큰 skip.
+
+### 수정
+
+- `tui/src/whooing_tui/screens/attachment_browser.py`:
+  - `open_externally` 가 win32 분기 추가.
+  - `action_add` 가 dedup 케이스 명시 메시지.
+- `core/src/whooing_core/attachments.py` — collision 정책 sha-suffix.
+- `core/src/whooing_core/db.py` — `set_hashtags` 가 split + None safe.
+- `core/tests/test_attachments.py` — 기존 collision 테스트 sha-suffix 로 갱신
+  + 신규 `filename_collision_uses_sha_suffix`.
+- `core/tests/test_db.py` — H3 신규 3 (whitespace split / comma split / None).
+- `tui/pyproject.toml` — 0.33.0 → 0.34.0.
+
+### 검증
+
+- 합계 — **643 passed in 42.48s** (이전 639, 신규 4).
+
+### H4 case normalize 메모
+
+H4 (case normalize: `#Cafe`/`#cafe`) 는 의도적으로 보류 — 사용자가 원래
+대소문자를 의식해서 다르게 쓸 수도 있음 (예: 영문 회사명 `#KFC` vs 일반
+명사 `#kfc`). 강제 lower 가 데이터 손실. 향후 옵션 (env / config) 으로
+expose 가 더 안전.
+
+## CL #51139 — 0.33.0 — A7: FilePickerScreen + 입력 모달 Browse… 통합 (2026-05-10)
+
+배경 (review P2): 첨부 / 명세서 import / 영수증 첨부 의 파일 경로 입력이
+모두 절대경로 텍스트만 — fuzzy / tab completion / 디렉터리 navigation 없음.
+
+### 동작
+
+- `FilePickerScreen(start_dir, extensions, title)` 신규 modal:
+  - DirEntry list (디렉터리 먼저, 파일 alphabetical).
+  - `..` 첫 옵션 (root 면 disabled).
+  - `extensions=[".pdf", ".csv"]` 으로 ext 필터 — 디렉터리는 항상 통과.
+  - 입력란 substring 필터 (대소문자 무시).
+  - Enter: 디렉터리면 들어감, 파일이면 절대경로 dismiss.
+  - Esc: dismiss(None).
+- `_AddPathModal` (attachment_browser) / `_FilePathModal` (entries) 에
+  "Browse…" 버튼 — push FilePickerScreen → 결과 path 로 자동 dismiss.
+- `filter_paths(children, query)` 공개 helper — substring 필터.
+- `_safe_listdir(path)` — 권한/존재 오류는 빈 list.
+
+### 수정
+
+- `tui/src/whooing_tui/screens/file_picker.py` — 신규 (~200 줄).
+- `tui/src/whooing_tui/screens/entries.py` — `_FilePathModal` 에 Browse
+  버튼 + async on_button_pressed.
+- `tui/src/whooing_tui/screens/attachment_browser.py` — `_AddPathModal` 에
+  Browse 버튼.
+- `tui/tests/test_file_picker.py` — 신규 7 (filter_paths 3 + Picker
+  init/ext filter 4).
+- `tui/pyproject.toml` — 0.32.0 → 0.33.0.
+
+### 검증
+
+- 합계 — **639 passed in 42.55s** (이전 631, 신규 8).
+
+## CL #51138 — 0.32.0 — H8: 초성 검색 (TagsPickerScreen) (2026-05-10)
+
+배경 (review P2): TagsPickerScreen 의 `filter_tags` 가 prefix + substring
+만 — 한글 사용자가 'ㅅㅂ' (초성) 으로 '스벅'/'스타벅스' 검색 못 함.
+
+### 동작
+
+- `whooing_tui.ime.choseong_of(ch)` / `to_choseong_string(s)` 신규 helpers —
+  Hangul Syllables block 의 syllable_index // 588 로 초성 자모 19 자 인덱싱.
+  영문 / 숫자 / punct 는 그대로 passthrough.
+- `tags_picker.filter_tags` 매칭 우선순위 확장:
+  1. prefix (대소문자 무시).
+  2. substring.
+  3. **초성 substring** — 인접 자모 매칭 (ㅅㅌ → 스타벅스).
+  4. **초성 subsequence** — 비인접도 OK (ㅅㅂ → 스타벅스, 한국식 fuzzy).
+- query 가 한글 음절을 포함하면 (자모 외) 초성 단계 skip — 일반 substring
+  으로 더 엄격.
+
+### 수정
+
+- `tui/src/whooing_tui/ime.py` — `_HANGUL_BASE` / `_CHOSEONG` / `choseong_of`
+  / `to_choseong_string` 추가.
+- `tui/src/whooing_tui/screens/tags_picker.py` — `filter_tags` 4단 매칭.
+- `tui/tests/test_ime.py` — 신규 4 (choseong_of 한글/비한글, to_choseong_string
+  한국 브랜드/혼합).
+- `tui/tests/test_tags_picker.py` — 신규 4 (초성 substring / 3자모 / 음절
+  query 우선 / 빈 query).
+- `tui/pyproject.toml` — 0.31.1 → 0.32.0.
+
+### 검증
+
+- 합계 — **631 passed in 41.86s** (이전 623, 신규 8).
+- 라이브: `filter_tags("ㅅㅂ", ["스벅", "스타벅스", "서비스", "카페"])` →
+  `["스벅", "서비스", "스타벅스"]` (스벅 substring → 서비스 substring →
+  스타벅스 subsequence 순).
+
+## CL #51137 — 0.31.1 — H1: AnnotatorModal dead code 제거 (2026-05-10)
+
+배경 (review P2): `AnnotatorModal` 이 `screens/__init__.py` 에 export 되고
+`annotator.py` 가 완비됐으나 push 호출자 전무 — wrapper archived 후 의도
+사라짐. EntryEditDialog 가 memo + 해시태그를 모두 커버.
+
+### 동작
+
+- `tui/src/whooing_tui/screens/annotator.py` **삭제**.
+- `screens/__init__.py` 의 `AnnotatorModal` import + export 제거.
+- `parse_hashtags_input` 은 `edit_entry.py` 에 같은 구현이 살아있어
+  `screens.parse_hashtags_input` 으로 re-export (후방 호환).
+- `load_existing_annotation` 은 caller 전무 — 함께 제거.
+
+### 수정
+
+- `tui/src/whooing_tui/screens/annotator.py` — 삭제 (149 줄).
+- `tui/src/whooing_tui/screens/__init__.py` — import 갱신 / annotator
+  exports 정리.
+- `tui/tests/test_annotator.py` — load_existing 테스트 4개 제거,
+  parse_hashtags_input 테스트는 `screens` re-export 사용으로 갱신.
+- `tui/pyproject.toml` — 0.31.0 → 0.31.1.
+
+### 검증
+
+- 합계 — **623 passed in 42.19s** (이전 626 - 3, AnnotatorModal/load_existing
+  관련 테스트 4개 제거 + parse 1개 합쳐짐).
+
+## CL #51136 — 0.31.0 — A11+A4: 첨부 size cap + P4 결과 사용자 알림 (2026-05-10)
+
+배경 (review P1):
+- A11: 종전엔 첨부 크기 제한 없음. 10GB PDF 도 받음 — P4 submit 의 30s
+  타임아웃에서 잘림. 데이터 손상 가능.
+- A4: P4 자동 submit 이 fire-and-forget silent — 첫 시도가 실패한 줄도
+  사용자가 모름. flush_on_exit 안전망이 있어도 사용자 인지 X.
+
+### 동작
+
+- **A11 size cap**:
+  - `_DEFAULT_MAX_BYTES = 100 MiB`. `WHOOING_MAX_ATTACHMENT_BYTES` env 로
+    override (정수, <=0 면 cap 비활성).
+  - `add_attachment` 가 `src.stat().st_size > cap` 시 ValueError raise —
+    "파일 크기 X bytes 가 cap Y bytes 초과 — 환경변수로 조정하거나 분할
+    재시도" 메시지.
+  - `AttachmentBrowserScreen.action_add` 가 ValueError 캐치해 사용자 notify.
+
+- **A4 P4 결과 callback**:
+  - `submit_files_to_p4(..., on_complete=callback)` 옵션 추가.
+  - `_do_submit_multi` 의 return 값을 status string 으로:
+    `'ok'` / `'no-changes'` / `'no-p4'` / `'unmapped'` / `'noop'` / `'error'`.
+  - background worker 가 끝나는 즉시 callback 호출 (blocking 모드도 동일).
+  - `add_attachment(..., on_p4_complete=callback)` 으로 caller 가 status 받음.
+  - `AttachmentBrowserScreen.action_add` 가 callback 으로 notify —
+    Korean status label ("P4 submit 완료" / "P4 환경 없음 — 로컬 only" /
+    "P4 submit 실패 (로그 참고)" 등). `call_from_thread` 로 main thread
+    에서 안전하게 실행.
+
+### 수정
+
+- `tui/src/whooing_tui/screens/attachment_browser.py`:
+  - `_DEFAULT_MAX_BYTES` 상수 + `_max_attachment_bytes()` env reader.
+  - `add_attachment` 가 size 검사 + `on_p4_complete` 매개변수.
+  - `AttachmentBrowserScreen.action_add` 가 callback 으로 notify.
+- `tui/src/whooing_tui/p4_sync.py`:
+  - `_do_submit_multi` 가 status string 반환.
+  - `submit_files_to_p4(..., on_complete=...)` callback 디스패치 + 모든
+    경로 (blocking / worker) 에서 호출.
+- `tui/tests/test_attachment_browser.py` — 신규 4 (oversize raise / 허용 /
+  cap=0 비활성 / callback 전달).
+- `tui/tests/test_p4_sync.py` — 신규 4 (callback `'no-p4'` / `'unmapped'` /
+  `'ok'` / `'noop'`).
+- `tui/pyproject.toml` — 0.30.0 → 0.31.0.
+
+### 검증
+
+- 합계 — **626 passed in 43.22s** (이전 618, 신규 8).
+
+## CL #51135 — 0.30.0 — H5: tag rename / merge / delete (TagManagementScreen) (2026-05-10)
+
+배경 (review P1): 태그 오타 수정 / 명명 통일 / 삭제 UI 부재 — 거래 한 건씩
+edit dialog 로 열어야 했음. 본 CL 이 일괄 도구.
+
+### 동작
+
+- core helper 3개:
+  - `rename_tag(conn, old, new, *, section_id=None)` — 모든 entry 의 old →
+    new. dest 가 이미 있는 entry 는 dedup (PRIMARY KEY 충돌 회피).
+    `{'renamed': N, 'merged_into_existing': M}` 반환.
+  - `merge_tags(conn, sources, dest, *, section_id=None)` — 여러 source 를
+    dest 로 통합 (rename_tag 반복).
+  - `delete_tag(conn, tag, *, section_id=None)` — 모든 entry 에서 제거.
+- `TagManagementScreen` 신규 — tag list (count 내림차순) DataTable + 키:
+  - Enter / e: rename modal (현재 tag → 새 이름).
+  - m: merge (현재 tag → 다른 기존 tag 로 흡수).
+  - d: delete (count 표시 + 확인 모달).
+  - r: 새로고침. q / Esc: 뒤로.
+  - F10 메뉴 (`MenuBarMixin` 통합) — 파일 / 편집.
+- 각 mutation 직후 P4 자동 submit (db) — description mechanical:
+  `[whooing-tui] hashtag rename old → new section=s1: renamed=N merged=M`.
+- EntriesScreen 메뉴 "화면" → "해시태그 관리…" 항목 (action_id=
+  open_tag_management). dispatch 후 dismiss 시 `refresh_entries` 자동
+  호출 — inline 표시도 fresh.
+
+### 수정
+
+- `core/src/whooing_core/db.py` — rename_tag / merge_tags / delete_tag.
+- `tui/src/whooing_tui/screens/tag_management.py` — 신규 화면 + 보조
+  modal (`_TagInputModal`, `_ConfirmModal`).
+- `tui/src/whooing_tui/screens/entries.py` — 메뉴 + action_open_tag_management.
+- `tui/src/whooing_tui/screens/__init__.py` — TagManagementScreen export.
+- `core/tests/test_db.py` — 신규 8 테스트 (rename basic / dest 존재 dedup /
+  hash prefix strip / section filter / no-op / merge multi sources /
+  delete all / delete section filter).
+- `tui/tests/test_tag_management.py` — 신규 4 (list 표시 / rename 통합
+  / 메뉴 wiring / dispatch 푸시).
+- `tui/pyproject.toml` — 0.29.0 → 0.30.0.
+
+### 검증
+
+- 합계 — **618 passed in 41.79s** (이전 606, 신규 12).
+
+## CL #51134 — 0.29.0 — A6: EntriesScreen 행 첨부 indicator (📎N) (2026-05-10)
+
+배경 (review P0): 어느 거래에 첨부가 있는지 EntriesScreen 에서 보이지
+않아 사용자가 모든 행에 일일이 `f` 로 들어가 확인해야 했다. item 컬럼에
+`📎N` prefix 로 발견성 즉시 향상.
+
+### 동작
+
+- `_entry_attachment_counts: dict[str, int]` 인스턴스 필드.
+- `_fetch_all_attachment_counts(entry_ids)` — `core_attach.list_
+  attachments_for` 한 번 호출로 batch fetch.
+- `refresh_entries` 가 entry_tags fetch 직후 attachment counts 도 fetch.
+- `_format_cell` 의 item 컬럼이 count > 0 일 때 `f"📎{n} "` prefix.
+- 컴팩트 모드 (level 4 = item 만 visible) 에서도 보임.
+
+### 수정
+
+- `tui/src/whooing_tui/screens/entries.py` — 필드 + helper + render.
+- `tui/tests/test_entries_screen.py` — 신규 2 (indicator 표시 / 미표시 회귀).
+- `tui/pyproject.toml` — 0.28.0 → 0.29.0.
+
+### 검증
+
+- 합계 — **606 passed in 42.30s** (이전 604, 신규 2).
+- narrow terminal / 태그 모드 / filter 회귀 없음.
+
+## CL #51133 — 0.28.0 — H2: entry_hashtags 에 section_id + dashboard 섹션 필터 (2026-05-10)
+
+배경 (review P0): `entry_annotations.section_id` 만 있고 `entry_hashtags`
+는 plain entry_id+tag 였다. 여러 섹션 (실 운영 s9046 + 테스트 s133178)
+운영 시 dashboard top_hashtags / list_hashtags 가 cross-section 합산 →
+통계 오염.
+
+### 동작
+
+- `entry_hashtags.section_id` 컬럼 추가 (ALTER ADD COLUMN, NULL 허용).
+  `init_schema` 가 `_apply_lightweight_migrations` helper 로 멱등 마이그레이션
+  + 기존 row 는 `entry_annotations` 의 section_id 로 자동 backfill.
+- `idx_hashtags_section` 인덱스 추가.
+- `set_hashtags(conn, entry_id, tags, *, section_id=None)` — 명시 매개변수
+  추가. None 이면 entry_annotations 에서 lookup. 새 row 도 section_id 보존.
+- `list_hashtags(conn, *, section_id=None)` / `find_entries_by_hashtag(...,
+  *, section_id=None)` — None = 전체 (후방 호환), 명시 = 그 섹션만.
+- `dashboard.gather_stats(*, section_id=None)` — top_hashtags / annotation /
+  attachment / import 모두 섹션 필터 옵션.
+- `EntriesScreen._persist_local` 가 set_hashtags 호출 시 section_id 명시.
+
+### 수정
+
+- `core/src/whooing_core/db.py` — `_apply_lightweight_migrations`,
+  `set_hashtags` / `list_hashtags` / `find_entries_by_hashtag` 시그니처
+  확장.
+- `tui/src/whooing_tui/screens/dashboard.py` — `gather_stats(section_id=...)`.
+- `tui/src/whooing_tui/screens/entries.py` — set_hashtags 호출에 section_id.
+- `core/tests/test_db.py` — 신규 4 테스트 (section 자동 채움 / 명시 우선 /
+  list 필터 / find 필터).
+- `tui/tests/test_dashboard.py` — `gather_stats(section_id=...)` 격리 검증.
+- `tui/pyproject.toml` — 0.27.0 → 0.28.0.
+
+### 검증
+
+- 합계 — **604 passed in 41.61s** (이전 599, 신규 5).
+- 마이그레이션 멱등 — `try/except OperationalError` 로 ALTER 재실행 안전.
+
+## CL #51132 — 0.27.0 — A1+A2: 첨부 orphan 정리 (purge / GC CLI) (2026-05-10)
+
+배경 (review P0): `entry_attachments` 가 FK 없이 `entry_id` 만 plain TEXT —
+거래 삭제 시 첨부 row + 디스크 파일이 orphan 으로 남았다 (silent data
+corruption). FK 추가는 SQLite 의 ALTER 한계로 schema 재생성 위험 → 의미적
+강제 + GC CLI 로 해결.
+
+### 동작
+
+- `core.attachments.purge_attachments_for_entry(conn, entry_id, *, attachments_root, delete_files=True)` —
+  `delete_attachment` 의 entry-level 변형. dedup 정책 동일 (다른 sha 참조 있으면 디스크 보존).
+- `core.attachments.find_orphan_attachments(conn, valid_entry_ids)` —
+  현재 후잉 ledger 에 없는 entry_id 의 첨부 row.
+- `core.attachments.cleanup_orphan_attachments(conn, valid, *, dry_run=False)` —
+  실제 청소. result dict (`orphan_count` / `rows_deleted` / `files_deleted` /
+  `files_kept_dedup` / `orphans`) 반환.
+- `EntriesScreen._purge_local` 확장 — annotation + hashtag + **첨부** 모두
+  정리. 사라진 디스크 파일들의 path 도 P4 submit_files_to_p4 에 포함 →
+  `reconcile -d` 가 작동.
+- `whooing-tui gc-attachments [--section S] [--days N] [--dry-run] [--keep-files]` —
+  CLI subcommand. 후잉 ledger fetch → orphan 후보 출력 (default dry-run X —
+  실 삭제). 결과 P4 자동 submit.
+- Makefile: `make gc-attachments` (dry-run) / `make gc-attachments-go` (실 삭제).
+
+### 수정
+
+- `core/src/whooing_core/attachments.py` — purge / find_orphan / cleanup
+  3개 helper 신규.
+- `tui/src/whooing_tui/screens/entries.py` — `_purge_local` 가 첨부도 함께
+  정리, P4 submit paths 에 사라진 파일 포함.
+- `tui/src/whooing_tui/cli.py` — `gc-attachments` subparser + `_cmd_gc_attachments`.
+- `Makefile` — `gc-attachments` / `gc-attachments-go` target.
+- `core/tests/test_attachments.py` — 신규 8 테스트 (purge_for_entry 3 +
+  find_orphans 2 + cleanup 3).
+- `tui/tests/test_entries_mutate.py` — `test_delete_purges_local_*` 확장
+  (첨부 row + 디스크 파일 정리 검증).
+- `tui/pyproject.toml` — 0.26.0 → 0.27.0.
+
+### 검증
+
+- `make test-tui` + core — **599 passed in 41.29s** (이전 591, 신규 8).
+- `whooing-tui gc-attachments --help` 동작 확인.
+
+## CL #51131 — 0.26.0 — F10 메뉴바 mixin 추출 + AccountsScreen 통합 (2026-05-10)
+
+배경 (CL #51128 다음 후보 #4): CL #51126 의 F10 메뉴바는 EntriesScreen
+한정이었다. 다른 일반 Screen (AccountsScreen 등) 에 같은 진입점이 없어
+각 화면마다 별도의 단축키 규약을 사용자가 외워야 했다. 본 CL 이 메뉴 진입
+로직을 `MenuBarMixin` 으로 추출 + AccountsScreen 에 통합 — F10 으로 어디서든
+메뉴 진입 가능.
+
+### 동작 변경
+
+- **`whooing_tui.widgets.MenuBarMixin`** 신규:
+  - `action_open_menu(self)` — sync wrapper, F10 진입점.
+  - `_open_menu_loop_async(self, start_index)` — popup 순환 (←/→/Enter/Esc).
+  - `_dispatch_menu_action(self, action_id)` — default = `action_<id>`
+    lookup + 호출. 자식이 override 로 wizard 등 특수 분기 추가 가능.
+  - `_build_menus(self)` — 자식이 override 해 `tuple[MenuSpec, ...]` 반환.
+    default = 빈 tuple → mixin no-op.
+  - `_menubar_widget_id(self)` — 자식의 MenuBar id (None = 첫 위젯).
+
+- **`whooing_tui.widgets.menubar_bindings()`** helper:
+  - `[Binding("f10", "open_menu", "Menu", show=True, priority=True)]` list.
+  - 자식 Screen 의 BINDINGS 에 spread (`*menubar_bindings()`).
+  - 별도 helper 인 이유: Textual 의 `_merged_bindings` 가 mixin (object 직속
+    상속) 의 BINDINGS 를 walk 하지 않음 — 각 Screen 이 명시 spread 필요.
+
+- **EntriesScreen refactor**:
+  - `class EntriesScreen(MenuBarMixin, Screen)` — 다중 상속.
+  - 기존 `action_open_menu` / `_open_menu_loop` (`@work`) 제거 → mixin.
+  - BINDINGS 의 F10 라인 → `*menubar_bindings()`.
+  - `_menubar_widget_id` override = "entries-menubar".
+  - `_build_menus` / `_dispatch_menu_action` (special: import_card_statement,
+    attach_receipt) 그대로 유지 — 화면 고유 로직.
+
+- **AccountsScreen 통합**:
+  - `class AccountsScreen(MenuBarMixin, Screen)`.
+  - `_build_menus()` 정의 — 3 메뉴 (파일 / 입력 / 도움말):
+    * 파일: 재로드 (r), 뒤로 (q)
+    * 입력: 새 계정과목 (n)
+    * 도움말: 키보드 단축키 (?)
+  - `_menubar_widget_id` = "accounts-menubar".
+  - compose 에서 `yield MenuBar(self._build_menus(), id="accounts-menubar")`
+    — Header 바로 아래.
+  - BINDINGS 에 `*menubar_bindings()` spread.
+
+### 수정
+
+- `tui/src/whooing_tui/widgets/menubar.py`:
+  - `menubar_bindings()` helper 신규.
+  - `MenuBarMixin` class 신규 (`action_open_menu` / popup loop / dispatch
+    / hooks).
+  - `log` 정의를 mixin 정의 직후로 (선언 순서 일관).
+- `tui/src/whooing_tui/widgets/__init__.py` — exports 갱신.
+- `tui/src/whooing_tui/screens/entries.py`:
+  - `MenuBarMixin` / `menubar_bindings` import.
+  - `EntriesScreen(MenuBarMixin, Screen)`.
+  - 기존 `action_open_menu` + `_open_menu_loop` 제거 (mixin 으로).
+  - `_menubar_widget_id` override 만 남김.
+  - BINDINGS F10 라인 → `*menubar_bindings()`.
+- `tui/src/whooing_tui/screens/accounts.py`:
+  - 신규 import (MenuBar / MenuBarMixin / MenuItem / MenuSpec /
+    menubar_bindings).
+  - `AccountsScreen(MenuBarMixin, Screen)` + `_build_menus` +
+    `_menubar_widget_id`.
+  - compose 에 MenuBar 추가, BINDINGS 에 menubar_bindings.
+- `tui/tests/test_menubar.py` — 신규 4 테스트:
+  - menubar_bindings list + F10 priority 검증.
+  - `_dispatch_menu_action` action_<id> lookup.
+  - default `_build_menus` = 빈 tuple.
+  - default `_menubar_widget_id` = None.
+- `tui/tests/test_accounts_screen.py` — 신규 5 테스트:
+  - `has_menubar` — Header 아래 MenuBar 위젯 + 3 메뉴 노출.
+  - `f10_opens_menu` — F10 → MenuPopup (spec.name="파일").
+  - `menu_includes_new_account` — 메뉴 정의 안전망.
+  - `menu_dispatch_calls_action_refresh` — spy 로 action_refresh 호출 확인.
+  - `menu_dispatch_calls_action_back` — back → pop → EntriesScreen 복귀.
+- `tui/pyproject.toml` — 0.25.0 → 0.26.0.
+
+### 검증
+
+- `make test-tui` + core — **591 passed in 41.60s** (이전 582, 신규 9 =
+  mixin 4 + accounts 5). core/mcp 회귀 없음.
+- 라이브 동작:
+  - EntriesScreen 에서 F10 → 파일/입력/화면/도움말 메뉴.
+  - AccountsScreen 진입 후 F10 → 파일/입력/도움말 메뉴.
+  - ←/→ 으로 메뉴 간 이동, Enter 로 dispatch, Esc 취소 — 양쪽 동일 UX.
+
+### 알려진 한계 / 후속
+
+- Attachment / Dashboard / StatementImport / ReceiptAttach 등 다른 일반
+  Screen 에는 아직 미통합 — 패턴은 확립됐으니 "메뉴 정의 + compose 한 줄 +
+  BINDINGS spread" 만 추가하면 동일 효과.
+- ModalScreen 들 (EntryEditDialog / AccountPickerScreen 등) 은 popup 충돌
+  으로 메뉴바 미적용 — 의도적. 모달 닫고 base Screen 으로 복귀 후 F10 사용.
+- Textual 의 mixin BINDINGS 미인식 — `menubar_bindings()` spread 패턴이
+  workaround. 향후 Textual 이 mixin BINDINGS 를 자동 merge 하면 단순화.
+
+### 4-CL 자율 모드 작업 완료
+
+본 CL 까지 사용자 지시 "위 네 가지 다음 세션 후보를 순서대로 자율 모드로
+진행" 완료 — CL #51128 ~ #51131. 합계 591 tui + core/mcp 261 = **852
+passed**, 0 failed.
+
+## CL #51130 — 0.25.0 — 5+ 글자 약어 — 회사 suffix strip 휴리스틱 (2026-05-10)
+
+배경 (CL #51128 다음 후보 #2): CL #51127 의 한국식 줄임말 규칙이 4글자엔
+잘 작동 (스타벅스→스벅) 하나, 5글자 이상은 보수 fallback `[:2]` 였다 —
+"스타벅스코리아" (7자) 가 "스타" 로 약어돼 "스벅" 같은 자연스러운 결과를
+못 냈다. 본 CL 이 회사 식별자 suffix (코리아/글로벌/그룹/홀딩스/...) 를
+strip 한 뒤 길이 재판정으로 한국식 1+3 규칙이 다시 발동되도록.
+
+### 동작 변경
+
+- **`_ABBREV_COMPANY_SUFFIXES`** 신규 (10개, 더 긴 것 먼저):
+  `엔터프라이즈`, `인터내셔널`, `코퍼레이션`, `이노베이션`, `홀딩스`,
+  `그룹`, `글로벌`, `코리아`.
+  - 보수적으로 *대문자 회사 명사* 만 — `강남`/`서울` 같은 일반 단어는 미포함
+    (사용자 답변에서 합의된 list).
+
+- **`_abbreviate_account_name` 절차 갱신** (4단계 → 5단계):
+  1. 회사 prefix strip (CL #51127, 변경 X).
+  2. 잔여 괄호류 strip (변경 X).
+  3. **회사 suffix strip — 신규**. 단 strip 한 잔여가 2자 미만이면 strip
+     안 함 (안전망 — `X그룹` 같은 fragile 케이스에서 1자 남는 회귀 방지).
+  4. 길이 + 한글 첫글자 분기 (변경 X).
+  5. 비-한글 → 단순 [:2] (변경 X).
+
+- 결과 비교 (사용자 의도 핵심 케이스):
+
+  | 입력 | 종전 (CL #51127) | 신규 (CL #51130) |
+  |---|---|---|
+  | 스타벅스코리아 (7자) | 스타 | **스벅** ✅ |
+  | (주)스타벅스코리아 | 스타 | **스벅** ✅ |
+  | 삼성그룹 (4자) | 삼그 (1+3) | **삼성** ✅ |
+  | 롯데홀딩스 (5자) | 롯데 | **롯데** |
+  | CJ글로벌 | CJ | CJ |
+  | 현대자동차코퍼레이션 (10자) | 현대 | 현대 |
+  | X그룹 (2자 남음) — 안전망 | X그 | **X그** (변경 X) |
+  | 그룹사물놀이 — suffix 가운데 X | 그룹 | 그룹 |
+
+### 수정
+
+- `tui/src/whooing_tui/screens/entries.py`:
+  - `_ABBREV_COMPANY_SUFFIXES` tuple 추가.
+  - `_abbreviate_account_name` 의 prefix strip 직후 + 길이 분기 직전에
+    suffix strip 단계 삽입. 잔여 길이 ≥2 일 때만 적용.
+- `tui/tests/test_narrow_terminal.py` — 신규 9 테스트:
+  - korea suffix → 4-char rule 발동.
+  - group / global / holdings 각 suffix.
+  - 더 긴 suffix 먼저 ("인터내셔널" priority).
+  - strip 후 1자 회귀 안전망.
+  - suffix 가운데일 때 미적용.
+  - prefix + suffix 결합 ("(주)스타벅스코리아").
+  - 5자 suffix ("코퍼레이션").
+
+- `tui/pyproject.toml` — 0.24.0 → 0.25.0.
+
+### 검증
+
+- `make test-tui` + core — **582 passed in 39.56s** (이전 573, 신규 9).
+- 라이브 샘플:
+  - `스타벅스코리아` → **스벅** ✅
+  - `(주)스타벅스코리아` → **스벅** ✅
+  - `삼성그룹` → **삼성** ✅
+  - `현대자동차코퍼레이션` → 현대
+
+### 알려진 한계 / 후속
+
+- suffix list 는 보수 (10개) — 사용자별 도메인에 빠진 것이 있을 수 있음
+  (예: `백화점` / `마켓` / `타운` 등). 운영하면서 추가.
+- "스타벅스코리아" 같은 4+suffix 는 OK 이나, "스타벅스코리아강남점" 같은
+  복합 suffix 는 처리 안 됨 — 후속.
+- 영문 suffix (Inc, Corp, Ltd) 는 별도 — 현재 미지원. 영문은 단순 [:2]
+  유지.
+
+## CL #51129 — 0.24.0 — statement_import dedup 강화 (import_log 자연키 기반) (2026-05-10)
+
+배경 (CL #51128 의 다음 후보 #1): 종전 dedup 은 ledger (현재 후잉 거래)
++ (date±2일, amount 동일) 만 검사 — 같은 명세서를 두 번 import 하거나
+두 명세서가 동일 거래를 보고할 때 ledger 가 비어있으면 신규 후보로 잘못
+분류돼 중복 입력 발생 가능. 본 CL 이 `statement_import_log` 의 자연키
+(date+amount+merchant) 도 검사 — "이미 import 된 거래" 분류로 skip.
+
+### 동작 변경
+
+- **`whooing_core.db.find_imports_by_natural_key(...)`** 신규 — schema
+  변경 없이 자연키로 import_log 조회:
+  - 매개변수: `entry_date`, `total_amount`, `merchant`, `section_id` (선택),
+    `statuses` (default = ('inserted', 'matched_existing')).
+  - default statuses 는 "성공적으로 처리된" 두 status — `failed` /
+    `dry_run` 은 자동 제외 (재시도 가치 있는 상태).
+  - section_id 가 명시되면 해당 섹션만 (다른 섹션의 이력은 무관).
+  - 시간순 정렬 (`ORDER BY imported_at`).
+
+- **`whooing_tui.screens.statement_import._dedup` 시그니처 변경**:
+  - 기존: `_dedup(rows, ledger, tolerance_days=2) -> (matched, new)` (2-tuple)
+  - 신규: `_dedup(rows, ledger, tolerance_days=2, *, section_id=None,
+    check_import_log=True) -> (matched, previously_imported, new)` (3-tuple)
+  - `check_import_log=True` (default) 면 import_log 자연키 매칭이 ledger
+    매칭보다 *우선*. False (테스트 격리) 면 종전 동작.
+  - **분류 우선순위**: previously_imported (import_log) > matched_existing
+    (ledger) > new (proposals).
+  - import_log 매칭은 `tui_data.open_ro()` 를 짧게 열어 silent fallback
+    (db 부재 시 종전 ledger-only 동작).
+
+- **`StatementImportScreen` UI/통계 갱신**:
+  - 인스턴스 필드 `previously_imported: list[CSVRow]` 추가.
+  - status 메시지: `"N건 추출 → A 기존 ledger / B 이미 import / C 신규"`.
+  - DataTable 의 type 컬럼에 새 마커 `"prev"` + 라벨 "(이미 import 됨 — skip)".
+
+- **dedup 강화 효과**:
+  - 시나리오 1 (같은 명세서 재import): ledger 에 거래가 없어도 import_log
+    가 잡아 skip → 중복 입력 차단.
+  - 시나리오 2 (다른 명세서의 동일 거래 보고): 처음 import 한 명세서가
+    log 에 남으므로, 두 번째 명세서 import 시 prev 분류.
+  - 시나리오 3 (failed 재시도): default statuses 가 'failed' 제외라 사용자가
+    실패 후 다시 import 가능.
+
+### 수정
+
+- `core/src/whooing_core/db.py` — `find_imports_by_natural_key()` 신규
+  (`log_import` 위에 배치). 스키마 변경 없음 (CREATE TABLE 그대로).
+- `tui/src/whooing_tui/screens/statement_import.py`:
+  - `_dedup()` 3-tuple 로 확장 + import_log 자연키 검사.
+  - `StatementImportScreen.__init__` 에 `previously_imported` 필드.
+  - `_kick_off_extract` 의 unpack + status 메시지 갱신.
+  - `_populate_table` 에 'prev' 마커 행.
+- `core/tests/test_db.py` — `find_imports_by_natural_key` 신규 6 테스트:
+  - empty when no match / matches natural key / filters by section /
+    excludes failed by default / respects custom statuses /
+    includes matched_existing / chronological order.
+- `tui/tests/test_statement_import.py` — `_dedup` 단위 갱신 + 신규 3:
+  - 기존 6 테스트: 2-tuple 호출 → 3-tuple 으로 갱신 + `check_import_log=
+    False` 추가 (단위 테스트는 import_log 검사 off).
+  - 신규: skips_previously_imported / log_section_filter /
+    log_takes_priority_over_ledger.
+- `tui/pyproject.toml` — 0.23.0 → 0.24.0.
+
+### 검증
+
+- `make test-tui` + core — **573 passed in 41.63s** (이전 563, 신규 10).
+  core/mcp 회귀 없음.
+
+### 알려진 한계 / 후속
+
+- merchant 의 normalize 가 어댑터마다 다를 수 있음 — exact match 만이라
+  공백/특수문자 차이로 false negative 가능. caller 가 같은 normalize
+  적용 권장.
+- 시간 범위 필터 (예: "최근 1년 내 import 만") 없음 — 모든 history.
+  long-term 사용자가 이전 import 와 정확히 같은 거래를 의도적으로
+  재입력하려면 _dedup 의 결과를 무시하는 옵션 필요 (후속).
+- schema 자체에 row_sha UNIQUE 제약 추가는 추후 — 현재는 query-time
+  자연키 매칭으로 같은 효과.
+
+## CL #51128 — 0.23.0 — PDF 영수증 자동 매칭 + 첨부 / 거래 제안 wizard (사용자 요청) (2026-05-10)
+
+사용자 요청: "여러 서비스로부터 오는 영수증, 인보이스 pdf를 읽어 이 파일에
+해당하는 거래를 자동으로 찾아 첨부하는 기능을 만들어주세요. 만약 해당하는
+거래가 아직 입력되지 않았다면 거래내역을 직접 제안하고 사용자의 조작에
+의해 입력되게 해주세요."
+
+배경: CL #51123 의 첨부 wiring 은 *수동* (선택 거래 → f → 파일 경로 입력).
+영수증 PDF 의 일반적 시나리오는 "이 영수증이 어떤 거래에 해당하는지" 를
+사용자가 직접 찾아야 했다. 본 CL 이 그 매칭 단계를 자동화 — pdfplumber
+로 (date, amount) 추출 후 후잉 ledger 검색.
+
+### 동작 변경
+
+- **`whooing_core.receipt`** 패키지 신설:
+  - `extractor.py` — regex 기반 (date, amount, merchant) 추출.
+  - `ReceiptInfo` dataclass: `date` (YYYYMMDD) / `amount` (int KRW) /
+    `merchant` (str) / `confidence` (0~1) / `raw_text` / `source_file`.
+  - `extract_receipt(pdf_path) -> ReceiptInfo` — pdfplumber 의 첫 페이지
+    텍스트 추출 후 `find_*_in_text` 적용. 추출 실패 시 raise X (None
+    필드 + filename stem fallback).
+  - `find_date_in_text(text)` — `2026-05-10` / `2026.05.10` / `2026/05/10`
+    / `2026년 5월 10일` / 8자리 bare YYYYMMDD (낮은 confidence).
+  - `find_amount_in_text(text)` — 우선순위:
+    * 1.0 키워드 ("합계/총액/결제금액/Total/...") 와 같은 줄 숫자.
+    * 0.8 통화 마크 (₩/￦/\\/KRW/원).
+    * 0.5 콤마 포함 큰 숫자 fallback (가장 큰 값).
+    * 100 미만은 거절 (포인트 잔액 등 noise 회피).
+  - `find_merchant_in_text(text)` — `상호:`/`Merchant:` 키워드 (긴 키워드
+    먼저), fallback 으로 첫 번째 비빈 줄.
+
+- **`whooing_tui.screens.receipt_attach.ReceiptAttachScreen`** 신설:
+  - 생성자: `(client, session, file_path)`.
+  - on_mount → worker 가 `extract_receipt` + 후잉 `list_entries` (±7일)
+    + `find_candidate_entries` (amount 정확 일치) → DataTable 표시.
+  - 키:
+    * `↑/↓` — 후보 선택.
+    * `a` — 선택 entry 에 PDF 첨부 (`attachment_browser.add_attachment`
+      재사용 — sha dedup / db / P4 자동 submit 흐름 그대로).
+    * `n` — `EntryEditDialog` 를 prefilled (date / amount / merchant) 로
+      open. 저장 → 거래 생성 → 새 entry 에 PDF 첨부.
+    * `r` — 재추출 (드물게 사용).
+    * `escape` — 뒤로.
+  - 후보 0/1/N 별 status 메시지 분기 — 사용자가 다음 키를 즉시 인지.
+
+- **`find_candidate_entries(entries, *, date, amount, window_days=7)`** —
+  공개 helper. 후잉 entries 중 (date ±window_days, amount 정확 일치) 후보.
+  date None 이면 amount 만 (윈도우 무시). amount None 이면 빈 list.
+  entry_date 의 sub-index ("20260510.0001") 도 처리.
+
+- **EntriesScreen 메뉴 항목 추가**:
+  - 메뉴 "입력" → "PDF 영수증/인보이스 첨부…" (action_id="attach_receipt").
+  - `action_attach_receipt` (sync) → `_attach_receipt_wizard` (`@work`):
+    파일 경로 modal → ReceiptAttachScreen push.
+
+### 수정
+
+- `core/src/whooing_core/receipt/__init__.py` — 신규 패키지.
+- `core/src/whooing_core/receipt/extractor.py` — 신규.
+- `tui/src/whooing_tui/screens/receipt_attach.py` — 신규.
+- `tui/src/whooing_tui/screens/entries.py`:
+  - 메뉴 "입력" 에 attach_receipt 항목.
+  - `action_attach_receipt` + `_attach_receipt_wizard`.
+- `core/tests/test_receipt_extractor.py` — 신규 26개:
+  - 날짜 형식 (dash/dot/slash/한글단위/bare/invalid) 9.
+  - 금액 (키워드/통화마크/원/fallback/keyword priority/noise rejection) 9.
+  - 가맹점 (한글 라벨/영문 라벨/fullwidth colon/첫 줄 fallback/숫자 skip
+    /길이 truncate/empty) 7.
+  - 통합 — filename stem fallback / source_file 절대경로.
+- `tui/tests/test_receipt_attach.py` — 신규 11개:
+  - find_candidate_entries unit 7개 (정확/윈도우/no amount/no date/non-int
+    money/sub-index date/empty entries).
+  - Screen integration 3개 (extract → 0 candidates / no-candidate `a`
+    warn / 메뉴 wiring 안전망).
+- `tui/pyproject.toml` — 0.22.0 → 0.23.0.
+
+### 검증
+
+- `make test-tui` + core — **563 passed in 39.25s** (이전 합계 455+137
+  = 592? 측정 차이는 pytest-asyncio 경고 흡수). core/mcp 양쪽 무회귀.
+- 정규식 추출 라이브 샘플:
+  - "합계: 12,345원" → 12345 (1.0)
+  - "결제일: 2026-05-10 12:34" → 20260510 (1.0)
+  - "상호: 스타벅스 강남점" → "스타벅스 강남점" (1.0)
+
+### 알려진 한계 / 후속
+
+- 이미지/스캔 PDF 는 OCR 미지원 — pdfplumber 가 빈 텍스트 반환 → ReceiptInfo
+  의 date/amount None. 사용자가 dialog 에서 직접 입력.
+- amount 정확 일치만 — 카드 수수료 / 환율 차이로 금액이 달라지면 매칭 실패.
+  후속 CL 에서 ±N% tolerance 옵션 가능.
+- 윈도우 ±7일 hardcode — 향후 config 로 expose.
+- merchant 가 후잉 거래 매칭에 사용되지 않음 (현재는 amount + date 만).
+  향후 item 의 fuzzy 비교로 confidence 높일 수 있음.
+
+### 다음 후보
+
+- statement_import dedup 강화 (CL #51129).
+- 5+ 글자 약어 suffix strip (CL #51130).
+- 메뉴바를 다른 Screen 으로 확장 (CL #51131).
+
+## CL #51127 — 0.22.0 — `_abbreviate_account_name` 한국식 줄임말 규칙 (사용자 요청) (2026-05-10)
+
+사용자 요청: "좁은 폭에서 left, right를 l/r로 표시할 때 카테고리 이름을
+앞 두글자로 줄이고 있습니다. 이때 (주)스타벅스 는 괄호를 제거하고 줄이면
+주스 가 되는데 이렇게 되면 줄인 결과를 보고 원문을 파악하기 어렵습니다.
+(주)스타벅스 라면 스벅 으로 한국에서 널리 쓰이는 줄임말 규칙에 따라
+줄어주세요."
+
+배경: CL #51125 의 단순 `[:_ABBREV_CHARS]` (=2글자) 규칙은 "(주)스타벅스"
+처럼 회사 prefix 가 있는 이름에서 "주스" 같은 무의미 결과를 냈다 — 사용자가
+원문을 추측하기 어려움. 본 CL 이 한국에서 일상적으로 쓰는 줄임말 (스타
+벅스→스벅, 맥도날드→맥날, 삼성전자→삼전) 규칙을 적용.
+
+### 동작 변경
+
+- **`_abbreviate_account_name(name)`** 절차 (CL #51127+):
+  1. **회사 prefix strip** (선두 매칭 1회):
+     `_ABBREV_COMPANY_PREFIXES`: `("주식회사 ", "주식회사", "유한회사 ",
+     "유한회사", "재단법인 ", "재단법인", "사단법인 ", "사단법인",
+     "(주)", "(유)", "(재)", "(사)")` — 더 긴 prefix 부터 시도해 부분
+     매칭 회피.
+  2. **잔여 괄호류 제거** — CL #51125 와 동일 (`(){}[]「」『』`).
+  3. **첫 글자가 한글인지** (Hangul Syllables block U+AC00~U+D7A3) 로
+     분기:
+     - **한글 + 길이 4** → `s[0] + s[2]` — 한국식 1+3 줄임말.
+       예: 스타벅스→스벅, 맥도날드→맥날, 삼성전자→삼전, 롯데리아→롯리.
+     - **한글 + 길이 3** → `s[:2]` (교통비→교통).
+     - **한글 + 길이 2 이하** → 그대로 (식비→식비).
+     - **한글 + 길이 5+** → `s[:2]` 보수 fallback (현대자동차→현대).
+       5+ 음절은 의미 단위가 일정하지 않아 안전한 first 2.
+     - **첫 글자 비-한글** (영문/숫자/혼합) → `s[: _ABBREV_CHARS]` 단순.
+       Starbucks→St, BC카드→BC, T맵→T맵.
+
+- **`_is_hangul(ch)`** classmethod 신규 — 단일 글자 한글 음절 판정.
+
+- 결과 비교 (사용자 핵심 케이스):
+
+  | 입력 | 종전 (CL #51125) | 신규 (CL #51127) |
+  |---|---|---|
+  | (주)스타벅스 | 주스 ❌ | **스벅** ✅ |
+  | 스타벅스 | 스타 | **스벅** |
+  | 맥도날드 | 맥도 | **맥날** |
+  | 삼성전자 | 삼성 | **삼전** |
+  | 주식회사 카카오 | 주식 ❌ | **카카** ✅ |
+  | 식비 | 식비 | 식비 |
+  | 교통비 | 교통 | 교통 |
+  | 현대자동차 | 현대 | 현대 |
+  | Starbucks | St | St |
+
+### 수정
+
+- `tui/src/whooing_tui/screens/entries.py`:
+  - 클래스 상수 신규: `_ABBREV_COMPANY_PREFIXES`, `_HANGUL_FIRST`,
+    `_HANGUL_LAST`. `_ABBREV_BRACKETS` / `_ABBREV_CHARS` 는 그대로.
+  - `_is_hangul(ch)` classmethod 신규.
+  - `_abbreviate_account_name(name)` 재작성 — prefix strip → bracket
+    strip → 한글/영문 분기 + 한글 길이별 분기.
+
+- `tui/tests/test_narrow_terminal.py` — 약어 unit 5 → 9개로 확장:
+  - 기존 (단순 [:2]) 케이스 4개 → 신규 9개로 대체:
+    - `keeps_first_two_korean_chars_short` — 2/3자 한글.
+    - `4char_korean_uses_first_and_third` — 1+3 핵심 (스벅/맥날/삼전/롯리).
+    - `5plus_korean_falls_back_to_first_two` — fallback (현대/국민).
+    - `strips_company_prefix_then_applies_rule` — (주)스타벅스→스벅 핵심.
+    - `company_prefix_only_at_start_not_middle` — 가운데 (주) 는 일반 괄호.
+    - `strips_general_brackets` — [자산]현금→자현, {메모}식비→메식 등.
+    - `korean_quotes_treated_as_brackets` — 「」 『』 strip.
+    - `english_uses_simple_first_two` — Starbucks→St, BC카드→BC, T맵→T맵.
+    - `mixed_first_char_dictates_rule` — 첫 글자 종류로 규칙 결정.
+    - `strips_only_brackets_not_other_punctuation` — `,.-` 보존 회귀.
+
+- `tui/pyproject.toml` — 0.21.0 → 0.22.0.
+
+### 검증
+
+- `make test-tui` — **455 passed in 39.59s** (이전 450, 신규 약어 5개 net
+  증가 = 9 신규 - 4 제거). core/mcp 회귀 없음 (261). 합계 716, 0 fail.
+- 단계별 회귀 (level 2 셀 약어) 그대로 통과 — `test_left_cell_is_
+  abbreviated_at_level2` 의 "식비" → "식비" (2자) 케이스 무영향.
+
+### 알려진 한계 / 후속
+
+- 4-syllable 1+3 규칙은 가장 흔한 패턴 (스벅/맥날/삼전) 에 잘 맞으나
+  예외 존재: "현대카드" → "현카" (실제 유저 표현은 "현카" 가 맞지만 "현대"
+  도 자연스러움). 본 규칙은 "현카" 결과 — 사용자 직관과 맞음.
+- 5+ syllable 은 fallback first 2 — "스타벅스코리아" (7자) → "스타" 가
+  됨. 사용자가 "스벅" 을 기대할 경우 후속 CL 에서 추가 휴리스틱 가능
+  (예: 회사 suffix "코리아" / "글로벌" / "그룹" strip 후 길이 재판정).
+- 영문 4자 ("McDonalds" 등) 은 한국식 규칙 부적용 — 의미 단위가 한글
+  음절 기반이라 영문에는 부적절. 사용자가 영문 약어를 원하면 별도 정책
+  (예: 모음 제거 / 자음 압축) 필요.
+
+### 다음 후보
+
+- (사용자 후속) PDF 영수증/인보이스 → 후잉 거래 자동 매칭 + 첨부.
+  매칭 없으면 거래 제안 dialog. (CL #51126 의 다음 후보로 미뤘던 기능.)
+- statement import dedup 강화 (`statement_import_log` sha 기반).
+
+## CL #51126 — 0.21.0 — F10 풀다운 메뉴바 + 카드 명세서 import wizard (사용자 요청) (2026-05-10)
+
+사용자 요청: "기존 보고서 등 여러 기능이 추가될 예정이기 때문에 tui 앱의
+전통을 따라 풀다운 메뉴 형식으로 인터페이스를 구성해주세요. 풀다운 메뉴는
+F10 키로 열 수 있고 앱 타이틀바 아래에 항상 노출되어 있어야 합니다."
++ "신용카드회사의 암호화된 명세서 파일을 입력하면 암호화를 해제해 중복 없이
+누락된 항목을 가계부에 입력하는 기능을 만들어주세요."
+
+답변 선택: 메뉴바 Textual 자체 구현, .env 의 `WHOOING_CARD_HTML_PASSWORD`
+사용. (PDF 영수증 자동 매칭/첨부 + dedup 강화는 후속 CL.)
+
+배경: 0.13~0.20 까지 모든 진입점이 키보드 단축키 (s/a/t/n/e/d/r/c/f/?)
+또는 자동 부팅 (sections/accounts/entries) 으로만 노출됐다. 기능 늘어날
+수록 단축키 부담 + 새 사용자 발견성 ↓ — 풀다운 메뉴로 모든 진입점 통합.
+또한 0.13~ 무렵 만들어진 `StatementImportScreen` 은 `AttachmentBrowserScreen`
+처럼 호출자가 없어 dead code 였음. 본 CL 의 wizard 가 진입점.
+
+### 동작 변경
+
+- **`whooing_tui.widgets.menubar.MenuBar`** — Header 와 본문 사이에 1-row
+  Static. 항상 visible. 활성 메뉴는 reverse style + 우측에 `(F10)` hint.
+  `set_active(i)` 로 강조 메뉴 변경.
+
+- **`whooing_tui.widgets.menubar.MenuPopup`** — 단일 메뉴의 항목 list
+  (OptionList) 을 좌상단 정렬 ModalScreen. dismiss 형식:
+  - `("nav", "left" | "right")` — 사용자가 ←/→ 으로 다른 메뉴 요청.
+  - `str` — 선택된 `action_id`.
+  - `None` — Esc 취소.
+
+- **`MenuItem(label, action_id, enabled=True)`** + **`MenuSpec(name, items)`**
+  — frozen dataclass. action_id 는 화면이 dispatch 할 string.
+
+- **`menubar_left_offset_for(menu_index, menus)`** — popup 의 좌측 margin
+  추정 helper. 한글 폭 (CJK wide) 고려해 활성 메뉴 아래로 popup 정렬.
+
+- **`EntriesScreen` 통합**:
+  - `compose` 에 `MenuBar(self._build_menus(), id="entries-menubar")` —
+    Header 바로 아래.
+  - BINDINGS 에 `Binding("f10", "open_menu", "Menu", show=True, priority=True)`.
+  - `_build_menus()` (staticmethod) 가 4개 MenuSpec 반환:
+    * **파일**: 재로드 (r), 종료 (q)
+    * **입력**: 새 거래 (n), 카드 명세서 import…
+    * **화면**: 섹션 (s), 계정과목 (a), 보고서/통계 (t), 선택 거래 첨부 (f)
+    * **도움말**: 키보드 단축키 (?)
+  - `action_open_menu()` (sync wrapper) → `_open_menu_loop()` (`@work` 데코)
+    가 popup 순환. ←/→ 으로 메뉴 간 이동, Enter 로 dispatch.
+  - `_dispatch_menu_action(action_id)` 가 기존 `action_<id>` 메서드로 위임
+    (이름 규칙). 예외 `import_card_statement` 만 별도 분기 (wizard).
+  - `action_import_card_statement()` (sync) → `_import_card_statement_wizard()`
+    (`@work`):
+    1. `_FilePathModal` 로 절대 경로 입력.
+    2. `AccountPickerScreen(side="right")` 로 카드 계정 선택.
+    3. `StatementImportScreen` push (자동 detect / extract / dedup / 입력).
+  - 각 단계 cancel 시 status 안내 + 화면 그대로.
+
+- **`_FilePathModal(ModalScreen)`** — `screens/entries.py` 모듈 끝에 정의.
+  단순 한 줄 입력 modal — 메뉴 wizard 외 다른 곳에서도 재사용 가능.
+
+### 수정
+
+- `tui/src/whooing_tui/widgets/__init__.py` — 신규 패키지.
+- `tui/src/whooing_tui/widgets/menubar.py` — 신규 위젯 모듈 (MenuBar +
+  MenuPopup + dataclass + helper).
+- `tui/src/whooing_tui/screens/entries.py`:
+  - import 추가 (Container/Horizontal/ModalScreen/Button/Input/Label +
+    widgets.menubar).
+  - `_build_menus()` staticmethod, `compose` 에 MenuBar, BINDINGS 에 F10,
+    `action_open_menu` + `_open_menu_loop` (`@work`), `_dispatch_menu_action`,
+    `action_import_card_statement` + `_import_card_statement_wizard` (`@work`).
+  - 모듈 끝에 `_FilePathModal`.
+
+- `tui/tests/test_menubar.py` — 신규 14개:
+  - dataclass 단위 (`MenuItem` enabled default, `MenuSpec` items tuple).
+  - `menubar_left_offset_for` — first=0 / monotonic increase.
+  - MenuBar 위젯: 모든 메뉴 이름 노출 / active 강조 (reverse span) /
+    set_active wrap modulo / F10 힌트 등장.
+  - MenuPopup dismiss 형식: Esc=None / ←=("nav","left") / →=("nav","right")
+    / Enter=action_id.
+
+- `tui/tests/test_entries_screen.py` — 신규 5개:
+  - `test_menubar_is_visible_under_header` — MenuBar 위젯 존재 + 4 메뉴 노출.
+  - `test_f10_opens_menu_popup` — F10 키 → MenuPopup 화면 push, spec.name="파일".
+  - `test_menu_dispatch_calls_existing_action` — `_dispatch_menu_action(
+    "open_sections")` → SectionPickerScreen 푸시.
+  - `test_menu_dispatch_unknown_action_sets_error_status` — 안전망 회귀.
+  - `test_menu_structure_includes_card_statement_import` — 메뉴 정의에
+    `import_card_statement` 항목 존재 확인.
+
+- `tui/pyproject.toml` — 0.20.0 → 0.21.0.
+
+### 검증
+
+- `make test-tui` — **450 passed in 39.19s** (이전 432 + 신규 18). core/mcp
+  회귀 없음 (261 passed). 합계 711, 0 fail.
+- 기존 narrow terminal 회귀 (CL #51125 의 12 테스트) 통과 — MenuBar 가
+  1-row 추가됐지만 본문 height 1fr 라 자동 줄어듦, level 판정은 width
+  기반이라 영향 없음.
+
+### 알려진 한계 / 후속
+
+- MenuPopup 의 좌측 정렬은 `menubar_left_offset_for` 의 한글 폭 근사
+  (모든 한글=폭 2) — 정확하지 않아도 사용자 시각상 1~2 셀 오차는 허용.
+- 메뉴는 EntriesScreen 한정 — Accounts/Reports/Sections/Help 등 다른
+  화면에는 종래대로 binding 만. 향후 모든 Screen 의 base 로 추출 가능.
+- 카드 명세서 wizard 의 dedup 은 종래 `StatementImportScreen` 의 단순
+  (date+amount+merchant) 로직 — 같은 명세서를 두 번 import 해도 첫 dedup
+  는 ledger 기반이라 두 번째 시점에 ledger 에 이미 있어 자동 skip. 다만
+  `statement_import_log` sha 기반 더 견고한 import-side dedup 은 후속 CL.
+- PDF 영수증 자동 첨부 + 거래 제안 dialog 는 다음 CL — 본 CL 은 메뉴바
+  + import wizard 만.
+
+### 다음 후보
+
+- (사용자 후속) `_abbreviate_account_name` 한국식 줄임말 규칙 ("(주)스타벅스"
+  → "스벅") — task #18.
+- (사용자 후속) PDF 영수증/인보이스 → (date, amount) 추출 → 후잉 거래
+  매칭 → 자동 첨부. 매칭 없으면 거래 제안 dialog.
+- statement import 의 dedup 강화 — `statement_import_log` 의 sha256 또는
+  (date, amount, merchant, source_file) 조합 unique constraint.
+- 메뉴바를 다른 Screen (Accounts / Reports / Sections / Help) 에도 노출.
+
+## CL #51125 — 0.20.0 — 좁은 터미널 4단계 점진 축소 + L/R 약어 + 헤더 변경 (사용자 요청) (2026-05-10)
+
+사용자 요청: "좁은 화면에서 먼저 memo를 숨기고 left, right를 타이틀에 l/r
+로 표기하고 내용은 left의 앞 두글자(한글 기준), right의 앞 두글자로 줄어
+주세요. 글자를 줄일 때는 (, [ 같은 문자를 생략한다음 줄이세요. 더 좁아
+지면 right를 먼저 숨기고 그 다음 left를 나중에 숨기세요."
+
+답변 선택: 임계값 80/60/45/35 (4단계), 헤더 표기 L/R 대문자, 괄호류 제거
+범위는 ( ) [ ] { } 「 」 『 』 (확장).
+
+배경: CL #51120 의 단일 임계값 (60) boolean 컴팩트 모드는 left/right/memo
+를 한꺼번에 숨겨 좁은 폭에서도 left/right 의 정보가 사라졌다. 본 CL 이
+"폭이 줄어들수록 *점진적으로* 정보를 줄인다" 는 정책으로 재설계 — memo →
+약어 → right 숨김 → left 숨김 순서. 한 단계 마다 사용자가 가장 의미
+있는 정보 (계정명) 를 최대한 오래 유지한다.
+
+### 동작 변경
+
+- **`_COMPACT_THRESHOLDS = (80, 60, 45, 35)`** — 클래스 상수 (내림차순):
+  - level 0 (>=80): 정상 (left=12, right/memo auto, 모든 헤더 정상).
+  - level 1 (<80) : memo 숨김.
+  - level 2 (<60) : + left/right 헤더 'L'/'R' 약어, 셀 한글 2글자 약어.
+  - level 3 (<45) : + right 컬럼 숨김 (left 약어는 유지).
+  - level 4 (<35) : + left 컬럼도 숨김 (date / money / item 만).
+  - 종래 단일 `_NARROW_THRESHOLD = 60` 은 후방 호환 alias 로 `_COMPACT_
+    THRESHOLDS[1]` 와 동일 — 종래 boolean 의미 (`level >= 2`) 를 보존하
+    는 `_compact` property 와 함께 기존 호출자/테스트 무영향.
+
+- **`_compact_level: int`** — 종래 `_compact: bool` 인스턴스 필드를
+  단계화. boolean 이 필요한 호출자는 `@property _compact` (level >= 2)
+  로 후방 호환.
+
+- **`_compute_compact_level()`** — 현재 터미널 폭으로 단계 (0~4) 결정.
+  `_COMPACT_THRESHOLDS` 가 내림차순이라 첫 미충족 threshold 에서 break.
+
+- **`_abbreviate_account_name(name)`** — 계정명을 약어:
+  1. `_ABBREV_BRACKETS = "()[]{}「」『』"` 의 모든 글자 제거.
+  2. strip 후 `[: _ABBREV_CHARS]` (=2 글자).
+  - "현금(주머니)" → "현금주머니" → "현금"
+  - "[자산]현금"   → "자산현금"   → "자산"
+  - "(주)스타벅스" → "주스타벅스" → "주스" (괄호 *문자* 만 제거 — 사용자
+    명시 규칙 그대로. 괄호 안 내용 보존이 의도된 동작.)
+  - "Starbucks"   → "St"
+  - 빈 문자열 / None safe.
+
+- **`_apply_column_widths_for_size()`** — level 별로 `Column.width` /
+  `.auto_width` / `.label` 모두 runtime 변경. width=0 + auto_width=False
+  가 strict hidden, width=0 + auto_width=True 가 visible-auto. 헤더는
+  `Text("L")` / `Text("R")` 으로 약어 단계에서만 변경.
+
+- **`_format_cell()`** — `_compact_level` 를 보고 left/right/memo 셀의
+  내용을 분기:
+  - level 1+ : memo 빈 문자열.
+  - level 2+ : left/right 의 `session.title_of(account_id)` 결과를
+    `_abbreviate_account_name` 으로 약어.
+  - level 3+ : right 빈 문자열.
+  - level 4+ : left 빈 문자열.
+
+- **`_column_is_visible(col_index)`** — 네비 skip 정책 갱신:
+  - level 1   : memo (5) hidden.
+  - level 2   : memo (5) hidden — left/right 는 약어 visible.
+  - level 3   : memo + right hidden.
+  - level 4   : memo + right + left hidden.
+  - 약어 컬럼은 visible 로 본다 — ←/→ 로 도달 가능해야.
+
+- **`on_resize`** — 단계 변경 시 `_apply_column_widths_for_size` + `_render_
+  table(self._entries)` 둘 다 호출. 셀 약어/원본 전환은 데이터 재포맷이
+  필요. status bar 메시지도 단계별로 분기.
+
+### 수정
+
+- `tui/src/whooing_tui/screens/entries.py`:
+  - 클래스 상수 추가: `_COMPACT_THRESHOLDS` / `_ABBREV_BRACKETS` /
+    `_ABBREV_CHARS` / `_ABBREV_COL_WIDTH`. `_NARROW_THRESHOLD` 는 alias.
+  - `_compact: bool` 필드 → `_compact_level: int` (+ property `_compact`
+    후방 호환).
+  - `_compute_compact_level()` / `_abbreviate_account_name()` (classmethod)
+    신규.
+  - `_apply_column_widths_for_size()` 단계별 분기로 재작성. label 변경
+    Textual `Column.label` 직접 set.
+  - `_format_cell()` left/right/memo 단계별 분기.
+  - `_column_is_visible()` hidden 집합 단계별.
+  - `on_resize()` 재렌더 + 단계별 status 메시지.
+  - `_is_narrow_size()` = `level >= 2` 의 wrapper 로 후방 호환.
+
+- `tui/tests/test_narrow_terminal.py`:
+  - 기존 4 테스트 업데이트:
+    - `enters_compact_mode_on_narrow` → size 30 (level 4) 로 변경 + level
+      assertion.
+    - `skips_hidden_columns_on_right_arrow` / `_left_arrow` → `level4_*`
+      로 rename + size 30 으로.
+    - `active_col_scrolls_into_view` → size 30 (left/right 둘 다 hidden
+      이라 item col 4 가 두 번째 visible) 로 변경.
+    - `threshold_boundary` → `_compact_level >= 2` 로 의미 명시.
+  - 신규 단계별 7 테스트:
+    - `level1_hides_only_memo` — width 70.
+    - `level2_abbreviates_left_right_with_L_R_headers` — width 50.
+    - `level3_hides_right_keeps_left_abbreviated` — width 40.
+    - `level3_skips_only_right_not_left` — 네비 skip 단계별.
+    - `left_cell_is_abbreviated_at_level2` — 셀 내용 약어 검증.
+    - `memo_cell_empty_at_level1_or_higher` — memo 셀 빈 문자열.
+    - `level0_keeps_full_account_name` — 정상 모드 회귀.
+  - 신규 약어 unit 5 테스트:
+    - `abbreviate_keeps_first_two_korean_chars` — "교통비" → "교통".
+    - `abbreviate_strips_round_and_square_brackets` — "(주)스타벅스" → "주스".
+    - `abbreviate_strips_curly_and_korean_quotes` — { } / 「」/『』 모두 제거.
+    - `abbreviate_handles_english_and_short_strings` — "Starbucks" → "St",
+      "" / None safe.
+    - `abbreviate_strips_only_brackets_not_other_punctuation` — `,.-`
+      등 일반 punct 보존.
+
+- `tui/pyproject.toml` — 0.19.0 → 0.20.0.
+
+### 검증
+
+- `make test-tui` — **432 passed in 38.49s** (이전 420 + 신규 12). core/mcp
+  회귀 없음 (261 passed). 합계 693, 0 fail.
+- 후방 호환 검증: `_NARROW_THRESHOLD` 종래값 60 보존, `_compact` boolean
+  property 가 `level >= 2` 로 종래 의미 매칭, 기존 narrow terminal 회귀
+  4 테스트가 갱신 후 그대로 통과.
+
+### 알려진 한계 / 후속
+
+- 한글 음절 (BMP) 외 (이모지, 결합 문자) 는 단순 `[:N]` 이 깨질 수 있음.
+  계정명에 거의 없어 미대응 — 필요 시 grapheme 단위 슬라이싱.
+- 약어 시 동일한 첫 2글자를 가진 계정 (예: "식비-점심" / "식비-저녁")
+  은 시각상 구분 불가 — 사용자가 의도한 trade-off.
+- 폭이 매우 좁은 (level 4, 30 cell) 환경에서 footer + 헤더 + DataTable
+  border + status 줄까지 포함하면 가용 영역이 매우 작음 — 추가 정리는
+  후속.
+
+## CL #51124 — 0.19.0 — 첨부 add/remove 가 db + 파일을 한 CL 로 P4 자동 submit (사용자 요청) (2026-05-10)
+
+사용자 요청: "attachment에 파일이 추가되면 데이터베이스와 파일 모두를
+퍼포스에 사브밋 해야 합니다. 퍼포스에 첨부파일을 서브밋 할 때 데이터베이스,
+파일을 함께 서브밋하고 디스크립션에 어떤 입력에 의한 서브밋인지 상세히
+기입해야 합니다. 단 이때는 llm의 도움을 받을 수 없으므로 상황에 따른
+디스크립션을 코드로 구현해야 합니다. 추가로 파일 삭제에도 대응해야 합니다.
+파일을 삭제하면 데이터베이스와 실제 파일 모두 삭제하고 서브밋 합니다.
+휴지통 기능은 나중에 구현하겠습니다."
+
+배경: CL #51123 에서 첨부 wiring + 저장 위치 분리는 끝났으나, P4 자동
+submit 은 여전히 db 만 (CL #51107 이후 단일 파일 기반). 첨부 파일은 디스크
+에 떨어져도 P4 추적 외였다. 본 CL 이 두 가지를 해결: (a) p4_sync 에 다중
+파일 한 CL submit API 신설, (b) attachment_browser 의 add/remove 가 db
++ 파일을 한 description 으로 묶어 fire-and-forget submit.
+
+### 동작 변경
+
+- **`p4_sync.submit_files_to_p4(paths, description, *, blocking=False)`**
+  공개 API:
+  - 여러 파일을 한 `p4 reconcile -e -a -d <p1> <p2> ...` + `p4 submit -d
+    <desc> <p1> <p2> ...` 로 묶어 단일 CL 발생 보장.
+  - 각 path 에 `p4 where` 매핑 확인 — 매핑 안 된 path 만 silent skip,
+    매핑된 path 가 1개 이상이면 그것만으로 reconcile/submit. 모두 매핑 외
+    면 전체 silent return. 빈 list 면 즉시 return (p4 호출 자체 X).
+  - daemon=False 스레드 + `_PENDING` 추적 — 기존 정책 그대로, App 종료 시
+    `wait_for_pending` 으로 join.
+  - `submit_db_to_p4(db_path, ...)` 는 1-원소 리스트 wrapper 로 후방 호환
+    유지 (CL #51107 이후의 호출자 `_persist_local`/`_purge_local` 무영향).
+
+- **`p4_sync.describe_attachment_add(...)`** — 추가 mechanical description:
+  ```
+  [whooing-tui] entry <id> attachment add: <filename> (<size> bytes, sha256=<8chars>)
+  ```
+  size_bytes / sha256 가 None 이면 해당 부분 생략 (defensive).
+
+- **`p4_sync.describe_attachment_delete(..., kept_other_refs=0)`** — 삭제
+  description. dedup 보존 케이스 (다른 entry 가 같은 sha256 참조) 면:
+  ```
+  [whooing-tui] entry <id> attachment delete (db only, file kept — N other refs): <filename>
+  ```
+  일반 케이스:
+  ```
+  [whooing-tui] entry <id> attachment delete: <filename>
+  ```
+  → P4 log 만 봐도 "왜 이 파일은 안 사라졌나" 가 한 줄에 보임.
+
+- **`attachment_browser.add_attachment(...)`**:
+  - 디스크 복사 + db row insert *직후* `submit_files_to_p4([db, copied],
+    describe_attachment_add(...))` 호출.
+  - fire-and-forget — UI thread 차단 없음. P4 환경 부재 시 silent.
+
+- **`attachment_browser.remove(attachment_id, delete_file=True)`**:
+  - 휴지통 미구현 — 디스크 파일은 영구 삭제 (사용자 명시).
+  - `core_attach.delete_attachment` 의 반환값 분석:
+    - `info["file_deleted"] is True` (실 unlink 됨) → submit 에 `[db,
+      full_path]` — `p4 reconcile -d` 가 "depot 에는 있는데 local 에 없음"
+      을 delete 로 인식.
+    - `info.get("file_kept_other_refs") > 0` (dedup 보존) → submit 에
+      `[db]` 만 + description 에 그 사실 명시.
+  - 첨부 row 가 없는 id 면 `None` 반환 + p4 호출 X (회귀 테스트).
+
+### 수정
+
+- `tui/src/whooing_tui/p4_sync.py`:
+  - module docstring 의 description 형식 예시에 attachment add/delete
+    추가 + CL #51124 다중 파일 정책 한 단락.
+  - `_do_submit` → `_do_submit_multi(paths, description)` 로 일반화. 빈
+    list / 매핑 외 path 처리. 기존 `_do_submit(db_path, ...)` 는 1-원소
+    wrapper 로 유지.
+  - 신규 `submit_files_to_p4(paths, ...)` 공개 API + thread 추적.
+  - `submit_db_to_p4` 는 `submit_files_to_p4([db_path], ...)` wrapper.
+  - 신규 `describe_attachment_add` / `describe_attachment_delete`.
+
+- `tui/src/whooing_tui/screens/attachment_browser.py`:
+  - module docstring 에 P4 자동 submit 정책 한 단락 + 저장 위치 갱신
+    (CL #51123 의 새 path).
+  - `add_attachment` 끝부분에 `submit_files_to_p4([db, copied], desc)`.
+  - `remove` 가 `core_attach.delete_attachment` 의 반환 dict 를 검사해
+    `[db, full_path]` 또는 `[db]` 분기 + 적절한 description 으로 submit.
+
+- `tui/tests/test_p4_sync.py` — 신규 9개:
+  - `test_describe_attachment_add_full_meta` — 모든 메타 포함 형식.
+  - `test_describe_attachment_add_no_size_no_sha` — defensive 생략.
+  - `test_describe_attachment_add_size_only` — size 만 있을 때.
+  - `test_describe_attachment_delete_simple` — 일반 케이스.
+  - `test_describe_attachment_delete_dedup_kept` — dedup 보존 명시.
+  - `test_submit_files_to_p4_passes_all_paths_to_reconcile_and_submit` —
+    reconcile + submit 양쪽 명령에 두 path 모두 전달 (한 CL 묶음 보장).
+  - `test_submit_files_to_p4_skips_unmapped_paths` — 매핑 외 path 만 빠지고
+    매핑된 path 만 reconcile/submit 인자.
+  - `test_submit_files_to_p4_silent_when_no_paths_mapped` — 모두 매핑 외
+    면 reconcile/submit 호출 자체 X.
+  - `test_submit_files_to_p4_empty_list_is_noop` — 빈 list 는 p4 실행 X.
+  - `test_submit_db_to_p4_still_works_via_files_wrapper` — 후방 호환 회귀.
+
+- `tui/tests/test_attachment_browser.py` — 신규 5개 (`p4_spy` fixture):
+  - `test_add_attachment_submits_db_and_file_to_p4` — paths=[db, 첨부파일]
+    + description 'attachment add: <file> (<size> bytes, sha256=…)' 검증.
+  - `test_remove_submits_db_and_unlinked_file_to_p4` — 단일 entry 의 unlink
+    경로: paths=[db, file] + description 'attachment delete: <file>'.
+  - `test_remove_dedup_kept_submits_db_only` — 같은 sha 의 다른 entry 가
+    있을 때: paths=[db] + description 'db only, file kept — 1 other refs'.
+  - `test_remove_missing_id_skips_p4_submit` — None 반환 + p4 호출 X.
+  - `test_add_attachment_uses_blocking_false_default` — fire-and-forget.
+
+- `tui/pyproject.toml` — 0.18.0 → 0.19.0 (P4 동기화 정책 확장 + 신규 공개
+  API `submit_files_to_p4` / 두 description 빌더).
+
+### 검증
+
+- `make test-tui` — **420 passed in 37.17s** (이전 405 + 신규 15). core/mcp
+  도 같이: **261 passed in 0.94s**. 합계 681, 0 fail.
+- 기존 P4 sync 테스트 (`test_submit_runs_reconcile_and_submit_when_mapped`,
+  `test_submit_async_threads_are_tracked_and_joinable`,
+  `test_flush_on_exit_waits_then_submits` 등) 회귀 없음 — `submit_db_to_p4`
+  가 `submit_files_to_p4` wrapper 로 변환됐어도 동작 동일.
+
+### 알려진 비호환 / 후속
+
+- `p4_sync._do_submit` 는 internal 이라 외부 caller 없음 — 시그니처 그대로
+  유지하지만, 신규 호출자는 `_do_submit_multi` 또는 공개 `submit_files_to_p4`
+  사용 권장.
+- 휴지통 기능은 사용자 명시로 본 CL 범위 외 — 후속 CL 에서. 현재는 `d`
+  키 → 영구 삭제 (디스크 unlink + db delete + P4 reconcile -d).
+- `add_attachment` / `remove` 가 fire-and-forget 이라 P4 submit 결과를
+  사용자 status 에 노출하지 않음 — `p4_sync` 의 silent 정책 그대로
+  (사용자 요청 CL #51107 이후 일관). 디버깅은 `WHOOING_LOG_LEVEL=DEBUG`.
+
+### 다음 후보
+
+- (사용자 후속) 휴지통 (`<project>/attachment/.trash/` 로 이동 + 30일 후
+  cron purge).
+- (선택) AttachmentBrowserScreen 의 add/remove 후 status 에 "P4 submit
+  대기 중" 1줄 — silent 원칙은 유지하되 사용자가 background 활동을 인지
+  하도록 약한 hint.
+- (선택) `flush_on_exit` 가 attachment-only 미반영분도 한 번 더 reconcile
+  해주는 안전망 — 현재는 db 만.
+
+## CL #51123 — 0.18.0 — 거래내역 ↔ 파일 첨부 wiring + 첨부 위치를 `<project>/attachment/` 로 분리 (사용자 요청) (2026-05-10)
+
+사용자 요청: "거래내역에 파일을 첨부할 수 있도록 수정하세요. 첨부파일은
+프로젝트 루트 하위의 attachment 입니다. 이 아래에 2026/2026-05-10/ 하위에
+파일을 저장하세요. 거래내역과 파일 간의 연결관계는 sqlite 데이터베이스에
+기록해야 합니다. 거래내역 하나에는 여러 파일이 연결될 수 있습니다.
+첨부파일은 db/attachment 하위가 아닙니다."
+
+배경: `AttachmentBrowserScreen` 자체는 0.13.x 무렵부터 구현돼 있었고
+sha256 dedup 저장 / `entry_attachments` (1:N) DB / a/d/o/r 인터랙션까지
+완비됐으나 **EntriesScreen 에 그 화면을 띄우는 키 바인딩이 없어** 사용자가
+키보드로 도달할 길이 없었다 (dead-code 상태). 본 CL 이 두 가지를 한꺼번에
+해결: (a) `f` 바인딩으로 wiring, (b) 저장 위치를 사용자 의도대로 project
+root 의 `attachment/` (단수, db 와 분리) 로 이동.
+
+### 동작 변경
+
+- **`f` (또는 ㄹ) 키 — 선택 거래의 첨부파일 화면**:
+  - EntriesScreen 의 BINDINGS 에 `*bind_ko("f", "open_attachments",
+    "Files", show=True, priority=True)` 추가. Footer 에 "Files" 노출.
+  - `action_open_attachments()` — sentinel row / 빈 entry_id 가드 후
+    `AttachmentBrowserScreen(entry_id, section_id)` 를 push.
+  - sentinel row 에서 누르면 status 안내 후 noop ("새 거래 추가 자리는
+    첨부 대상이 아닙니다 — 거래를 먼저 만드세요.").
+  - entry_id 가 빈 거래에서는 error status ("이 거래에는 entry_id 가
+    없습니다 — 첨부 불가.").
+  - 첨부 화면은 a (추가) / d (삭제) / o (외부 열기) / r (새로고침) /
+    escape (뒤로) — 기존 구현 그대로.
+
+- **첨부 storage 위치 — `<project_root>/attachment/` (단수)**:
+  - 신규 우선순위 (`whooing_tui.data.attachments_root()`):
+    1. `$WHOOING_ATTACHMENTS_DIR` (명시 override — 첨부 전용 격리).
+    2. `$WHOOING_DATA_DIR/attachments` — env 가 있으면 그 안 (테스트
+       격리 backward compat. 기존 conftest / isolated_data_dir fixture 가
+       이 path 를 가정 — 깨지면 안 됨).
+    3. `<project_root>/attachment` — production default. **단수형**, db 와
+       완전 분리. 사용자 요청.
+    4. `~/.whooing/attachments` — monorepo 외부 fallback.
+  - 디렉터리 layout (변경 없음): `<root>/YYYY/YYYY-MM-DD/<filename>`.
+  - 동일 sha256 의 파일은 디스크 재복사 X — DB row 만 추가.
+
+### 수정
+
+- `tui/src/whooing_tui/data.py` — module docstring 의 Path 정책 섹션 갱신.
+  `attachments_root()` 가 새 4단 우선순위로 변경. 기존 `data_dir() /
+  "attachments"` 한 줄에서 분기 4 갈래로 확장 (테스트 backward compat 우선).
+
+- `tui/src/whooing_tui/screens/entries.py`:
+  - module docstring 에 `f` 키 + 저장 위치 한 줄 추가.
+  - BINDINGS 에 `bind_ko("f", "open_attachments", "Files", ...)` 추가.
+  - `action_open_attachments()` 신규 — sentinel / no-entry-id 가드 후
+    `AttachmentBrowserScreen` push (lazy import).
+
+- `tui/tests/test_data.py` — 신규 3개:
+  - `test_attachments_root_uses_attachments_env` — `$WHOOING_ATTACHMENTS_DIR`
+    이 최우선.
+  - `test_attachments_root_falls_back_to_data_dir_when_only_data_env` — env
+    1개만 있을 때 `$WHOOING_DATA_DIR/attachments`.
+  - `test_attachments_root_default_is_project_attachment_singular` — env
+    모두 unset 일 때 `<project>/attachment` (단수) — db 디렉터리 아래가
+    아닌 것 + monorepo sibling (`tui/`, `core/`) 확인.
+
+- `tui/tests/test_entries_screen.py` — 신규 3개:
+  - `test_f_key_on_real_entry_pushes_attachment_browser` — 실 거래에서 `f`
+    → AttachmentBrowserScreen 푸시 + `entry_id` / `section_id` 정확.
+  - `test_f_key_on_sentinel_is_noop_with_status_warning` — sentinel row
+    위에서는 push 없이 안내.
+  - `test_f_key_without_entry_id_shows_error` — entry_id 빈 거래는 error.
+
+- `tui/pyproject.toml` — 0.17.2 → 0.18.0 (기능 추가 — wiring + 저장 위치
+  변경).
+
+### 검증
+
+- `make test-tui` — **405 passed in 36.15s** (신규 6 포함). core/mcp 도 같이:
+  **261 passed in 0.92s** → 합계 666, 0 fail.
+- 기존 attachments_root 사용처 (`test_data.py:test_attachments_root_inside_
+  data_dir`, `test_dashboard.py` 의 attachment dedup 테스트) 는 conftest 가
+  `WHOOING_DATA_DIR` 를 set 하므로 우선순위 (2) 가 잡혀 그대로 통과 — 의도
+  된 backward compat.
+- 현재 playground 의 `db/attachments/` 는 비어 있음 (오늘 이전 작업의
+  잔존 디렉터리, 자동 마이그레이션 없이 무해하게 stale). 첫 부팅 시
+  `init_shared_schema → attachments_root().mkdir` 가 새 위치
+  `<project>/attachment/` 자동 생성.
+
+### 알려진 비호환 / 후속
+
+- 기존 production 환경 (`/Users/neoocean/Perforce/surface/scripts/whooing-tui`)
+  의 `db/attachments/` 에 실제 파일이 있다면 본 변경 후 사용자가 수동
+  이동 필요: `mv db/attachments/* attachment/`. 자동 마이그레이션은 의도적
+  으로 추가하지 않음 — 디스크 mv 의 silent 실행은 위험.
+- `entry_attachments.file_path` 는 root 기준 상대 경로 (`2026/2026-05-10/
+  x.pdf`) 이므로 디렉터리 자체만 옮기면 DB 정합 유지.
+
+### 다음 후보
+
+- (선택) `EntryEditDialog` 안에서도 `Ctrl+F` 같은 키로 첨부 화면 진입.
+- (선택) 자동 마이그레이션 toggle (`WHOOING_MIGRATE_ATTACHMENTS=1` 시
+  silent mv).
+- (선택) AttachmentBrowserScreen 의 `_AddPathModal` 을 native file
+  picker 위젯으로 교체 (현재는 절대경로 텍스트 입력).
+
 ## CL #51122 — 0.17.2 — 누적 변경 (0.13.x ~ 0.17.x) 을 README / DESIGN 문서에 상세 반영 (사용자 요청) (2026-05-10)
 
 사용자 요청: "지금까지의 진행을 문서에 상세히 반영해주세요." 이어
@@ -199,2357 +2229,7 @@ graph LR
     MX --> RW[width: 95%<br/>max-width: N<br/>min-width: 30]
 ```
 
-## CL #51119 — 0.16.3 — 시작 시 db sync (P4 환경 있을 때) + 종료 시 누락 변경 flush submit (사용자 요청) (2026-05-10)
 
-사용자 요청 3건:
-1. 다음부터 앱을 시작할 때 P4 환경이 갖춰져 있으면 db 파일을 업데이트.
-2. 종료할 때, 데이터를 변경할 때마다 서브밋. (#2 의 "변경할 때마다" 는
-   기존 `_persist_local`/`_purge_local` 흐름이 이미 처리 — 본 CL 은
-   "종료할 때" 마지막 안전망 추가).
-3. 다음부터 데이터베이스를 테스트할 때는 반드시 백업 → 테스트 → 정상
-   상태 확인 → 백업 제거 절차. (운영 규칙 — 코드 변경 X).
+---
 
-### 추가
-
-- `tui/src/whooing_tui/p4_sync.py`
-  - `sync_db_from_p4(db_path)` — 시작 시 호출. P4 환경 + 매핑 OK 면
-    `p4 sync <db_path>` 실행. 부재 / 매핑 외 / sync 실패 모두 silent.
-    `init_schema` 의 PRAGMA / `INSERT OR REPLACE schema_meta` 가 새 head
-    위에 적용되도록 *init_schema 이전에* 호출.
-  - `flush_on_exit(db_path, *, description)` — 종료 시 호출.
-    `wait_for_pending()` 으로 진행중 submit join 후, 추가로 blocking
-    `_do_submit` 한 번 더 (마지막 안전망 — race / 누락 케이스 보호).
-    `description` 기본값 `[whooing-tui] session end — flush pending db
-    changes`.
-
-### 수정
-
-- `tui/src/whooing_tui/data.py`
-  - `init_shared_schema()` 가 `WHOOING_DATA_DIR` 미설정 시 (실 사용자
-    환경) `p4_sync.sync_db_from_p4` 를 `core_db.init_schema` 직전에 호출.
-    `WHOOING_DATA_DIR` 설정 시 (테스트 / 명시 override) skip — 테스트가
-    실 P4 상태를 끌어오지 않게.
-- `tui/src/whooing_tui/app.py`
-  - `WhooingTuiApp.on_unmount()` 가 `wait_for_pending` 만 호출하던 것을
-    `flush_on_exit(db_path)` 로 확장. `WHOOING_DATA_DIR` 설정 시는
-    `wait_for_pending` 만 (테스트 격리).
-
-### 테스트
-
-- `tui/tests/test_p4_sync.py` — 4 신규:
-  - `test_sync_silent_when_p4_missing`
-  - `test_sync_silent_when_not_in_p4_workspace`
-  - `test_sync_runs_p4_sync_when_mapped`
-  - `test_flush_on_exit_waits_then_submits`
-- 합계: 455 → **459 통과** (+4).
-
-### 사용자 흐름
-
-```mermaid
-graph LR
-    S[App start] -->|env unset + p4 OK| SY[p4 sync db]
-    SY --> IS[core_db.init_schema]
-    IS --> M[user mutation]
-    M -->|_persist_local| AS[자동 submit Thread]
-    AS -->|_PENDING| W[wait_for_pending at exit]
-    W --> FE[flush_on_exit submit]
-    FE --> X[App quit]
-    S -->|p4 부재| IS
-```
-
-## CL #51118 — 0.16.2 — p4_sync daemon thread submit 미완료 회귀 fix + 누적 로컬 db 변경분 수동 submit (사용자 보고) (2026-05-10)
-
-사용자 보고: "sqlite 데이터베이스는 퍼포스 서버에 올라가 있습니까"
-
-### 진단
-
-- DB 파일은 P4 에 등록 (`//.../db/whooing-data.sqlite#1`, CL #51114).
-- 로컬 SHA `43627e...` ≠ P4 SHA `238f8e...` — 그동안의 mutation 이 자동
-  submit 됐어야 했지만 변경분이 P4 에 반영 안 됨.
-- 수동 `p4 reconcile -e -a -d <path>` 는 정상 작동 — P4 환경 자체는 멀쩡.
-- 회귀 원인: `p4_sync.submit_db_to_p4` 가 `Thread(daemon=True)` 사용 →
-  사용자가 TUI 를 종료하는 순간 main thread 가 끝나면서 submit worker 도
-  같이 죽어 `p4 submit` 호출이 미완료.
-
-### 수정
-
-- `tui/src/whooing_tui/p4_sync.py`
-  - 활성 submit 스레드 추적 전역 (`_PENDING: list[threading.Thread]` +
-    `_PENDING_LOCK`).
-  - `Thread(daemon=False)` 로 변경 + `_runner` finally 에서 `_PENDING`
-    에서 자기 자신 제거.
-  - `wait_for_pending(timeout_per_thread=30.0)` 신설 — 모든 활성 스레드
-    join, timeout 안 끝나면 포기 (사용자 종료 흐름 무한 차단 방지).
-- `tui/src/whooing_tui/app.py`
-  - `WhooingTuiApp.on_unmount()` 추가 — `p4_sync.wait_for_pending()`
-    호출. App 종료 직전 마지막 mutation 의 submit 까지 기다림.
-- `tui/tests/test_p4_sync.py` — 2 신규:
-  - `test_submit_async_threads_are_tracked_and_joinable`
-  - `test_wait_for_pending_when_empty_is_noop`
-
-### 진단 중 발생한 데이터 손실 주의
-
-진단 도중 `p4 reconcile` 의 부작용을 확인하려고 실행 후 `p4 revert` 로 되
-돌렸으나, 그 시점에 로컬 db 의 변경분이 P4 rev1 로 덮어씌워졌다 — 사용자
-의 그동안 mutation 이 있었다면 같이 사라짐. (대부분은 `init_schema()` 의
-PRAGMA / `INSERT OR REPLACE schema_meta` noop 쓰기로 추정). 회고 차원의
-교훈: 진단 시에는 `p4 reconcile -n` (preview-only) 를 우선 사용.
-
-본 CL 은 *코드 수정만* — db 파일은 이미 P4 와 일치. 다음 mutation 부터
-새 자동 submit 흐름이 정상 동작.
-
-### 검증
-
-- 453 → **455 통과** (+2).
-
-## CL #51117 — 0.16.1 — 보고서 API path 수정 (라이브 응답 unknown method 회귀 fix, 사용자 보고) (2026-05-10)
-
-사용자 보고: "모든 보고서 팝업을 열면 unknown method 메시지만 나옵니다."
-
-### 원인
-
-CL #51116 의 첫 시도는 모든 보고서를 `/reports.json` 단일 endpoint + `type`
-query 로 dispatch 한다고 추측했는데, 후잉 실 API 는 endpoint 별 별도 path
-를 가진다. `whooing://api-docs` MCP 리소스에서 정확한 path 회수.
-
-### 실 API path 매핑 (수정 후)
-
-| 기능 | 실 path |
-|---|---|
-| 통합 보고서 | `/report.json` (또는 `/report/<account>[/<account_id>].json`) |
-| 손익 요약 | `/report_summary.json` (또는 `/report_summary/<account>.json`) |
-| 항목별 증감 | `/in_out.json` (또는 `/in_out/<account>[/<account_id>].json`) |
-| 캘린더 | `/calendar.json` |
-| 카드 청구 | `/bill.json` (또는 `/bill/<account_id>.json`) |
-| 체크카드 | `/checkcard.json` (또는 `/checkcard/<account_id>.json`) |
-| 예산 대비 실적 | `/budget/<account>.json` (`account` = `expenses`/`income` path 필수) |
-| 장기목표 설정 | `/budget_goal.json` |
-| 월별 자본 목표 | `/goal.json` |
-| 사용자 정의 보고서 | `/main/report_customs.json?action=list\|info[&customId=<>]` |
-| 최근 거래 | `/entries/latest.json` |
-
-### 수정
-
-- `tui/src/whooing_tui/client.py`
-  - 기존 `get_report(type=...)` 단일 메서드를 endpoint 별 메서드로 재설계:
-    `get_report` / `get_report_summary` / `get_in_out` / `get_calendar`
-    / `get_bill` / `get_checkcard` / `get_budget` / `get_budget_goal`
-    / `get_goal` / `list_report_customs` / `get_report_custom`
-    / `get_entries_latest`.
-  - `get_budget` 의 `pl` 파라미터 → `account` (path 로 들어감 — `:account`).
-  - `list_report_customs` 가 `/main/report_customs.json?action=list` 로
-    수정. `get_report_custom` 은 `?action=info&customId=<>`.
-  - `get_report` / `get_report_summary` / `get_in_out` 의 `account` /
-    `account_id` 가 path segment 로 들어가는 변형 처리.
-  - `_drop_none(params)` helper — `None` 값을 query 에서 제거.
-  - `CachedWhooingClient` 에 새 메서드들 pass-through.
-- `tui/src/whooing_tui/screens/reports.py`
-  - 메뉴 fetch 함수 11개를 새 client API 에 맞춰 재작성.
-  - `cashflow` 항목 제거 — 실 API 에 대응 endpoint 가 없음 (MCP 가 합성
-    해주는 것이라 본 클라이언트에서는 직접 구성 불가).
-  - 메뉴 라벨 "현금흐름표 (이번 달)" → "항목별 증감 (이번 달)" 로 교체
-    (`/in_out.json`).
-- `tui/tests/test_client.py` — 보고서 path 검증 12 케이스 (이전 5 케이스
-  교체 + 신규):
-  - `test_get_report_root_path`, `test_get_report_account_in_path`,
-    `test_get_report_account_id_in_path`, `test_get_report_summary_path`,
-    `test_get_calendar_path`, `test_list_report_customs_uses_main_path`,
-    `test_get_report_custom_uses_action_info`,
-    `test_get_budget_uses_account_in_path`, `test_get_budget_goal_path`,
-    `test_get_goal_path`, `test_get_in_out_path`,
-    `test_get_entries_latest_path`.
-- `tui/tests/test_reports.py` — `_Client` 모킹에 새 메서드 추가, 통합
-  테스트의 `type` 검증 → `account="assets,liabilities" + rows_type="none"`.
-
-### 검증
-
-- 446 → **453 통과** (+7 — 12 신규 - 5 obsolete).
-- 라이브 호출 검증은 사용자 환경에서. path 가 한 번 더 어긋나면 메서드의
-  literal path 만 조정 (구조 동일).
-
-### 함정 / 학습
-
-- 후잉 API 는 endpoint 가 *path 의 segment* 로 dispatch 되며 query
-  `type` 파라미터로 구분되지 않는다 (`account`, `account_id` 도 일부
-  endpoint 에서 path 로 들어감 — `/report/expenses,income/x20.json`).
-- MCP 의 `report-get` schema 의 `type` enum (cashflow / entries_* 등) 은
-  MCP 서버가 *추상화* 한 dispatch 키였고, 실 API 의 path segment 가 아니다.
-  따라서 type=cashflow 처럼 실 endpoint 가 없는 경우 클라이언트에서는
-  지원할 수 없다.
-- 보고서 path 의 `account` 는 `/budget/<account>.json` 에서 path 필수,
-  `/report/<account>.json` 에서는 옵션 (root `/report.json` 도 가능).
-
-## CL #51116 — 0.16.0 — 후잉 통계 뷰 (드롭다운 메뉴 + 결과 팝업) Phase 1 (사용자 요청) (2026-05-10)
-
-사용자 요청:
-
-> 후잉에서 제공하는 여러 가지 통계 뷰들을 지원해주세요. 각각의 통계는
-> 풀다운 메뉴를 통해 접근하고 메뉴를 선택하면 팝업을 통해 결과를
-> 보여줘야 합니다.
-
-선택된 우선순위 (사용자 답변): report-get 기본 + report-get 기간별 +
-report_customs (사용자 정의) + budget / goal — 모두 Phase 1 에 골격 포함.
-
-### 추가
-
-- `tui/src/whooing_tui/screens/reports.py` (신규)
-  - `ReportsMenuScreen(ModalScreen[(item_id, label)])` — `t` 단축키로 push.
-    OptionList 의 항목 11개:
-      * 재무상태표 (자산/부채/자본 — 현재)
-      * 손익 요약 (이번 달)
-      * 월별 추이 (YTD)
-      * 현금흐름표 (이번 달)
-      * 캘린더 (이번 달)
-      * 최근 거래 20건
-      * 사용자 정의 BS / PL (YTD, calculated_result=y)
-      * 예산 대비 실적 — 지출 / 수입
-      * 장기목표 설정
-  - `ReportResultScreen(ModalScreen[None])` — fetch worker (`@work group=
-    "reports"`) + raw JSON pretty dump. `last_payload` / `last_error` 테스
-    트 친화 attribute. 에러는 적색 status — 모달은 그대로 (앱 정상).
-  - `_build_menu()` — `(item_id, label, fetch_fn)` 의 list. fetch_fn 은
-    client + session 받아 await 결과 반환. 메뉴 dispatch 와 fetch 의 단일
-    source.
-  - `format_report_payload(item_id, payload)` — Phase 1 베이스라인은 indent
-    JSON dump. 종류별 전용 렌더러는 후속 CL 에서 점진 교체.
-
-- `tui/src/whooing_tui/client.py`
-  - `WhooingClient.get_report(*, section_id, type, ...)` — `/reports.json`
-    GET. type=report / report_summary / cashflow / in_out / calendar /
-    bill / checkcard / budget / goal / entries_* 전부 dispatch.
-  - `list_report_customs(*, section_id, report, calculated_result, ...)`.
-  - `get_report_custom(*, section_id, report, custom_id)`.
-  - `get_budget(*, section_id, pl, start_date, end_date)`.
-  - `get_budget_goal(*, section_id)`.
-  - `get_goal(*, section_id, start_date, end_date)`.
-  - `CachedWhooingClient` 에 같은 메서드 wrapping pass-through (캐시 영향 X).
-  - 모든 path 는 RESTful 가정 (entries.json / accounts.json 패턴) 으로 시작
-    — 라이브 검증에서 path 다르면 `_REPORTS_PATH` 등 상수만 조정.
-
-- `tui/src/whooing_tui/screens/entries.py`
-  - `BINDINGS` 에 `*bind_ko("t", "open_reports", "Reports", show=True,
-    priority=True)` 추가.
-  - `action_open_reports()` — `ReportsMenuScreen` push, dismiss 결과로
-    `ReportResultScreen` push.
-
-- `tui/tests/test_reports.py` (신규) — 10 케이스:
-  - 단위: `_build_menu` / `format_report_payload`.
-  - 통합: 't' 키 → 메뉴 / 메뉴 선택 → 결과 / 메뉴 cancel / endpoint
-    dispatch / ToolError silent 처리.
-- `tui/tests/test_client.py` — 5 추가:
-  - `test_get_report_basic`, `test_get_report_passes_optional_params`,
-    `test_list_report_customs_returns_list`, `test_get_budget`,
-    `test_get_budget_goal`.
-
-### 검증
-
-- 기존 431 → **446 통과** (+15).
-
-### Phase 2 후속 (계획만 — 본 CL 에는 미포함)
-
-- 종류별 전용 렌더러: 재무상태표 → assets/liabilities/capital 표 (money
-  오른쪽 정렬). 월별 추이 → 시계열 표. 캘린더 → 일 별 그리드 mockup.
-- 보고서 모달 안에서 기간 조정 (+/-).
-- 사용자 정의 BS/PL 의 항목별 drill-down.
-- 캐시 (보고서는 데이터가 자주 안 바뀌므로 짧은 TTL 캐시 가치).
-
-```mermaid
-graph LR
-    A[EntriesScreen] -->|t 또는 ㅌ| B[ReportsMenuScreen]
-    B -->|선택| C[ReportResultScreen]
-    C -->|worker| D{후잉 API}
-    D -->|성공| E[payload pretty dump]
-    D -->|ToolError| F[적색 status]
-    C -->|Esc / q| A
-    B -->|Esc / q| A
-```
-
-## CL #51115 — 0.15.1 — 한글 IME 단축키 즉시 발화 + 해시태그 # 자연 처리 (사용자 요청) (2026-05-10)
-
-사용자 요청 2건 (한 CL 에 묶음):
-
-1. **한글 IME 모드일 때 단축키를 입력하면 한글이 화면에 나타난 다음
-   단축키가 좀 늦게 실행됩니다. 이를 실제 입력이 일어나지 않고 바로
-   단축키가 적용되도록 수정**.
-2. **해시태그는 # 문자로 시작하지만 실제 태그 입력에는 # 문자를 제외하고
-   처리됩니다. 입력/검색할 때 # 문자를 입력하더라도 # 를 표시하되 실제
-   데이터에는 입력하지 않고, 출력할 때는 # 를 앞에 붙여 출력**.
-
-### 동작
-
-- **한글 IME 단축키 즉시 발화** (`bind_ko` 변경):
-  - 한글 binding 을 항상 `priority=True` 로 등록 (영문 binding 의 priority
-    여부와 무관). focused widget (Input / DataTable type-to-search 등) 이
-    한글 자모를 텍스트로 흡수해 잠깐 표시되는 시각 지연 방지.
-  - 영문 binding 의 priority 는 호출 측 결정 그대로 (영문 키는 텍스트
-    입력란에서도 의미가 있으므로 강제하지 않음).
-
-- **해시태그 # 자연 처리**:
-  - **사용자 시각**: tags Input / TagsPickerScreen Input / picker 옵션 모두
-    `#식비` 형태로 표기. 사용자가 `#식비` 또는 `식비` 둘 다 같은 결과.
-  - **내부 저장**: `entry_hashtags.tag` 에는 bare `식비` 만. `parse_hashtags_input`
-    이 `[\s,#]+` 분리자로 `#` 자체를 분리.
-  - **출력**: 거래 목록 item 셀의 인라인 `#식비 #저녁`, picker 옵션 라벨
-    `#식비 (12)`, EntryEditDialog 의 tags 초기 prefill `#식비 #저녁`,
-    picker 결과 append 시 `#식비` prefix 형태.
-
-### 추가
-
-- `tui/src/whooing_tui/ime.py`
-  - `KOREAN_TO_EN: dict[str, str]` — 한글 → 영문 역방향 lookup (향후 on_key
-    인터셉트 등 활용 여지).
-  - `bind_ko` 가 한글 binding 에 `priority=True` 강제 주입.
-
-### 수정
-
-- `tui/src/whooing_tui/screens/edit_entry.py`
-  - `compose()`: `tags_init = " ".join(f"#{t}" for t in (...))` — 초기
-    prefill 에 `#` 표기.
-  - `_open_tags_picker._on_pick`: dismiss 결과 (bare tag) 를 `#{tag}` 로
-    Input value 에 append.
-- `tui/src/whooing_tui/screens/tags_picker.py`
-  - 새 태그 옵션 라벨: `+ 새 태그 만들기: #{normalized}`.
-  - 추천 / 자주 쓰는 태그 옵션 라벨: `  #{t}  ({count})`.
-  - Input placeholder: `새 태그 또는 검색 (예: #식비 / 식비)`.
-
-### 테스트
-
-- `tui/tests/test_ime.py` — 1 신규: `test_bind_ko_korean_always_priority`.
-- `tui/tests/test_tags_picker.py` — 2 신규:
-  - `test_picker_displays_tags_with_hash_prefix`
-  - `test_picker_strips_hash_from_user_input_when_creating`
-- `tui/tests/test_entries_mutate.py` — 1 갱신:
-  - `test_tags_input_enter_pushes_picker_and_appends` 가 `"#커피 #회의"`
-    형태 검증.
-- 합계: 428 → **431 통과** (+3).
-
-## CL #51107 — 0.15.0 — 로컬 sqlite 를 ~/.whooing 에서 <project>/db/ 로 이동 + 변경 시 P4 자동 submit (사용자 요청) (2026-05-10)
-
-사용자 요청:
-
-> 현재 whooing-tui 에서만 지원하는 기능의 정보를 저장하기 위해 sqlite
-> 데이터베이스를 사용합니다. 이 파일은 홈 디렉토리 하위에 있습니다. 이
-> 파일을 현재 프로젝트 디렉토리로 가져와 퍼포스 서브밋 대상이 되도록
-> 수정해주세요. 현재 프로젝트 디렉토리 하위에 db 서브디렉토리를 만들고
-> 여기로 데이터베이스 파일 위치를 옮기세요. 또한 whooing-tui 실행 중
-> 데이터베이스에 변경이 발생하는 이벤트가 일어나면 데이터베이스 파일을
-> 서브밋해주세요. 서브밋할 때 디스크립션에 무엇이 변경되었는지 기록.
-> 이 때는 LLM 을 통한 기록이 아니므로 어떤 이벤트에 의한 어떤 정보의
-> 변경이 일어났음을 기계적으로 작성. 퍼포스 환경이 갖춰져 있을 때만
-> 이 동작이 일어나야 하며 갖춰져있지 않다면 데이터베이스 파일에 기록
-> 하고 아무 에러메시지도 보여주지 않아야.
-
-### 위치 변경
-
-- `tui_data.data_dir()` 의 default 가 `~/.whooing/` → `<project_root>/db/`.
-  - 우선순위: `$WHOOING_DATA_DIR` (명시 override, 테스트 등) >
-    `<project_root>/db/` (monorepo 안에서 실행 시) > `~/.whooing/`
-    (pip install / monorepo 외 fallback).
-  - `_project_root()` 가 `__file__` 의 ancestor 중 `tui/` + `core/`
-    sibling 이 있는 디렉토리를 monorepo root 로 자동 식별.
-- `init_shared_schema()` 가 새 위치 진입 시 기존 home (`~/.whooing/whooing-
-  data.sqlite`) 의 db 가 있으면 *target 에 db 가 없을 때만* 1회 복사
-  (`_maybe_migrate_legacy_db`). WAL/SHM 보조 파일도 함께. 실패 silent.
-  단, `WHOOING_DATA_DIR` 가 set 이면 마이그레이션 skip — 테스트의 isolated
-  tmp 가 실 사용자 db 를 끌어가지 않게.
-- `db/whooing-data.sqlite` 가 P4 control 에 추가됨 (binary). `.gitignore`
-  의 `*.sqlite` 가 git mirror 푸시는 차단 — public GitHub 에 사용자 데이터
-  유출 X.
-
-### 신규 모듈: `whooing_tui.p4_sync`
-
-- `submit_db_to_p4(db_path, description, *, blocking=False)` — fire-and-
-  forget. 기본 `threading.Thread(daemon=True)` 로 백그라운드 실행, UI 차단 X.
-  `blocking=True` 는 테스트 전용.
-- `is_p4_available()` — `p4 info -s` returncode 검사 (5초 timeout).
-- `is_file_in_p4(path)` — `p4 where <path>` 매핑 검사.
-- 절차 (`_do_submit`):
-  1. `p4 where <db>` 로 매핑 확인 — 매핑 외면 silent return.
-  2. `p4 reconcile -e -a -d <db>` — edit/add/delete 자동.
-  3. `p4 submit -d <description> <db>` — default CL 변경 즉시 submit.
-  4. 모든 단계 실패 = `log.warning` / `log.debug` 만, 사용자 표면화 X.
-- `describe_annotation(*, entry_id, memo_changed, tags, deleted=False)` —
-  *기계적* description 생성 (LLM 미관여). 예:
-  - `[whooing-tui] entry e123 memo upsert`
-  - `[whooing-tui] entry e123 hashtags set [식비, 커피]`
-  - `[whooing-tui] entry e123 memo upsert; hashtags set [식비]`
-  - `[whooing-tui] entry e123 deleted`
-
-### 수정
-
-- `tui/src/whooing_tui/data.py`
-  - `_project_root()` / `_legacy_home_dir()` / `_maybe_migrate_legacy_db()`
-    helper.
-  - `data_dir()` 우선순위 확장.
-  - `init_shared_schema()` 에 마이그레이션 hook (env 미설정 시만).
-- `tui/src/whooing_tui/screens/entries.py`
-  - `_persist_local` / `_purge_local` 가 mutation 후
-    `p4_sync.submit_db_to_p4(db_path, describe_annotation(...))` 호출.
-- 신규: `tui/src/whooing_tui/p4_sync.py`
-- 신규: `tui/tests/test_p4_sync.py` — 11 케이스 (description 기계적 형식
-  + 환경 감지 + silent 실패 + 호출된 명령 검증).
-- `tui/tests/test_data.py` — 4 신규 (project root 자동 / migration skip
-  when env set / migration runs when env unset).
-- 신규: `db/whooing-data.sqlite` (binary, ~/.whooing 에서 옮겨옴, P4 control).
-
-### 검증
-
-- 기존 414 → **428 통과** (+14 신규 — p4_sync 11 + data 3).
-
-### 사용자 흐름
-
-```mermaid
-graph LR
-    A[user 거래 수정/삭제] --> B[upsert_annotation<br/>+ set_hashtags]
-    B --> C[describe_annotation<br/>mechanical]
-    C --> D{p4 환경?}
-    D -->|있음| E[Thread<br/>p4 reconcile + submit]
-    D -->|없음| F[silent — 로그만]
-    E -->|성공/실패| G[log only]
-```
-
-## CL #51102 — 0.14.0 — 거래 목록 item 컬럼에 해시태그 인라인 + 태그 단위 column 네비 + 태그 Enter 필터 (사용자 요청) (2026-05-10)
-
-사용자 요청 (한 묶음):
-
-> 거래목록에서 item 을 표기할 때 자리가 남는다면 뒤쪽에 태그 목록을
-> 나열해주세요. 태그는 실제로 # 문자로 시작되지 않지만 태그들을 구분하기
-> 위해 태그는 # 문자로 시작해주세요. 이들은 좌우 방향키로 칼럼을 선택할 때
-> item 이 선택된 상태에서 다시 한 번 오른쪽 방향키를 누르면 커서 색상이
-> 바뀌며 해시태그를 하나씩 선택합니다. 해시태그가 선택된 상태에서 엔터키를
-> 누르면 이 해시태그로 검색한 결과를 보여줍니다.
-
-### 동작
-
-- **인라인 태그 표시 (`_format_cell` item 컬럼)**:
-  - `스타벅스 #식비 #저녁` 형태. 실제 db 에는 `#` 없이 bare 토큰 (`식비`,
-    `저녁`) 으로 저장 — `#` 는 시각 구분 prefix.
-  - 태그가 많으면 (`_ITEM_TAG_INLINE_LIMIT=2` 초과) 앞 2 개 + `#…(N)` 축약.
-  - item 이 빈 문자열이어도 태그가 있으면 `#식비 #저녁` 만 표시.
-  - SQLite `entry_hashtags` 의 PK 가 `(entry_id, tag)` 라 fetch 순서가
-    가나다 순 — 인라인 표시도 그 순서.
-
-- **태그 단위 column 네비** (←/→ 가 item 을 넘어 태그 사이로 sliding):
-  - `_active_col == item` + `_column_active=True` 상태에서 → 한 번 더 →
-    태그 모드 진입 (`_tag_index = 0`).
-  - 태그 모드에서 → 면 다음 태그 (`_tag_index += 1`).
-  - 마지막 태그에서 → 면 태그 모드 종료 + memo 진입.
-  - memo 위 ← 면 그 row 가 태그 보유 시 마지막 태그 (`_tag_index = N-1`).
-  - 태그 모드 0 에서 ← → 태그 모드 종료, item 셀 자체 marker 로 복귀.
-  - **↑/↓ 로 row 가 바뀌면 태그 모드 자동 종료** (각 row 의 태그 개수가
-    달라 index 보존이 의미 없음 — 사용자 답변 명시).
-  - `Esc` (action_deactivate_column) 가 `_tag_index` 도 함께 None.
-
-- **태그 marker 색상** (사용자 명시: "커서 색상이 바뀌며"):
-  - 일반 컬럼 marker: `_ACTIVE_CELL_STYLE = "black on yellow"` (기존).
-  - 태그 marker: `_TAG_MARKER_STYLE = "black on cyan"` — 시각 구분.
-  - 태그 모드 일 때 item 셀을 `_render_item_cell_with_tag_marker(entry,
-    tag_idx)` 로 다시 build — 선택된 태그 토큰만 cyan.
-
-- **태그 Enter 필터** (`_apply_tag_filter`):
-  - `_active_filter = ("tag", {"tag": tag})` 로 통일.
-  - `_entry_tags` 사전 lookup 으로 해당 태그 보유 entries 만 표시.
-  - status: `필터: tag=#식비 — N/M건. c 로 해제 / r 로 재로드.` (warn 톤).
-  - `r` (refresh) / `c` (clear_filter) / `Esc` 모두 해제 — 기존 column
-    필터와 동일 흐름.
-
-### 추가
-
-- `tui/src/whooing_tui/screens/entries.py`
-  - `_entry_tags: dict[str, list[str]]` 필드 — refresh_entries 끝에서
-    `_fetch_all_entry_tags(entry_ids)` 로 batch 채움.
-  - `_tag_index: int | None` 필드 — 태그 모드 추적.
-  - `_TAG_MARKER_STYLE = "black on cyan"` 상수.
-  - `_ITEM_TAG_INLINE_LIMIT = 2` — 인라인 표시 한도.
-  - helper: `_fetch_all_entry_tags`, `_current_row_tags`,
-    `_item_col_index`, `_memo_col_index`, `_render_item_cell_with_tag_marker`.
-  - `action_next_column` / `action_prev_column` 의 태그 mode 분기.
-  - `action_context_enter` 의 태그 mode 분기 (→ `_apply_tag_filter`).
-  - `_apply_tag_filter(tag)` 메서드.
-  - `_filter_label` 의 `column == "tag"` 케이스.
-  - `_announce_active_column` 의 태그 mode 안내.
-  - `on_data_table_row_highlighted` 가 `_tag_index = None` reset (row
-    변경 시).
-  - `_render_table` 시작에서 `_tag_index = None` reset (defensive).
-  - `action_deactivate_column` 도 `_tag_index = None` reset.
-
-- `tui/tests/test_entries_tag_inline.py` (신규) — 8 통합 케이스:
-  - `test_item_cell_inlines_tags_after_text`
-  - `test_item_cell_truncates_many_tags`
-  - `test_item_cell_shows_only_tags_when_item_empty`
-  - `test_right_arrow_enters_tag_mode_after_item`
-  - `test_left_arrow_from_memo_to_last_tag`
-  - `test_row_change_resets_tag_mode`
-  - `test_tag_marker_uses_cyan_style`
-  - `test_enter_on_tag_applies_tag_filter`
-
-### 테스트
-
-- 기존 406 → **414 통과** (+8).
-
-### 사용자 흐름 다이어그램
-
-```mermaid
-graph LR
-    A[item col 활성<br/>black on yellow] -->|→| B[태그 0 선택<br/>black on cyan]
-    B -->|→| C[태그 1 선택]
-    C -->|→ 마지막 후| D[memo col]
-    D -->|←| C2[마지막 태그]
-    B -->|↑/↓ row 변경| E[태그 모드 종료]
-    B -->|Enter| F[tag 필터 적용<br/>같은 태그 entries만]
-    F -->|c / r / Esc| G[필터 해제]
-```
-
-## CL #51096 — 0.13.2 — AccountPicker ←/→ 트리 펼침/접힘 + sentinel 하이라이트 색상 (사용자 요청) (2026-05-10)
-
-사용자 요청 2건 (한 CL 에 모두):
-
-1. **AccountPickerScreen 의 카테고리 트리에서 Enter 외에 ←/→ 방향키로도
-   펼침/접힘 가능하게**.
-2. **거래 목록의 sentinel ([+ 새 거래 추가]) 가 하이라이트 됐을 때 cursor
-   색상을 다른 톤으로** — 일반 거래 row 와 시각상 구분.
-
-### 추가
-
-- **AccountPickerScreen ←/→ 바인딩** (priority=True):
-  - `→` (`action_tree_expand_or_descend`):
-    - 접힌 카테고리 → 펼침 (cursor 유지).
-    - 펼친 카테고리 → 첫 자식 (leaf) 으로 cursor 이동.
-    - leaf → noop.
-  - `←` (`action_tree_collapse_or_ascend`):
-    - 펼친 카테고리 → 접음 (cursor 유지).
-    - 접힌 카테고리 → noop (가짜 root 가 숨김 — 부모로 갈 곳 없음).
-    - leaf → 부모 카테고리로 cursor 이동.
-  - hint 라벨 갱신: `↑/↓ 이동 / ←/→ 접힘·펼침 / Enter 선택 / Esc 취소`.
-
-- **sentinel 하이라이트 cursor 색상**: `EntriesScreen` 의 DataTable 에
-  `.sentinel-active` CSS 클래스를 동적 부여.
-  - cursor 가 sentinel row 위에 있을 때만 클래스 추가, 떠나면 제거.
-  - 클래스가 적용되면 `> .datatable--cursor` 의 background 가 `$warning`,
-    color `black`, text-style `bold` — 일반 거래 row 의 파란 cursor 와
-    시각상 구분.
-  - 토글 helper: `_update_sentinel_cursor_class()`.
-  - row_highlighted 이벤트 + `_render_table` 마지막 양쪽에서 호출 — 빈
-    entries 부팅 같은 edge case 도 일관 갱신.
-
-### 함정 / 회귀 방지
-
-- `tree.move_cursor(target_leaf)` 가 `on_mount` 직후엔 무효 (Tree 의
-  `_tree_lines` layout 이 같은 frame 에 안 끝나 `node._line == -1` →
-  cursor 가 첫 가시 노드로 떨어짐). `call_after_refresh` 로 한 frame
-  미뤄 cursor 가 정확히 target leaf 위에 안착.
-
-### 테스트
-
-- `tui/tests/test_account_picker.py` — 2 신규:
-  - `test_picker_right_arrow_expands_or_descends`
-  - `test_picker_left_arrow_collapses_or_ascends`
-- `tui/tests/test_entries_screen.py` — 2 신규:
-  - `test_sentinel_active_class_toggles_with_cursor`
-  - `test_sentinel_active_class_when_empty_entries`
-- 합계: 402 → **406 통과** (+4).
-
-## CL #51087 — 0.13.1 — sentinel 가운데 정렬 + 카테고리 Enter 펼침 버그 + money 오른쪽 정렬 (사용자 요청) (2026-05-10)
-
-사용자 요청 3건 (한 CL 에 모두):
-
-1. **목록 맨 위에 나타나는 새 거래 추가 메뉴(sentinel)를 가운데 정렬로**.
-2. **계정과목 상위 카테고리에서 Enter 키를 눌러도 접힌 카테고리가 안
-   펼쳐지는** 회귀 (CL #51080 도입). 펼침/접힘이 안 되는 것처럼 보임.
-3. **여러 화면의 money 를 오른쪽 정렬로 통일**.
-
-### 동작 변경
-
-- **EntriesScreen sentinel 가운데 정렬**: sentinel row 의 라벨
-  `"[+ 새 거래 추가]"` 가 column 0 (date) 에서 시각상 가운데 column
-  (index = `len(_COLUMN_NAMES) // 2 = 3`, "right") 으로 이동. cell 값은
-  Rich `Text(label, justify="center")` 로 cell 안에서도 가운데 정렬.
-  다른 column 은 빈 cell.
-
-- **AccountPickerScreen 카테고리 Enter 토글 버그 수정**: Tree 의 default
-  `auto_expand=True` 가 NodeSelected 이벤트를 받으면 자동으로 토글하는데,
-  CL #51080 의 `on_tree_node_selected` 핸들러가 다시 한 번 명시적으로
-  토글해 결과적으로 원래 상태로 복귀하던 버그. 핸들러는 이제 leaf 일 때만
-  dismiss, branch 위에서는 noop (Tree 가 자체 토글).
-
-- **money 오른쪽 정렬**:
-  - `EntriesScreen._format_cell` 의 money column: `str` 대신
-    `Rich Text(value, justify="right")` 반환. 표 안에서 숫자가 cell width
-    오른쪽에 정렬.
-  - `EntryEditDialog._MoneyInput`: `text-align: right` CSS — 입력 도중에도
-    숫자가 오른쪽에서 자란다.
-  - `_update_active_cell_marker` 가 Text 객체를 인지: markup 래핑 대신
-    `Text.stylize(self._ACTIVE_CELL_STYLE)` 로 같은 노란 마커를 적용해
-    `justify="right"` 보존.
-
-### 수정
-
-- `tui/src/whooing_tui/screens/entries.py`
-  * `from rich.text import Text` import 추가.
-  * `_format_cell` 의 money branch — `Text(_fmt_money(...), justify="right")`.
-  * `_render_table` 의 sentinel 분기 — middle column 에 `Text(label,
-    justify="center")`, 나머지 빈 cell.
-  * `_update_active_cell_marker` — Text 인지하는 분기 추가.
-- `tui/src/whooing_tui/screens/account_picker.py`
-  * `on_tree_node_selected` — branch 위에서 explicit toggle 호출 제거
-    (auto_expand 가 처리). 회귀 방지 주석.
-- `tui/src/whooing_tui/screens/edit_entry.py`
-  * `_MoneyInput.DEFAULT_CSS` 추가 — `text-align: right`.
-- `tui/tests/test_entries_screen.py`
-  * marker 검사 assertion 12개 — `"[black on yellow]"` → `"black on yellow"`
-    (Text span 의 style 표현은 `'black on yellow'` 라 substring 일치).
-  * money 컬럼 marker 검사 1개 — `repr()` 사용 (Text span 정보는 str 에 안
-    들어감).
-  * sentinel 위치 assertion 1개 — col 0 → middle col.
-  * 신규 3 케이스: sentinel 가운데 column 위치 / Text justify="center"
-    / money 컬럼 Text justify="right".
-- `tui/tests/test_account_picker.py`
-  * `test_picker_branch_enter_toggles_expand` — `post_message(NodeSelected)`
-    대신 `tree.move_cursor + tree.action_select_cursor` (실제 사용자 키
-    흐름). 이중 토글 회귀 방지 위해 두 번 누름까지 검증.
-
-### 테스트
-
-- 기존 399 → **402 통과** (+3 신규).
-
-### 사용자 흐름 다이어그램
-
-```mermaid
-graph LR
-    subgraph 거래 목록
-      U[↑ on row 0] --> S[sentinel 등장]
-      S --> M["middle col Text<br/>(justify=center)"]
-      M --> V[가운데 시각]
-      M2[money col] --> RT["Text<br/>(justify=right)"]
-      RT --> AR[오른쪽 정렬]
-    end
-    subgraph 계정과목 picker
-      E[Enter on 카테고리] --> A[auto_expand 토글]
-      A --> O[펼침 ↔ 접힘]
-      L[Enter on leaf] --> D[dismiss]
-    end
-```
-
-## CL #51080 — 0.13.0 — 계정과목 picker 트리 + tags picker (사용자 요청) (2026-05-10)
-
-사용자 요청 (2가지, 한 CL 에 모두):
-
-1. **계정과목 picker 가 모든 항목을 한 번에 보여줘 선택이 어려움** —
-   카테고리 (자산/부채/자본/수입/지출/그룹) 를 *먼저* 펼쳐 보고,
-   해당 카테고리 항목만 선택 가능하도록.
-2. **tags 도 Enter 로 picker 모달** — 기존 해시태그 list 에서 선택하거나
-   새 태그 생성. 새 태그 만들 때는 item / memo 를 보고 추천, 타이핑
-   시작하면 기존 태그 이름을 추천.
-
-### 동작 변경
-
-- **AccountPickerScreen**: 단일 OptionList → **Tree widget** 재작성.
-  - 카테고리 헤더 (branch) + 항목 (leaf) 2-level.
-  - `current_id` 가 속한 카테고리만 자동 펼침 + cursor 가 그 leaf 위.
-  - 카테고리 위 Enter / Space → 펼침/접힘 토글. 항목 위 Enter → dismiss.
-  - leaf data = `(account_id, title, type_key)` — `Tree.NodeSelected`
-    이벤트의 `node.data` 로 그대로 회수.
-  - **함정 회피**: `tree.select_node(node)` 가 `NodeSelected` 이벤트를
-    발사해 모달이 즉시 dismiss 되는 회귀 — 대신 `tree.move_cursor(node)`
-    (cursor 이동만, 이벤트 X).
-
-- **TagsPickerScreen** (신규): tags Input 위에서 Enter → 본 모달 push.
-  - Input + OptionList 구성. 두 섹션:
-    1. **추천 (item/memo)**: item·memo 본문에 substring / token 매칭되는
-       기존 태그. 매칭 score (substring=1, token 일치=2, 합산) → 사용 빈도
-       내림차순.
-    2. **자주 쓰는 태그**: 추천에 안 들어간 나머지 기존 태그를 사용 빈도
-       내림차순.
-  - Input 타이핑 → 두 섹션 모두 prefix / substring 필터 (대소문자 무시).
-  - `+ 새 태그 만들기: <input>` 옵션은 입력이 비어있지 않으며 기존에
-    같은 이름이 없을 때만 노출 (정확 일치면 기존 옵션 강조).
-  - Input Enter → highlighted 옵션 선택 또는 (옵션 없으면) 입력값으로
-    새 태그.
-  - dismiss 결과: 태그 string 1개 또는 None. 호출자가 tags Input value
-    에 공백 구분으로 append.
-
-### 추가
-
-- `tui/src/whooing_tui/screens/account_picker.py`
-  - 단일 OptionList → `Tree` widget 으로 전면 재작성. `_TYPE_ORDER` /
-    `_TYPE_LABEL` 상수 그대로. `_group_accounts()` helper 신설.
-  - `on_tree_node_selected` — leaf data 가 튜플이면 dismiss, branch 면
-    토글.
-- `tui/src/whooing_tui/screens/tags_picker.py` (신규)
-  - `TagsPickerScreen(ModalScreen[str | None])`.
-  - helper: `_tokenize_for_recommend`, `recommend_tags`, `filter_tags`.
-- `tui/src/whooing_tui/screens/edit_entry.py`
-  - `EntryEditDialog.__init__` 에 `existing["_all_tags_db"]` (= `{tag:
-    count}`) 인지. `self._all_tags_db` 로 보관.
-  - `on_input_submitted(event)` — `event.input.id == "f-tags"` 면
-    `_open_tags_picker()` 호출.
-  - `_open_tags_picker()` — 현재 item / memo / already_selected 추출 →
-    `TagsPickerScreen` push → 결과를 Input value 에 공백 구분 append.
-- `tui/src/whooing_tui/screens/entries.py`
-  - `_fetch_all_tags_db()` — `core_db.list_hashtags(conn)` 호출, dialog
-    에 `_all_tags_db` 키로 전달.
-  - `action_new_entry` / `action_edit_entry` 모두 dialog push 시점에
-    `_all_tags_db` 채워서 넘김.
-
-### 테스트
-
-- `tui/tests/test_account_picker.py` — Tree 기반으로 갱신 + 신규 케이스:
-  - `test_picker_lists_categories_with_items_as_leaves` (Tree 구조 검증)
-  - `test_picker_auto_expands_current_id_category` (자동 펼침)
-  - `test_picker_branch_enter_toggles_expand` (카테고리 토글)
-  - `test_picker_leaf_enter_dismisses_with_account` (leaf 선택 → dismiss)
-  - 기존 `dismisses_with_account` / `cancel_keeps_button` 통합 보존.
-  - 합계: 3 → 6 케이스.
-- `tui/tests/test_tags_picker.py` (신규) — 18 케이스:
-  - 단위: `_tokenize_for_recommend`, `recommend_tags`, `filter_tags` (대소문자
-    무시 포함).
-  - 통합: 기존 태그 선택 / 새 태그 생성 / 추천 우선 / 입력 필터 / already_selected
-    제외.
-- `tui/tests/test_entries_mutate.py` — 1 추가:
-  - `test_tags_input_enter_pushes_picker_and_appends` — tags Input 에서
-    Enter → TagsPickerScreen push → dismiss(tag) → Input value append.
-  - 7 → 8 케이스.
-- 합계: 377 → **399 통과** (+22).
-
-### 사용자 흐름 다이어그램
-
-```mermaid
-graph TB
-    subgraph 계정과목
-      L[left/right Enter] --> TR[AccountPickerScreen<br/>Tree widget]
-      TR -->|카테고리 위 Enter| EX[펼침/접힘 토글]
-      EX --> TR
-      TR -->|항목 leaf Enter| OK1[dismiss aid title type]
-    end
-    subgraph 해시태그
-      T[tags Enter] --> TP[TagsPickerScreen]
-      TP -->|타이핑| F[필터 + - 새 태그]
-      F --> TP
-      TP -->|기존 선택| OK2[dismiss 식비]
-      TP -->|새 태그| OK3[dismiss new tag]
-    end
-```
-
-## CL #51076 — 0.12.0 — EntryEditDialog 폼 전면 개선 + 로컬 메모/해시태그 (사용자 요청) (2026-05-10)
-
-사용자 요청 (한 CL 에 모두):
-1. **date** 만 표시 (시각 제거), `2026-05-09` 형식, 숫자만 입력해도 자동 `-`
-   삽입, 사용자가 직접 `-` 타이핑하면 무시.
-2. **money** 입력 시 천단위 콤마 자동 포매팅 (`1,234,567`).
-3. **left / right** 가 ID (`x20`) 로 표시되던 것을 *이름* (`식비`) 으로
-   변경. Enter / 클릭 시 메뉴에서 선택 (`AccountPickerScreen`).
-4. **memo** 는 후잉 memo 와 동일값 + 로컬 sqlite 에도 저장 (검색·통계용
-   미러).
-5. **해시태그** 입력 필드 신설 — 로컬 sqlite only, 후잉에는 보내지 않음.
-6. **Save / Cancel** 버튼이 잘려 보이는 문제 수정 (frame 64 → 76, button
-   min-width 12 → 18).
-
-### 추가
-
-- `tui/src/whooing_tui/screens/account_picker.py`
-  - `AccountPickerScreen(ModalScreen[tuple[str, str, str] | None])` —
-    OptionList 기반 계정과목 선택 모달. `_TYPE_ORDER` 로 자산 → 부채 →
-    자본 → 수입 → 지출 → 그룹 정렬. 타이핑 검색은 OptionList 자체 기능.
-- `tui/src/whooing_tui/screens/edit_entry.py`
-  - `_DateInput(Input)` — 숫자만 받아 `YYYY-MM-DD` 로 auto-format.
-    `Input.Changed` 이벤트에서 raw → digits → formatted 재대입 (무한
-    루프 방지를 위해 `prevent(Input.Changed)`).
-  - `_MoneyInput(Input)` — 같은 패턴, 천단위 콤마.
-  - `_AccountButton(Button)` — `account_id` / `acc_title` / `type_key`
-    instance attribute 로 picker 결과 보존. label = `"식비  (x20)"`.
-  - helper: `_digits_only`, `_format_date_dashed`, `_format_money_comma`,
-    `_parse_dashed_date_to_yyyymmdd`, `parse_hashtags_input` (`#` /
-    공백 / `,` 분리 + 중복 제거).
-  - `EntryDraft` 에 `l_type` / `r_type` / `tags` field 추가. picker 가
-    type 을 직접 채워주므로 `EntriesScreen._account_type` lookup 우회.
-- `tui/src/whooing_tui/screens/entries.py`
-  - `_persist_local(entry_id, section_id, memo, tags)` — 후잉 mutation
-    성공 후 `whooing_core.db.upsert_annotation` + `set_hashtags` 호출.
-  - `_purge_local(entry_id)` — 거래 삭제 시 로컬 annotation/해시태그
-    정리.
-  - `_fetch_local_tags(entry_id)` — edit 진입 시 로컬 db 에서 해시태그
-    prefill (`existing["_local_tags"]` 키로 dialog 에 전달).
-  - `_extract_entry_id(response)` — 후잉 create_entry 응답에서 새 entry_id
-    회수 (`{"entry_id": ...}` / `{"entries": [...]}` / `{"results": ...}`).
-  - `on_mount` 에서 `tui_data.init_shared_schema()` 호출 — annotation
-    db 의 schema 보장 (멱등).
-
-### 수정
-
-- `EntryEditDialog.compose()` — 7-row Grid (date / money / left / right
-  / item / memo / **tags**). frame width 64 → 76.
-- `EntryEditDialog._build_draft()` — `_resolve_account` free-text 로직
-  제거, `_AccountButton.account_id` 직접 사용. tags 는
-  `parse_hashtags_input` 로 normalize.
-- `EntriesScreen._submit_create / _submit_update / _submit_delete` —
-  picker 가 type 을 채워주는 path (`draft.l_type or self._account_type(...)`)
-  + 로컬 persist / purge wiring.
-- `tui/tests/conftest.py` — `WHOOING_DATA_DIR` 도 tmp_path 로 격리 (실
-  사용자 `~/.whooing/whooing-data.sqlite` 보호).
-
-### 제거
-
-- `_resolve_account(session, raw)` 헬퍼 — picker 모달이 진입점 단일화
-  (account_id / 표시명 양쪽 입력 코드 더 이상 호출되지 않음).
-
-### 테스트
-
-- `tui/tests/test_edit_entry_dialog.py` — 35 케이스 (digits_only / date
-  포매팅 / money 포매팅 / hashtags parse / EntryDraft 기본값).
-- `tui/tests/test_account_picker.py` — 3 통합 케이스 (push from edit
-  dialog / cancel keep button / type-sorted list).
-- `tui/tests/test_entries_mutate.py` — 2 추가 (로컬 sqlite memo+tags
-  persist on update / purge on delete). 5 → 7 케이스.
-- 합계: 275 → 377 통과 (+102 — 신규 + 기존 보존).
-
-### 사용자 흐름 다이어그램
-
-```mermaid
-graph LR
-    A[EntriesScreen<br/>n / Enter] --> B[EntryEditDialog]
-    B -->|date 8자리 입력| B1[2026-05-09<br/>auto-dash]
-    B -->|money 입력| B2[1,234,567<br/>auto-comma]
-    B -->|left/right Enter| C[AccountPickerScreen<br/>OptionList]
-    C -->|항목 선택| B3[버튼 라벨<br/>식비 x20]
-    C -->|Esc| B
-    B -->|tags 입력| B4[#식비 #저녁<br/>로컬 db only]
-    B -->|Ctrl+S| D[create_entry / update_entry<br/>후잉 REST]
-    D --> E[upsert_annotation<br/>+ set_hashtags<br/>로컬 sqlite]
-```
-
-## CL #51074 — 0.11.1 — sentinel row 평소 숨김 + ↑/↓ 로 토글 (사용자 요청) (2026-05-10)
-
-사용자 요청: "새 거래 추가 메뉴는 평소에는 숨겨져있다가 거래 목록 맨
-윗줄에서 위쪽 방향키를 한번 더 누를 때 나오도록 수정해주세요. 새 거래
-추가 메뉴에서 다시 아래 방향키를 눌러 거래 목록으로 돌아가면 숨겨주세요."
-
-### 동작
-
-- 첫 mount: sentinel **숨김** (entries 가 있을 때). cursor = row 0 = 첫
-  실거래. 평소 거래 목록만 보임.
-- 거래 목록 맨 위 (row 0) 에서 ↑ → sentinel 등장, cursor = sentinel (row 0).
-  실거래는 row 1+ 로 shift.
-- sentinel 에서 ↑ 한 번 더 → boundary clamp (sentinel 그대로).
-- sentinel 에서 ↓ → sentinel 사라짐, cursor = row 0 (첫 실거래로 복귀).
-- **빈 entries** 일 때는 sentinel 강제 표시 (사용자 진입점 보장).
-
-### 추가
-
-- `_show_sentinel: bool` — sentinel 가시성 상태. 초기 False.
-- `_entry_index_for_row(row) -> int | None` — DataTable row → entries
-  index 변환 helper. sentinel 가시성에 따라 0 또는 1 shift 동적.
-- `action_row_up` / `action_row_down` — `↑` / `↓` priority binding 으로
-  default cursor 이동을 가로채서 sentinel 토글까지 처리. sentinel 토글
-  조건이 맞지 않으면 `table.action_cursor_up()` / `action_cursor_down()`
-  에 위임.
-- `_render_table(entries, *, target_cursor=None)` — `target_cursor` 옵션
-  으로 명시적 cursor 위치 지정 가능 (sentinel 토글 후 정확한 위치 보장).
-
-### 수정
-
-- `_render_table` — `_show_sentinel=True` 일 때만 sentinel row add. 빈
-  entries 면 강제 True.
-- `_selected_entry` / `_is_on_sentinel_row` / `_update_active_cell_marker`
-  — 모두 `_entry_index_for_row` 통해 sentinel-aware 한 변환.
-- 기존 통합 테스트 row index 의 +1 shift 를 다시 -1 (sentinel 안 보이는
-  default 가 표준).
-- 새 4 케이스 (CL #51074):
-  * `test_sentinel_hidden_by_default_with_entries` — row count = entries,
-    sentinel 라벨 없음, cursor row 0 = 첫 실거래.
-  * `test_up_arrow_at_first_entry_reveals_sentinel` — ↑ → sentinel 등장
-    + 실거래는 row 1+, cursor 가 sentinel.
-  * `test_down_from_sentinel_hides_it_and_returns_to_first_entry` — ↓ →
-    sentinel 사라지고 cursor 첫 실거래.
-  * `test_up_at_sentinel_is_boundary_clamp` — ↑ 한 번 더 → boundary.
-
-### 검증
-
-- `make test-tui` → **275 passed** (273 + 2 net 새).
-
-## CL #51072 — 0.11.0 — EntriesScreen 맨 위에 "새 거래 추가" sentinel row (2026-05-10)
-
-사용자 요청 (2026-05-10): "거래내역 맨 위에서 위쪽 화살표로 한칸 더 올리면
-새 항목 추가 메뉴가 나타나게 해주세요. 이 때 엔터를 누르면 새 항목을
-추가합니다."
-
-### 추가
-
-- `_NEW_ENTRY_SENTINEL_LABEL = "[+ 새 거래 추가]"` — sentinel row 의 첫
-  cell 라벨.
-- `_is_on_sentinel_row()` — cursor row 가 0 (sentinel) 인지.
-
-### 동작
-
-- DataTable 의 row 0 = sentinel placeholder. 첫 cell 에 안내 라벨,
-  나머지 column 은 빈 cell. 실 거래는 row 1+ 에 표시.
-- 첫 mount / refresh 시 cursor 는 **row 1** (첫 실거래) 로 자동. sentinel
-  은 사용자가 ↑ 한 번 더 눌러야 도달.
-- **sentinel row 에서 Enter** = `action_new_entry` (EntryEditDialog 등장).
-  `_column_active` 여부 무관 — 항상 새 거래 추가.
-- **sentinel row 에서 marker 미표시** — column 활성 상태라도 row 0 cell
-  은 plain. cursor 가 ↓ 로 row 1+ 가면 marker 등장.
-- **빈 entries** 일 때도 sentinel 1 row 보임 → 거래가 0 건이어도 새 거래
-  추가 가능.
-- cursor 가 sentinel 에 있을 때 `on_data_table_row_highlighted` 가 status
-  를 `[Enter = 새 거래 추가]` 로 안내.
-
-### 수정
-
-- `screens/entries.py`:
-  * `_render_table` — sentinel row 1개를 항상 먼저 add. cursor 위치는:
-    1) prev cursor 가 row 1+ valid 면 그대로 (refresh 후 보존),
-    2) entries 있으면 row 1 (첫 실거래),
-    3) entries 비면 row 0 (sentinel only).
-  * `_selected_entry` — row 0 = None 반환. row N → entries[N-1].
-  * `_update_active_cell_marker` — cursor row 0 (sentinel) 이면 marker
-    적용 X. 이전 marker 의 entry index 도 `prev_row - 1` 로 조정.
-  * `action_context_enter` — sentinel 우선 분기 → `action_new_entry`.
-- `tests/test_entries_screen.py`:
-  * 기존 통합 테스트들의 row index 를 +1 shift (sentinel 추가 영향).
-  * row count 검증 4 → 5 (sentinel + 4 entries).
-  * 100-cap warning / 빈 결과 안내 테스트 — sentinel 이 status 를
-    덮을 가능성 고려해 substring 매칭 완화.
-  * **5 새 cases** (CL #51072 검증):
-    - `test_sentinel_row_at_top_with_entries`: row 0 에 라벨, cursor row 1.
-    - `test_up_arrow_from_first_entry_lands_on_sentinel`: ↑ 한 번 → row 0.
-    - `test_enter_on_sentinel_opens_new_entry_dialog`.
-    - `test_no_marker_on_sentinel_row_even_when_column_active`: 활성
-      상태에서 ↑ 로 sentinel 가면 row 0 의 marker 없음.
-    - `test_sentinel_only_when_entries_empty_and_enter_works`: 빈 entries
-      에서 sentinel 1 row + enter → 새 거래 추가.
-- `tui/README.md` — sentinel 동작 안내.
-- `tui/CHANGELOG.md` / `tui/MEMORY.md` — 본 항목.
-- `tui/pyproject.toml` + `__init__.py` — 0.10.3 → 0.11.0 (사용자 가시
-  주요 기능 추가, minor bump).
-
-### 검증
-
-- `make test-tui` → **273 passed** (268 + 5 new sentinel cases).
-
-## CL #51068 — 0.10.3 — Esc 가 활성 필터도 함께 해제 (사용자 요청) (2026-05-10)
-
-사용자 요청: "오렌지색 커서로 필터링이 적용된 상태에서 ESC 키를 누르면
-커서 하이라이트 해제 및 동시에 필터도 해제되어야 합니다."
-
-이전 (0.10.2) 은 Esc 가 컬럼 marker 만 해제 — 필터는 별도 `c` 키. 사용자
-입장에서 marker + filter 가 한 묶음의 "활성 상태" 인데 Esc 가 일부만 해제
-해서 부자연스러움.
-
-### 변경
-
-`action_deactivate_column` 의 동작 결합:
-
-| 활성 marker | 활성 필터 | Esc 결과 |
-|---|---|---|
-| ✓ | ✓ | **둘 다 해제** (사용자 요청) |
-| ✓ | ✗ | marker 만 해제 |
-| ✗ | ✓ | filter 만 해제 (정상 도달 어려운 상태) |
-| ✗ | ✗ | noop (앱 종료 X — CL #51064 그대로) |
-
-### 수정
-
-- `screens/entries.py::action_deactivate_column`
-  * `_column_active` + `_active_filter` 둘 다 비활성이면 noop (변경 없음).
-  * 활성 marker → `_column_active=False`, marker cleanup.
-  * 활성 filter → `_active_filter=None`, `_entries = list(_all_entries)`,
-    `_render_table` 으로 plain 테이블 재렌더 (marker 비활성이라 깨끗).
-  * status 메시지: 필터까지 해제됐으면 `"컬럼 선택 / 필터 해제"`,
-    marker 만이면 `"컬럼 선택 해제"`.
-- `tests/test_entries_screen.py` — 2 cases 추가:
-  * `test_escape_with_active_filter_clears_both_marker_and_filter` — 필터
-    + marker 둘 다 활성 상태에서 Esc → 둘 다 해제, 4건 원본 복원, 표
-    안 어디에도 marker 없음.
-  * `test_escape_with_only_marker_no_filter_clears_only_marker` — marker
-    만 활성, filter 비활성 → Esc 가 marker 만 해제 (entries 변동 없음).
-- `tui/README.md` — Esc 동작 안내 갱신 (marker + 활성 필터 동시 해제).
-- `tui/CHANGELOG.md` / `tui/MEMORY.md` — 본 항목.
-- `tui/pyproject.toml` + `__init__.py` — 0.10.2 → 0.10.3.
-
-### 검증
-
-- `make test-tui` → **268 passed** (266 + 2 new).
-
-### `c` 키와의 차별
-
-- `c` (action_clear_filter): **필터만 해제**. marker 그대로 유지. 사용자
-  가 필터 후에도 같은 컬럼에 marker 가 있길 원하는 (다른 row 선택해서
-  같은 컬럼으로 다시 필터하려는) 경우.
-- `Esc` (action_deactivate_column): **marker + 필터 둘 다 해제**. 사용자
-  가 "필터링 작업 자체를 끝낸다" 의미.
-
-## CL #51064 — 0.10.2 — 컬럼 marker 활성/비활성 상태 분리 + Esc 로 컬럼만 해제 + 종료는 q 만 (2026-05-10)
-
-사용자 요청 (2026-05-10):
-> "거래내역이 선택된 상태에서 처음부터 오렌지색 칼럼 커서가 보입니다.
-> 이를 처음에는 거래내역을 선택한 파란 커서만 표시해 이 상태에서 엔터키
-> 를 누르면 거래내역 수정 화면으로 이동하고 방향키를 눌러 칼럼 오렌지
-> 색 커서가 나타나면 이때부터 엔터키를 누르면 필터 기능으로 동작하게
-> 해주세요. 그리고 ESC를 누르면 오렌지색 커서만 선택취소해주세요. 파
-> 란색 커서만 있는 상태에서 ESC는 아무 동작도 하지 않습니다. ESC로 종료
-> 되지 않게 해주세요. 종료키는 q 입니다."
-
-### 동작 표
-
-| 상태 | Enter | ←/→ | Esc | q |
-|---|---|---|---|---|
-| 파란만 (초기) | EntryEditDialog | **컬럼 marker 활성화** (col 그대로) | **noop** (종료 안 함) | 종료 |
-| 파란+노란 (컬럼 활성) | 컬럼별 필터 / edit | col ±1 (boundary clamp) | **marker만 해제** | 종료 |
-
-### 추가
-
-- `_column_active: bool` — marker 활성/비활성 상태 (CL #51064+ 새 field).
-  초기 `False`. ←/→ 첫 누름 시 `True`, Esc 시 `False`.
-- `action_deactivate_column` — Esc binding 의 새 action. 활성 상태이면
-  marker 해제 + status 안내, 비활성이면 noop.
-
-### 수정
-
-- `screens/entries.py::BINDINGS`:
-  * `Binding("escape", "deactivate_column", ...)` — 이전 `"back"` (=
-    app.exit) 에서 변경. **종료는 `q` 만**.
-  * `Binding("escape", ...)` 의 `show=False` 그대로 (Footer 에 영문 키만).
-- `action_prev_column` / `action_next_column`:
-  * 비활성 → 활성화 (`_column_active = True`), `_active_col` 그대로,
-    marker 등장.
-  * 활성 → ±1 (boundary clamp).
-- `action_context_enter`:
-  * 비활성 → `action_edit_entry` (거래 수정).
-  * 활성 → 기존 분기 (`FILTERABLE_COLUMNS` 면 필터, money/memo 면 edit).
-- `_update_active_cell_marker`:
-  * 이전 marker cleanup 을 항상 먼저 (활성/비활성 무관).
-  * `_column_active=False` 면 새 marker 적용 X — early return.
-- `on_data_table_row_highlighted`:
-  * 활성 상태일 때만 marker 가 row 따라 이동 (비활성이면 marker 없음 그대로).
-
-### 수정 (테스트)
-
-- `tests/test_entries_screen.py`:
-  * 기존 `test_arrow_keys_navigate_columns` 가 첫 → 활성화 / 두번째부터
-    이동 흐름으로 갱신.
-  * `test_enter_on_*_column_filters_*` 4 cases 가 컬럼 활성화 step 추가
-    (한 번 더 `action_next_column`).
-  * `test_enter_on_money_column_opens_edit_dialog` 같은 패턴.
-  * `test_clear_filter_restores_all_entries` / `test_refresh_clears_active_filter`
-    도 활성화 step.
-  * 기존 `test_active_cell_marker_applied_to_cursor_row_active_col` 를
-    분할 → `test_initial_state_has_no_column_marker` (비활성 검증) +
-    `test_first_arrow_press_activates_column_marker` (활성화 검증).
-  * `test_active_cell_marker_follows_cursor_row` 도 활성화 step.
-- 새 4 cases:
-  * `test_enter_without_column_active_opens_edit_dialog` — 비활성에서 enter = EntryEditDialog.
-  * `test_escape_when_column_active_deactivates_marker` — 활성 상태 Esc → 해제.
-  * `test_escape_when_column_inactive_is_noop` — 비활성 Esc → noop.
-  * `test_escape_via_pressed_key_does_not_quit` — `pilot.press("escape")` 가 EntriesScreen 그대로 (앱 종료 X) — 사용자 가장 우려 시나리오.
-
-### 수정 (그 외)
-
-- `tui/README.md` — 키 바인딩 표를 두 상태 (파란만 / 파란+노랑) 로 분리.
-- `tui/CHANGELOG.md` / `tui/MEMORY.md` — 본 항목.
-- `tui/pyproject.toml` + `__init__.py` — 0.10.1 → 0.10.2.
-
-### 검증
-
-- `make test-tui` → **266 passed** (261 → 266, 정확히 +5 새 케이스).
-- `pilot.press("escape")` 후 EntriesScreen 그대로 — 앱 종료 안 됨 검증.
-
-## CL #51058 — 0.10.1 — 활성 컬럼을 cell 단위 시각 마커로 (cursor row 의 파란색과 구분되는 노란색) (2026-05-10)
-
-사용자 요청 (2026-05-10): "지금은 거래 내역 하나를 활성화하면 파란색 배경
-하이라이트가 표시됩니다. 이 상태에서 좌우 방향키를 사용하면 이 파란색과
-구분되는 다른 색상으로 현재 선택된 칼럼을 표현해주세요."
-
-이전 (0.10.0) 은 status bar 텍스트 (`활성 컬럼: left`) 만으로 안내. 사용자가
-표 위에서 직접 시각적으로 어떤 컬럼이 활성인지 보이지 않는 문제.
-
-### 해결
-
-`(cursor_row, _active_col)` 교차점 cell 만 Rich markup 으로 색 변경
-(`[black on yellow]...[/]`). cursor row 자체는 textual 의 default 색 (파란색)
-유지 — 두 색이 겹치는 active cell 은 노란색이 우선이라 자연스럽게 구분.
-
-### 추가
-
-- `screens/entries.py::_format_cell(entry, col_index)` — entry 와 column
-  index 로부터 cell 의 plain text 생성. `_render_table` 의 row 추가 +
-  `_update_active_cell_marker` 의 cell 복원 양쪽이 같은 형식 사용.
-- `screens/entries.py::_update_active_cell_marker()` — 이전 marker cell
-  을 plain 으로 복원 + 현재 `(cursor_row, _active_col)` 에 markup 적용.
-  cell value 를 `_format_cell` 로 raw entry 에서 다시 format → markup
-  string 누적/오염 방지.
-- `screens/entries.py::on_data_table_row_highlighted(event)` — `↑` / `↓`
-  또는 click 으로 cursor row 가 바뀌면 marker 도 따라 이동.
-- `_marked_cell: tuple[int, int] | None` — 마지막 marker 좌표 추적.
-- `_ACTIVE_CELL_STYLE = "black on yellow"` — Rich markup style 상수.
-
-### 수정
-
-- `_render_table` 이 cell-by-cell 추가 후 `_update_active_cell_marker()`
-  호출 → 첫 mount 시점부터 `(0, _active_col)` 에 marker 보임.
-- `action_prev_column` / `action_next_column` 가 `_update_active_cell_marker()`
-  호출.
-- `tests/test_entries_screen.py` 의 기존 cell 검증 (row0 의 plain
-  matching) 을 substring (`row0_joined`) 으로 완화 — marker markup 이
-  들어와도 cell 안의 plain 텍스트가 보이는지만 확인.
-
-### 추가 통합 테스트
-
-- `test_active_cell_marker_applied_to_cursor_row_active_col` — 초기
-  marker (0, 0) 위치 + `→` 로 col 이동 시 marker 가 (0, 1) → (0, 3) 로
-  따라가고 이전 cell 은 plain 복원됨.
-- `test_active_cell_marker_follows_cursor_row` — `↓` 로 cursor row 가
-  바뀌면 marker 도 (0, 0) → (2, 0) 으로 이동.
-
-### 검증
-
-- `make test-tui` → **261 passed** (259 + 2 새 marker 통합).
-
-### 보존
-
-- status bar 의 `활성 컬럼: left    Enter = 같은 left 으로 필터` 안내는
-  그대로 — 시각 marker + 텍스트 둘 다 (사용자가 어떤 컬럼이 활성이고
-  Enter 시 무슨 동작인지 한눈에).
-- cursor_type="row" 유지 — 거래 단위 인식 보존, 파란색 row highlight
-  그대로.
-
-## CL #51053 — 0.10.0 — EntriesScreen 좌우 방향키 column navigation + Enter 컬럼별 컨텍스트 액션 (2026-05-10)
-
-사용자 요청 (2026-05-10): "거래 화면에서 한 거래가 선택된 상태에서 좌우
-방향키로 컬럼 이동, 엔터키 시 date 컬럼은 같은 날짜 / left 는 같은 차변 /
-right 는 같은 대변 / item 은 괄호 바깥 키워드 매칭으로 필터."
-
-### 흐름
-
-```mermaid
-flowchart TB
-    SEL[거래 row 선택] --> NAV[← / → 으로 컬럼 이동]
-    NAV --> COL{활성 컬럼?}
-    COL -->|date| FD[같은 entry_date 필터<br/>sub-index 무시]
-    COL -->|left| FL[같은 l_account_id 필터]
-    COL -->|right| FR[같은 r_account_id 필터]
-    COL -->|item| FI[괄호 바깥 키워드<br/>set intersection]
-    COL -->|money / memo| EDIT[EntryEditDialog]
-    FD --> SHOW[필터된 부분집합 표시<br/>+ status 안내]
-    FL --> SHOW
-    FR --> SHOW
-    FI --> SHOW
-    SHOW -->|c 또는 r| RESET[필터 해제]
-    RESET --> ALL[전체 entries 복원]
-```
-
-### 추가 (2 files)
-
-- `tui/src/whooing_tui/filters.py` — 클라이언트-사이드 필터 로직 (pure
-  함수):
-  * `date_head(value)` — `"20260510.0001"` → `"20260510"` (sub-index 무시,
-    `_fmt_date` 와 같은 정책).
-  * `outside_paren_keywords(item)` — 괄호와 그 안의 내용 제거 후 공백/콤마
-    split 한 키워드 set. `"외식(저녁, 불고기)"` → `{"외식"}`,
-    `"교통(버스) 주차"` → `{"교통", "주차"}`.
-  * `FILTERABLE_COLUMNS` — `("date", "left", "right", "item")` (사용자 명시).
-  * `filter_entries(entries, column, target)` — 부분집합 list 반환. item
-    필터는 set intersection (target 의 키워드 중 하나라도 매칭). pure 함수,
-    side-effect 없음.
-- `tui/tests/test_filters.py` — 24 cases (date_head / outside_paren_keywords
-  / FILTERABLE_COLUMNS 상수 / filter_entries 의 4 컬럼별 / multi-keyword
-  target / 빈 target / 미지원 컬럼 / mutating-input 방지).
-
-### 수정
-
-- `tui/src/whooing_tui/screens/entries.py`
-  * 새 키 바인딩:
-    - `←` / `→`: `action_prev_column` / `action_next_column` — `_active_col`
-      이동, status 에 현재 컬럼 + Enter 시 동작 안내.
-    - `enter`: `action_context_enter` — 활성 컬럼이 `FILTERABLE_COLUMNS`
-      이면 `_apply_filter`, 아니면 (`money` / `memo`) `action_edit_entry`
-      그대로.
-    - `e`: 기존 enter 의 거래 수정 동작을 새 키로 분리 (한글 IME 자모
-      ㄷ 도 같이 binding).
-    - `c`: `action_clear_filter` — 활성 필터 해제 (원본 `_all_entries`
-      복원).
-  * `_active_col: int` (0..5) + `_COLUMN_NAMES` 튜플 — `_active_col`
-    이 textual cursor 와 별개로 화면이 직접 추적 (cursor_type="row" 유지).
-  * `_all_entries` — 필터 해제 시 복원할 원본. `refresh_entries` 가 매번
-    채움.
-  * `_active_filter: tuple[col, target] | None` — 현재 필터 상태.
-  * `_apply_filter(column, target)` + `_filter_label(...)` — 필터 결과를
-    status bar 의 warn 메시지로 (예: `"필터: left=x20 — 4/12건. c 로
-    해제 / r 로 재로드."`). 0건 매칭은 안내 후 필터 적용 안 함.
-  * `action_refresh` 가 `_active_filter = None` 도 같이 초기화.
-  * Footer 의 enter 키 라벨이 `Edit` → `Enter` (컨텍스트 액션).
-
-### 수정 (test)
-
-- `tui/tests/test_entries_screen.py` — 9 cases 추가 (active col 초기값,
-  ← / → 양방향 + boundary clamp, date / left / right / item 컬럼별 enter
-  필터 결과, money 컬럼 enter 가 EntryEditDialog push, c 로 필터 해제,
-  r 로 자동 해제).
-
-### 수정 (그 외)
-
-- `tui/README.md` — 키 바인딩 표에 `←` / `→` / `e` / `c` 추가, Enter
-  의 컨텍스트 액션 설명.
-- `tui/CHANGELOG.md` / `tui/MEMORY.md` — 본 항목.
-- `tui/pyproject.toml` + `__init__.py` — 0.9.3 → 0.10.0 (사용자 가시
-  주요 기능 추가).
-
-### 검증
-
-- `make test-tui` → **259 passed** (226 + 24 filters + 9 entries 새).
-
-## CL #51051 — 0.9.3 — EntriesScreen 의 'left' 컬럼 width 를 12 cells 로 fixed (2026-05-10)
-
-사용자 요청 (2026-05-10): "left 패널의 가로폭을 줄여주세요" — DataTable
-의 `left` (차변 계정과목) 컬럼.
-
-이전엔 `add_columns(...)` 로 모든 컬럼이 자동 width — 차변에 긴 계정명
-("KB손해보험", "오렌지라이프", "자본조정" 같이 한글 6자 = 12 cells) 이
-들어오면 그만큼 컬럼이 늘어났다. 사용자 시야에서 거래내역의 핵심 정보
-(date / money / item) 가 멀리 밀리는 가독성 저하.
-
-### 수정
-
-- `screens/entries.py::on_mount` — `add_columns(...)` 한 줄을 `add_column(...)`
-  6번 호출로 풀어 `left` 만 `width=12` 로 fixed. 한글 6자까지 깨끗히
-  표시되고 그 이상은 textual 의 자동 ellipsis. 다른 컬럼 (`date` /
-  `money` / `right` / `item` / `memo`) 은 자동 width 유지.
-
-### 의도적 비대칭
-
-`right` (대변) 도 같은 종류 데이터지만 사용자 메시지에 명시 없어 자동
-width 그대로. 사용자가 거래 흐름에서 차변(left) 을 *어디로 갔나* 시점
-으로, 대변(right) 을 *어디서 왔나* 시점으로 보는 한국어 UX 직관 — 좌측
-(차변) 만 좁히는 게 시각 흐름에 자연스럽다. 대변도 좁히길 원하면 후속
-CL.
-
-### 검증
-
-- `make test-tui` → **226 passed** (회귀 없음, 컬럼 width 는 layout 만
-  영향이라 cell value 검증은 그대로 통과).
-
-## CL #51043 — 0.9.2 — EntriesScreen date 컬럼을 YYYY-MM-DD 형식으로 (sub-index 제거) (2026-05-10)
-
-사용자 요청 (2026-05-10): "초기화면에서 date를 '2026-05-10' 의 형태로
-표시하고 시간은 생략."
-
-이전엔 후잉 응답의 `entry_date` 가 `20260510` 또는 `20260510.0001`
-(sub-index = entries 내 sequence) 형태로 그대로 표시 — 사용자에게 가독성
-나쁨. 표 컬럼과 100-cap 경고 status 메시지 둘 다 정규화.
-
-### 추가
-
-- `tui/src/whooing_tui/screens/entries.py` 에 `_fmt_date(v) -> str`
-  helper. `"20260510"` → `"2026-05-10"`. `"20260510.0001"` → `"2026-05-10"`
-  (`.` 앞 8자리만 사용). 8자리 숫자가 아니면 손대지 않고 그대로 (디버깅
-  친화).
-- `tui/tests/test_entries_screen.py` 에 4 cases (`_fmt_date` 단위:
-  yyyymmdd→dashed, sub-index 제거, empty/None, unrecognized passthrough).
-
-### 수정
-
-- `screens/entries.py::_render_table` 의 `date_s` 가 `_fmt_date(...)` 적용.
-- `screens/entries.py::_update_window_status` 의 100-cap 경고 메시지의
-  `cap_dates` 도 정규화 (표시 일관성).
-- `tests/test_entries_screen.py` 의 기존 검증 (`"20260510"`) 을
-  `"2026-05-10"` 으로 갱신, 추가로 raw 8자리가 표 셀에 더 이상 없는지도
-  검증.
-- `tui/CHANGELOG.md` / `tui/MEMORY.md` — 본 항목.
-- `tui/pyproject.toml` + `__init__.py` — 0.9.1 → 0.9.2.
-
-### 검증
-
-- `make test-tui` → **226 passed** (222 + 4 새).
-
-### 의도적 보존
-
-- `EntryEditDialog` 의 `f-date` Input prefill 은 raw 8자리 그대로 (max_length=8
-  + `parse_yyyymmdd` 검증 — 사용자가 폼에서 입력하는 값과 일관성).
-- `ConfirmModal` 의 거래 삭제 메시지는 raw `entry_date` 그대로 (사용자
-  메시지가 "초기화면" 만 명시).
-
-## CL #51041 — 0.9.1 — 한글 IME 모드에서도 단축키 동작 (영문 ↔ 한글 자모 binding 매핑) (2026-05-10)
-
-사용자 보고 (2026-05-10): "q를 누르면 종료되는데 IME가 한글 모드일 때는
-종료되지 않습니다. 한글 모드일 때도 종료되도록 수정하고 나머지 단축키도
-같은 처리를 해주세요."
-
-원인: macOS / Linux 의 한글 IME (두벌식) 가 켜진 상태에서 사용자가 'q'
-글쇠를 누르면 textual 의 key event 의 character 가 'ㅂ' 으로 들어와 영문
-binding ("q") 과 매칭되지 않는다. 모든 영문 letter 단축키 (q/s/a/n/d/r/y)
-가 같은 문제.
-
-### 해결
-
-각 영문 letter binding 옆에 **두벌식 매핑 한글 자모 binding 을 같이
-등록**. textual 8.x 의 key dispatch 가 한글 자모 character 도 매칭에
-사용함을 단위 + 통합 테스트로 확인.
-
-### 추가 (2 files)
-
-- `tui/src/whooing_tui/ime.py`
-  * `KOREAN_OF`: 두벌식 표준 영문 → 한글 자모 매핑 (26 letter 전체).
-  * `bind_ko(en_key, action, description, **kwargs) -> list[Binding]` —
-    영문 binding 1개 + 한글 자모 binding 1개 (`show=False`, Footer 미표시,
-    `priority` 등 다른 kwargs 는 양쪽에 전달). 매핑 없는 키 (예:
-    `escape`, `enter`, `question_mark`, `plus` 등 IME 영향 없는 키) 는
-    영문 binding 1개만.
-- `tui/tests/test_ime.py` — 17 cases:
-  * `KOREAN_OF` 매핑 정확성 (q→ㅂ / s→ㄴ / a→ㅁ / n→ㅜ / d→ㅇ / r→ㄱ /
-    y→ㅛ 등 우리 단축키 전수).
-  * `bind_ko` 헬퍼 — letter 키는 2개 binding, 매핑 없는 키는 1개 binding.
-  * `priority` / `show=False` / 빈 description 등 옵션 전달.
-  * **통합**: `pilot.press("ㅂ")` 가 `Binding("ㅂ", ...)` 의 action 을
-    fire 하는지 textual 환경에서 직접 검증.
-
-### 수정 (5 screens)
-
-각 화면의 BINDINGS 에서 영문 letter 키를 `*bind_ko(...)` spread 로 교체.
-IME 영향 없는 키 (`escape`, `enter`, `question_mark`, `plus`, `minus`,
-`equals_sign`) 는 그대로.
-
-| 파일 | 영향 받은 키 |
-| --- | --- |
-| `screens/entries.py` | q / s / a / n / d / r |
-| `screens/sections.py` | q / r |
-| `screens/accounts.py` | q / r / n / d |
-| `screens/edit_entry.py` (ConfirmModal) | y / n |
-| `screens/help.py` | q |
-
-### 수정 (그 외)
-
-- `tui/CHANGELOG.md` / `tui/MEMORY.md` — 본 항목.
-- `tui/pyproject.toml` + `__init__.py` — 0.9.0 → 0.9.1.
-
-### 검증
-
-- `make test-tui` → **222 passed** (205 + 17 new ime). 회귀 0.
-- 통합 검증: textual 8.2.5 가 `Binding("ㅂ", ...)` 매칭 + `pilot.press("ㅂ")`
-  발화를 정상 처리.
-
-### 사용자 가시 동작
-
-이전엔 한글 IME 일 때 q / s / a / n / d / r / y 가 모두 무반응이었는데,
-이제 영문 IME 와 동일하게 동작. Footer 의 키 표시는 영문만 (한글 binding
-은 `show=False`) — 사용자가 영문/한글 모두 같은 글쇠를 누르면 같은 액션.
-
-### 학습된 패턴
-
-textual 의 Binding key 는 단일 한글 자모 character 도 valid — 별도
-wrapping / on_key handler 없이 binding 만 추가하면 동작. 후속 단축키
-추가 시 `bind_ko` 패턴을 그대로 사용.
-
-## CL #51031 — 0.9.0 — 자동 섹션 선택: Default 우선 + last_section 영구 저장/복원, 빈 결과 안내 (2026-05-10)
-
-사용자 보고 (2026-05-10): "내용이 비어있던 이유는 테스트 섹션이 선택되어
-있었기 때문. 앱을 시작할 때 Default 섹션이 선택되어 있도록. 이전에
-선택했던 섹션을 저장했다가 다음 실행 때 되돌려주세요." + 진단 중 발견한
-빈 결과 UX 문제도 함께.
-
-### 변경된 자동 활성화 우선순위
-
-```mermaid
-flowchart TB
-    BOOT[EntriesScreen.refresh_entries 자동 부팅] --> Q1{saved last_section_id<br/>(state.json)}
-    Q1 -->|매칭| USE[활성화]
-    Q1 -->|없음| Q2{is_default=true<br/>또는 title=Default}
-    Q2 -->|매칭| USE
-    Q2 -->|없음| Q3{$WHOOING_SECTION_ID<br/>(legacy)}
-    Q3 -->|매칭| USE
-    Q3 -->|없음| Q4[첫 섹션]
-    Q4 --> USE
-    USE --> SAVE[save_last_section_id<br/>→ state.json]
-```
-
-#### 이전 (0.8.1)
-
-```
-WHOOING_SECTION_ID 우선 → 첫 섹션
-```
-
-문제: `.env` 의 `WHOOING_SECTION_ID=s133178` (테스트 섹션, 거래 0건) 가
-강제 우선순위라 사용자가 거래내역이 비어 보이는 화면을 봄.
-
-#### 새 (0.9.0)
-
-```
-saved (state.json) > Default (is_default 또는 title 매칭)
-                   > WHOOING_SECTION_ID (env, legacy fallback)
-                   > 첫 섹션
-```
-
-### 추가
-
-- `tui/src/whooing_tui/state.py` 에 영구 사용자 상태 helper:
-  * `_state_path()` — `$XDG_CONFIG_HOME/whooing-tui/state.json` (기본
-    `~/.config/whooing-tui/state.json`).
-  * `load_state()` / `save_state(dict)` — atomic write (`.tmp` rename).
-  * `load_last_section_id()` / `save_last_section_id(sid)` — 같은 값
-    skip (잦은 set 시 io 절약). 다른 키들은 보존.
-- `tui/tests/conftest.py` — autouse fixture `_isolated_user_state` 가
-  모든 테스트에서 `XDG_CONFIG_HOME` 을 tmp_path 로 격리 + `WHOOING_SECTION_ID`
-  delete. 실 사용자 home 을 만지지 않도록.
-
-### 수정
-
-- `tui/src/whooing_tui/screens/entries.py`
-  * `refresh_entries` 의 자동 활성화 로직을 새 우선순위 (saved → Default
-    → env → 첫 섹션) 로. 결정 후 `save_last_section_id` 로 저장 (자동도).
-  * `action_open_sections` 의 `_on_close` callback 에서도 사용자 명시
-    선택 시 `save_last_section_id` 호출.
-  * `_update_window_status` 의 빈 결과 메시지를 친절하게 — "거래내역
-    없음 — 다른 섹션 [s] / 윈도우 확장 [+] / 새 거래 [n]" + warn 클래스.
-    section_title 이 있으면 "Default (s9046)" 형태로 표시.
-- `tui/tests/test_state.py` — 11 cases 추가 (load/save/atomic/corrupted/
-  non-dict/last_section_id roundtrip/skip when unchanged/overwrite/
-  preserve other keys/empty string returns None/missing returns None).
-- `tui/tests/test_entries_screen.py` — 6 cases 추가 (Default 자동 선택,
-  is_default flag 우선, saved 복원 (1차→2차 부팅 시뮬), env fallback,
-  첫 섹션 fallback, 빈 결과 안내 메시지에 [s]/[+]/[n] 검증).
-- `tui/CHANGELOG.md` / `tui/MEMORY.md` — 본 항목.
-- `tui/pyproject.toml` + `__init__.py` — 0.8.1 → 0.9.0 (영구 상태 도입,
-  minor bump).
-
-### 검증
-
-- `make test-tui` → **205 passed** (188 + 11 state + 6 entries 우선순위
-  / 빈 결과).
-
-### 사용자 가시 동작
-
-- 처음 실행: 사용자 후잉 환경에 "Default" 섹션이 있으면 그걸 선택 (이전
-  의 `WHOOING_SECTION_ID=s133178` 영향 제거). 한 번 활성화된 섹션은
-  `~/.config/whooing-tui/state.json` 에 저장됨.
-- 다음 실행: state.json 의 `last_section_id` 가 적용 — 사용자가 `s` 로
-  명시 선택한 섹션이 그대로 복원.
-- 거래 0건 화면: status bar 가 빨간색 대신 노란색 (warn) 으로 다음 액션
-  명시 (`s` / `+` / `n`).
-
-### 학습된 패턴
-
-테스트가 `~/.config/whooing-tui/state.json` 같은 사용자 글로벌 상태를
-건드리지 않도록 **autouse conftest fixture 로 `XDG_CONFIG_HOME` 격리**.
-후속 영구 상태 도입 시 같은 패턴.
-
-## CL #51023 — 0.8.1 — UI 재구성: 초기 화면을 EntriesScreen 으로, 옵션 화면 분리 (2026-05-10)
-
-사용자 지시 (2026-05-10): "초기화면에 거래내역, 섹션 선택과 계정과목은
-별도 옵션 화면". 본 CL 이 그 변경을 적용 + HomeScreen 제거.
-
-### Before
-
-```
-앱 시작 → HomeScreen (섹션 picker + 계정과목 트리)
-            └─ 'e' → EntriesScreen
-```
-
-### After
-
-```
-앱 시작 → EntriesScreen (자체 부팅: sections → accounts → entries)
-            ├─ 's' → SectionPickerScreen (모달, 선택 후 dismiss → 자동 재로드)
-            └─ 'a' → AccountsScreen (계정과목 조회 + CRUD, 돌아오면 자동 재로드)
-```
-
-### 추가 (4 files)
-
-- `tui/src/whooing_tui/screens/sections.py` — `SectionPickerScreen
-  (ModalScreen[tuple[str, str | None] | None])`. OptionList 로 섹션 표시,
-  현재 활성 섹션은 ▶ 인디케이터. Enter → `dismiss((sid, title))`,
-  Esc/q → `dismiss(None)`. EntriesScreen 의 `action_open_sections` 가
-  callback 으로 dismiss 결과를 받아 SessionState 갱신 + entries 재로드.
-- `tui/src/whooing_tui/screens/accounts.py` — `AccountsScreen` + 자체
-  `AccountEditDialog` + `AccountDraft`.
-  * Tree 로 계정과목을 type 별 그룹화 (assets/liabilities/capital/income/
-    expenses/group). 후잉 표준 순서.
-  * `n` (new): `AccountEditDialog` push → `WhooingClient.create_account`.
-    필드: title / account / type / open_date / close_date / category /
-    memo. type ∈ {account, group}. account ∈ 5 표준 type.
-  * `Enter` (edit): leaf 선택 시 dialog prefill → `update_account` (전체
-    필드 전달).
-  * `d` (delete): **`check_account_deletable` 우선 호출** → 결과
-    (entries_count / balance / is_last) 를 ConfirmModal 메시지에 포함 →
-    Yes 면 `delete_account`. 거래내역이 있으면 close_date 변경 권장 안내.
-  * `q`/`escape`: `dismiss(None)` 으로 EntriesScreen 복귀.
-- `tui/tests/test_sections_picker.py` — 5 cases (정상 push / dismiss
-  with choice / dismiss None / 같은 섹션 skip / 빈 sections placeholder).
-- `tui/tests/test_accounts_screen.py` — 9 cases (트리 렌더, new dialog
-  push, dismiss → create, leaf 가 아닌 cursor 에서 edit 거부, leaf cursor
-  + edit dialog → update, delete 의 check → ConfirmModal → delete chain,
-  No 면 delete 안 함, entries_count > 0 시 ConfirmModal 메시지에 경고,
-  back → EntriesScreen 복귀).
-
-### 수정 (10 files)
-
-- `tui/src/whooing_tui/screens/entries.py` — 초기 화면 역할 흡수.
-  * 키 바인딩 추가: `s` (Sections), `a` (Accounts) — 둘 다 priority.
-  * `action_back` 이 pop 이 아닌 `app.exit()` (initial screen).
-  * `refresh_entries` 가 chain 부팅: section_id 비어있으면 sections-list
-    + WHOOING_SECTION_ID 우선 자동 활성화, accounts_flat 비어있으면
-    accounts-list + 양방향 인덱스 빌드, 마지막에 entries-list.
-  * `action_open_sections` / `action_open_accounts` — 모달 push +
-    callback 으로 결과 처리 (섹션 변경 시 자동 재로드, accounts 화면
-    돌아온 후도 자동 재로드).
-- `tui/src/whooing_tui/app.py` — initial screen 을 `HomeScreen` →
-  `EntriesScreen` 으로 변경.
-- `tui/src/whooing_tui/screens/__init__.py` — HomeScreen import 제거,
-  새 `SectionPickerScreen` / `AccountsScreen` / `AccountEditDialog`
-  re-export.
-- `tui/tests/test_entries_screen.py` — HomeScreen 의존 검증을 EntriesScreen
-  자체 부팅 흐름으로 교체 (자체 sections + accounts + entries 한 번에
-  로드되는 통합 케이스, 빈 sections 시 status error, q → exit).
-- `tui/tests/test_entries_mutate.py` — `_open_entries` helper 가 'e' 키
-  입력 대신 EntriesScreen mount 만 기다리도록 수정 (HomeScreen 진입 단계
-  소거).
-- `tui/tests/test_help_modal.py` — HomeScreen 참조 제거, 초기 화면
-  (EntriesScreen) 에서 `?` → HelpModal 검증으로 교체. 본문 keys 도
-  Sections/Accounts/New/Refresh/Help 로 갱신.
-- `tui/CHANGELOG.md` / `tui/DESIGN.md` / `tui/MEMORY.md` / `tui/README.md`
-  — 본 변경 사항 반영.
-- `tui/pyproject.toml` + `__init__.py` — 0.8.0 → 0.8.1.
-
-### 제거
-
-- `tui/src/whooing_tui/screens/home.py` — HomeScreen.
-- `tui/tests/test_home_screen.py` — 6 cases.
-
-### 검증
-
-- `make test-tui` → **188 passed** (이전 180 + 14 new screen 테스트 -
-  6 home 테스트). 회귀 0.
-- `make smoke-cli` → 진입점 3 종 모두 동작.
-- 라이브 검증: 사용자 수동 — `python whooing.py` → 거래내역이 즉시 표시
-  되어야 함. `s` 로 섹션 picker, `a` 로 계정과목 화면.
-
-### accounts CRUD 의 라이브 검증
-
-`mcp__whooing__accounts-*` schema 와 동일한 입력으로 RESTful path 호출.
-실 후잉 응답이 우리 가정과 다르면 `client.py` 의 `_ACCOUNTS_PATH` /
-`_account_path()` / `_account_check_deletable_path()` 만 조정.
-
-## CL #51019 — 0.8.0 — `WhooingClient` 에 accounts CRUD (UI 재구성 준비) (2026-05-10)
-
-UI 재구성 (initial = EntriesScreen, 별도 SectionPicker / Accounts 화면)
-의 첫 단계 — 새 화면이 사용할 client API 를 먼저 추가. 후속 CL 에서 화면
-+ initial 변경.
-
-### 추가 (1 file)
-
-- `tui/src/whooing_tui/client.py` 의 `WhooingClient` 에 4 메서드:
-  * `create_account(section_id, account, type, title, open_date, ...)`
-    — POST `/accounts.json`. 후잉 공식 MCP 의 `accounts-create` schema 와
-    동일 입력 (account ∈ {assets/liabilities/capital/expenses/income},
-    type ∈ {account, group}, optional category / close_date / memo).
-  * `update_account(...)` — PUT `/accounts/<id>.json`. 후잉 정책상 전체
-    필드 (section_id / account / type / title / open_date / close_date)
-    필수 + optional category / memo.
-  * `delete_account(section_id, account, account_id)` —
-    DELETE `/accounts/<id>.json?section_id=&account=`.
-  * `check_account_deletable(...)` — GET
-    `/accounts/<id>/check_deletable.json` (거래 건수 / 잔액 / 마지막 항목
-    여부).
-- `CachedWhooingClient` 도 위 4 메서드 wrap. create/update/delete 시
-  해당 섹션의 accounts + entries 캐시 양쪽 invalidate (entries 응답이
-  account 정보를 포함할 가능성 안전 처리). check_deletable 은 단순
-  조회라 캐시 영향 없음.
-
-### 추가 (1 file)
-
-- `tui/tests/test_client_accounts_mutations.py` — 10 cases (respx):
-  * create_account: 필수 필드 / optional 포함 / unspecified omit.
-  * update_account: 전체 필수 set / optional category·memo.
-  * delete_account: query params (section_id + account).
-  * check_account_deletable: GET + query.
-  * 400 → USER_INPUT + error_parameters 보존.
-  * `CachedWhooingClient.create_account` 가 양쪽 캐시 invalidate.
-  * `check_account_deletable` 이 캐시 안 건드림.
-
-### 수정
-
-- `tui/CHANGELOG.md` / `tui/MEMORY.md` — 본 항목.
-- `tui/pyproject.toml` + `__init__.py` — 0.7.7 → 0.8.0 (UI 재구성
-  준비라 minor bump).
-
-### 검증
-
-- `pytest -q tui/tests/test_client_accounts_mutations.py` → **10 passed**.
-- `make test-tui` → 회귀 없음 (170 + 10 = **180 passed**).
-
-### 의도적 누락 (다음 CL B 로)
-
-- 초기화면을 EntriesScreen 으로.
-- SectionPickerScreen / AccountsScreen 추가 + EntriesScreen 의 자동
-  부팅 로직.
-- HomeScreen 제거.
-
-라이브 검증은 사용자 수동 (auto-mode classifier 가 mutation 차단). 후잉
-실 path 가 RESTful 가정과 다르면 client.py 의 path 상수만 조정.
-
-## CL #51013 — 0.7.7 — `whooing.py` 자동 re-exec 패턴 (시스템 python 으로 호출돼도 동작) (2026-05-10)
-
-0.7.6 의 `whooing.py` 가 시스템 `python3` 으로 호출되면 `httpx` /
-`pydantic` / `dotenv` 가 없다고 실패하던 문제를 해결. **시스템 python 으로
-호출 → 자동으로 monorepo `.venv/bin/python` 으로 re-exec** 하는 패턴.
-
-### 수정
-
-- `whooing.py`
-  * `_can_import_deps()` — 외부 deps 가 현재 인터프리터에서 import
-    가능한지 빠르게 검사 (시스템 python 에 deps 가 의도적으로 깔린
-    환경 포용).
-  * `_reexec_in_venv_if_needed()` — venv 안이 아니고 deps 도 없으면
-    `os.execv(_VENV_PY, ...)` 으로 본 프로세스를 venv python 으로 교체.
-    venv 가 없으면 stderr 에 `make install` 안내 + exit 3.
-  * **`_running_in_venv()` 버그 수정** — 기존 구현은 `sys.executable`
-    의 realpath 를 비교했는데 venv 의 python 이 시스템 python 의
-    symlink 인 macOS / Linux 환경에서 양쪽이 같은 binary 로 풀려 venv
-    구분이 안 됐다. 표준 마커인 `sys.prefix` (venv 활성화 시 venv root
-    을 가리킴) 를 `.venv` 디렉토리와 비교하도록 교체. `pyvenv.cfg` 가
-    설정하는 값이라 신뢰 가능.
-  * 모듈 docstring 에 자동 re-exec 동작 명시.
-- `tui/CHANGELOG.md` / `tui/MEMORY.md` — 본 항목.
-- `tui/pyproject.toml` + `__init__.py` — 0.7.6 → 0.7.7.
-
-### 검증
-
-- `python3 whooing.py --help` (시스템 python3) → 자동 re-exec, help 정상.
-- `python3 whooing.py sections list` (시스템 python3) → 자동 re-exec, 실
-  후잉 응답 정상.
-- `.venv/bin/python whooing.py --help` (이미 venv) → re-exec skip, 그대로 동작.
-- `make smoke-cli` → 진입점 3 종 모두 동작.
-
-### 학습된 함정
-
-`os.path.realpath(sys.executable)` 로 venv 감지하는 패턴은 macOS framework
-build 환경에서 작동 안 함 — `.venv/bin/python` 이 시스템 python 의
-symlink 라 둘 다 `python3.X` 로 풀린다. **표준 venv 마커는 `sys.prefix !=
-sys.base_prefix`** 또는 `sys.prefix == <venv_dir>`. 후속 venv 감지 코드도
-같은 패턴을 따를 것.
-
-## CL #51009 — 0.7.6 — monorepo 루트 진입점 `whooing.py` 추가 (2026-05-10)
-
-`python whooing.py [args]` 가 `python -m whooing_tui [args]` / 콘솔
-스크립트 `whooing-tui` 와 100% 동등. 사용자가 monorepo 루트에서 짧게
-실행할 수 있는 발견 가능한 진입점.
-
-### 추가
-
-- `whooing.py` (monorepo 루트, +x permission)
-  * `tui/src` 와 `core/src` 를 `sys.path` 에 prepend → venv 활성화 안
-    된 상태에서도 외부 deps 만 있으면 동작.
-  * 지연 import 후 `whooing_tui.cli.main()` 으로 그대로 위임. 자체 로직
-    없음 — 같은 코드 경로 재사용.
-  * 모듈 docstring 에 사용 예시 + 전제 (deps 위치) 명시.
-
-### 수정
-
-- `Makefile` — `smoke-cli` 가 진입점 **3 종** (python -m / 콘솔 스크립트
-  / `whooing.py`) 을 모두 검증. 하나라도 깨지면 즉시 발견.
-- `README.md` (monorepo root) — 빠른 시작 섹션의 TUI 실행 방법을 3가지
-  동등 형태로 정리. 디렉터리 레이아웃에 `whooing.py` 추가.
-- `tui/README.md` — 빠른 시작의 헤드리스 CLI 예시에 `whooing.py` 추가.
-- `tui/CHANGELOG.md` / `tui/MEMORY.md` — 본 항목.
-- `tui/pyproject.toml` + `__init__.py` — 0.7.5 → 0.7.6.
-
-### 검증
-
-- `make smoke-cli` → "OK — 진입점 3 종 모두 동작."
-- `.venv/bin/python whooing.py sections list` → 실 후잉 응답 (Default,
-  테스트 두 섹션) 정상.
-- `make test-tui` → 170 passed (회귀 없음).
-
-### Perforce 표시
-
-- `whooing.py` 는 `p4 add -t text+x` 로 등록 — 다른 사용자가 sync 받을
-  때도 +x permission 보존. shebang `#!/usr/bin/env python3` 가 동작하면
-  `./whooing.py` 도 가능 (단, 권장은 `python whooing.py` 명시 호출 —
-  외부 deps 의 venv 위치를 사용자가 명확히 통제).
-
-## CL #51008 — 0.7.5 — `mcp_bridge.py` 제거 (UI 통합 미완성, unused 코드 정리) (2026-05-10)
-
-CL #50987 (scaffolding) → #51007 (archived 의존 제거 + 자체 클라이언트로
-재작성) 까지 두 단계를 거쳤지만 본 모듈을 호출하는 화면이 한 곳도 없다.
-unused 코드를 길게 유지하면 의도가 불분명해지므로 정리. 미래에 보고서 /
-예산 / 자주입력 매칭 같은 화면이 추가될 때 본 모듈을 새로 만들 수 있도록
-`mcp/` 디렉토리의 `OfficialMcpClient` (archived) 와 CL #51007 의 자체 구현
-은 git/Perforce history 에서 그대로 참조 가능.
-
-### 제거
-
-- `tui/src/whooing_tui/mcp_bridge.py` — `WhooingMcpBridge`.
-- `tui/tests/test_mcp_bridge.py` — 12 cases.
-
-### 수정
-
-- `tui/DESIGN.md` §6 의 6번 (MCP 직접 호출) — 진행 이력 (#50987 →
-  #51007 → 본 #51008) 명시 + 미래 reactivation 후보 표기.
-- `tui/CHANGELOG.md` / `tui/MEMORY.md` — 본 항목.
-- `tui/pyproject.toml` + `__init__.py` — 0.7.4 → 0.7.5.
-
-### 검증
-
-- `make test-tui` → 170 passed (이전 182 - 12 cases = 170).
-
-### 미래 reactivation 가이드
-
-후속 CL 에서 MCP 직접 호출이 필요해지면:
-
-1. **history 참조**: `p4 print -q //woojinkim/scripts/whooing-tui/tui/src/whooing_tui/mcp_bridge.py#3` 또는 `git show 53e6431:tui/src/whooing_tui/mcp_bridge.py`. 본 CL 직전의 자체 HTTP JSON-RPC 클라이언트가 그대로 살아 있다.
-2. **테스트도 history 에**: `p4 print -q .../tui/tests/test_mcp_bridge.py#2` 에 12 cases (respx 기반).
-3. **import 후보**: `mcp/src/whooing_mcp/official_mcp.py` (archived but functional).
-
-## CL #51003 — 0.7.4 — `mcp_bridge` 자체 HTTP JSON-RPC 클라이언트로 재작성 (archived 의존 제거) (2026-05-10)
-
-archived `whooing-mcp-server-wrapper` 의 `OfficialMcpClient` 에 의존하던
-`mcp_bridge.py` 를 자체 HTTP JSON-RPC 클라이언트로 재작성. archived
-패키지에 대한 잔재 import 가 사라져 본 모듈은 monorepo `mcp/` 가 사라져도
-독립 동작.
-
-### 수정
-
-- `tui/src/whooing_tui/mcp_bridge.py`
-  * `from whooing_mcp.official_mcp import OfficialMcpClient` 제거.
-  * `httpx.AsyncClient` 로 직접 POST + JSON-RPC envelope (`{jsonrpc:
-    "2.0", id, method, params}`).
-  * 헤더: `X-API-Key` + `Content-Type: application/json` +
-    `Accept: application/json, text/event-stream` (MCP spec).
-  * `list_tools()` / `call(name, arguments)` public API 는 동일.
-  * `tools/call` 결과의 `isError: True` → `ToolError(UPSTREAM)` 변환,
-    `content[].text` 메시지 추출.
-  * JSON-RPC error code 매핑: -32700~-32600 (표준 4xx) → USER_INPUT,
-    그 외 / 일반 예외 / non-JSON / `result` 누락 → UPSTREAM.
-  * `_req_id` 카운터로 호출별 id 증가 (1, 2, 3, ...).
-  * 더 이상 `DeprecationWarning` 발사하지 않음 — archived 의존이 없으므로
-    deprecation 명분 변경 (기능 자체는 미래 활용 후보).
-
-- `tui/tests/test_mcp_bridge.py` — 완전 재작성, 12 cases:
-  * `respx` 로 후잉 공식 MCP 응답을 mock — 실 네트워크 없이 검증.
-  * envelope 검증: `tools/list` / `tools/call` 의 method, params,
-    `X-API-Key` 헤더.
-  * `tools/call` 의 `arguments` 보존, `structuredContent` 반환.
-  * `isError: True` → ToolError + content.text 추출.
-  * JSON-RPC error -32600 / -32601 → USER_INPUT, -32000 → UPSTREAM.
-  * non-JSON 응답 (502 + HTML) → UPSTREAM.
-  * `result` 누락 → UPSTREAM.
-  * `httpx.ConnectError` (network) → UPSTREAM.
-  * `_req_id` 가 1씩 증가.
-  * **회귀 방지**: 모듈 source 에 `from whooing_mcp` / `import whooing_mcp`
-    가 없는지 단위 테스트로 영구 검증.
-
-### 수정 (문서)
-
-- `tui/CHANGELOG.md` / `tui/MEMORY.md` — 본 항목.
-- `tui/pyproject.toml` + `__init__.py` — 0.7.3 → 0.7.4.
-
-### 검증
-
-- `make test-tui` → 182 passed (Phase 6 152 + cli 18 + mcp_bridge 12).
-- 기존 6 cases 전부 새 12 cases 로 대체. 부수 효과: `DeprecationWarning`
-  더 이상 발생 X.
-
-### 의도적 누락
-
-- mcp_bridge 의 UI 통합 (HomeScreen / ReportsScreen) 은 여전히 미구현.
-  본 CL 은 라이브러리 layer 의 archived 의존만 제거.
-- archived `mcp/` 디렉토리 자체는 그대로 (CL #50999 결정 유지).
-
-## CL #50993 — 0.7.3 — whooing-mcp-server-wrapper 종료 반영 (archive 표기) (2026-05-10)
-
-자매 프로젝트 `whooing-mcp-server-wrapper` 가 종료됐다. 코드는 monorepo
-의 `mcp/` 디렉토리에 archive 형태로 보존되며, 본 CL 은 그 사실을 코드
-docstring / 문서 / `.env.example` 에 일관 표기하고 `mcp_bridge.py` 에
-`DeprecationWarning` 을 추가한다.
-
-### 수정 (영향 받는 14 files)
-
-- `tui/src/whooing_tui/__init__.py` — package docstring 의 wrapper 페어
-  설명을 "본래 ~ wrapper 종료 (archived 2026-05-10) 이후 ~" 형태로.
-- `tui/src/whooing_tui/auth.py` — module docstring + `_env_candidates()`
-  의 공통 위치 설명 + `load_auth_from_env()` 에러 메시지에서 "wrapper 와
-  공유" 표현을 "(archived 2026-05-10)" 표기로 정정.
-- `tui/src/whooing_tui/cache.py` — `whooing-data.sqlite` 분리 사실의
-  타이밍을 archived 명시.
-- `tui/src/whooing_tui/client.py` — wrapper 와 같은 규칙으로 동작한다는
-  과거 사실에 archived 표기.
-- `tui/src/whooing_tui/dates.py` / `errors.py` — 같은 패턴.
-- `tui/src/whooing_tui/data.py` — wrapper 가 read-only SELECT 한다는
-  가정이 historical 임을 명시. `open_ro()` API 는 미래 새 도구 합류 가능
-  성을 위해 유지.
-- `tui/src/whooing_tui/mcp_bridge.py` —
-  * 모듈 docstring 에 `archived 2026-05-10` 박스 + 신규 호출자 권장
-    (REST 직접 또는 자체 MCP 클라이언트).
-  * `__init__` 에서 **`DeprecationWarning`** 발사 — 후속 정리에서 제거
-    또는 자체 클라이언트로 재작성 예정.
-  * ImportError 안내 메시지에 "archived" 명시.
-- `tui/pyproject.toml` — comment 의 "외부 consumer (예: wrapper)" 를
-  archived 표기로.
-- `README.md` (monorepo root) — 디렉터리 표에 `mcp/` 추가 + archived
-  표기. "관련 프로젝트" 섹션 갱신.
-- `tui/README.md` — 머리말 박스 + Phase 6 까지 진행 상황 (0.7.3) 갱신.
-- `tui/DESIGN.md` — §2 자매 도구 mermaid 에 점선 / archived 표기 + §4
-  제목.
-- `tui/MEMORY.md` — §2 자매 도구 표 갱신, §3 토큰 / 카드 비밀번호 사실
-  업데이트, §4 제목, §5.3 변경 전파 규칙을 historical 로.
-- `.env.example` (monorepo root) — 공통 위치 안내 박스의 wrapper 공유
-  명분을 "단순 path / XDG 표준" 으로 정정.
-- `tui/CHANGELOG.md` — 본 항목.
-- `tui/pyproject.toml` + `__init__.py` — 0.7.2 → 0.7.3.
-
-### 검증
-
-- `make test-tui` → 176 passed (회귀 없음, `DeprecationWarning` 6건은
-  `test_mcp_bridge.py` 의 의도된 부수효과).
-
-### 원칙
-
-- 코드 자체 (mcp/ 디렉토리) 는 보존 — historical 참조 자료 + `mcp_bridge`
-  의 동작 유지.
-- 문서는 "(archived 2026-05-10)" 일관 표기 — 새 독자가 사실 관계를 즉시
-  파악.
-- 의도적 코드 중복 (`auth` / `dates` / `errors` / `client` read 부분) 은
-  추출 비용이득이 작고 미래 옵션 가치가 있어 그대로 둔다.
-
-## CL #50987 — 0.7.2 — Step 4 MCP 직접 호출 scaffolding (2026-05-10)
-
-후속 권장 1번. 후잉 공식 MCP (https://whooing.com/mcp) 호출 thin bridge.
-같은 monorepo 의 `mcp/` 패키지가 이미 `OfficialMcpClient` 로 HTTP JSON-RPC
-를 구현해 놨으므로 본 모듈은 그 클라이언트를 wrap 해 TUI 컨벤션
-(`ToolError`) 으로 결과를 변환만 한다.
-
-### 추가
-
-- `tui/src/whooing_tui/mcp_bridge.py` — `WhooingMcpBridge` 클래스.
-  * 지연 import (`from whooing_mcp.official_mcp import OfficialMcpClient`).
-    monorepo 외부 환경에서 import 실패 시 `ToolError("INTERNAL", ...)` 로
-    명확한 안내.
-  * `list_tools()` / `call(name, arguments)` 위임.
-  * `_to_tool_error()` — `OfficialMcpError` 의 JSON-RPC code 가 -32600
-    근처면 USER_INPUT, 그 외는 UPSTREAM. 일반 예외 (timeout 등) 도
-    UPSTREAM.
-- `tui/tests/test_mcp_bridge.py` — 6 cases:
-  * monkeypatch 로 `whooing_mcp.official_mcp` 모듈을 fake 로 교체해 실
-    네트워크 없이 검증.
-  * ImportError → `ToolError(INTERNAL)`.
-  * 정상 위임 (list_tools / call_tool 인자 보존).
-  * `OfficialMcpError(code=-32000)` → UPSTREAM, `code=-32600` → USER_INPUT.
-  * `TimeoutError` 같은 일반 예외 → UPSTREAM.
-
-### 수정
-
-- `tui/DESIGN.md` §6 의 6번 (MCP 직접 호출) — ✅ scaffolding 마킹.
-  본격 UI 통합 (보고서 / 예산 / 자주입력 매칭 등) 은 후속 CL.
-- `tui/CHANGELOG.md` / `tui/MEMORY.md` — 본 항목.
-- `tui/pyproject.toml` + `__init__.py` — 0.7.1 → 0.7.2.
-
-### 검증
-
-- `make test-tui` → tui 176 passed (Phase 6 152 + cli 18 + mcp_bridge 6).
-
-### 의도적 누락 (UI 통합)
-
-- HomeScreen / 별도 ReportsScreen 등에서 `WhooingMcpBridge` 호출 노출.
-- 본 CL 은 라이브러리 layer 만 — 후속에서 화면 / 키바인딩 추가.
-
-## CL #50980 — 0.7.1 — cli.py 헤드리스 dispatch 단위 테스트 (2026-05-10)
-
-권장 후속 4번. 0.5.1 의 `make coverage` 에서 `cli.py` 가 0% 였던 것을
-보충 — 의미있는 수치로 끌어올림.
-
-### 추가
-
-- `tui/tests/test_cli.py` — 18 cases:
-  * sections list 의 표 / `--json` 출력 + sanitize_for_log 의 secret
-    masking 검증.
-  * 종료 코드 매핑: AUTH=3, RATE_LIMIT=4, UPSTREAM=5, USER_INPUT=2.
-  * 토큰 누락 (load_auth_from_env ValueError) → exit 2.
-  * accounts list — `--section` 명시 / `WHOOING_SECTION_ID` env / 자동
-    첫 섹션 선택 분기.
-  * entries list — 기본 윈도우 / 명시 `--start --end` / `--start` 만 줄
-    때 USER_INPUT / 잘못된 YYYYMMDD / 음수 days / `--json` / 빈 결과
-    `(empty)` + `총 0건` 표기.
-  * `--help` 가 SystemExit(0) + sections/accounts/entries 모두 노출.
-  * 서브커맨드 없을 때 GUI 부팅 진입 (run_app 의 토큰 검증으로 exit 3).
-
-### 수정
-
-- `tui/CHANGELOG.md` — 본 항목.
-- `tui/MEMORY.md` — §8 변경이력.
-- `tui/pyproject.toml` + `__init__.py` — 0.7.0 → 0.7.1.
-
-### 검증
-
-- `make test` → core 72 + tui 170 = **242 passed** (Phase 6 152 + 18 new cli).
-- `cli.py` 라인 커버: **0% → 91%** (150 lines, 13 missed — 주로 verbose
-  로깅 / unreachable internal command path).
-
-### 학습된 패턴 (후속 단위 테스트에 재사용)
-
-cli.py 가 `WhooingClient(auth)` 인스턴스화 + `WhooingClient.flatten_accounts(...)`
-staticmethod 양쪽을 호출. monkeypatch 가 함수로 교체하면 staticmethod
-접근이 깨진다 → **fake `__new__` 클래스 + 진짜 staticmethod 보존**
-패턴 (`_FakeWhooingClient`) 으로 둘 다 통과시킴.
-
-## v0.7.0 — Phase 6 (statement import / annotator / attachment / dashboard) (2026-05-10)
-
-monorepo 의 sibling `whooing-core` 라이브러리에서 어댑터 / 첨부 storage /
-SQLite 스키마를 받아 다음 화면 4개 추가. `whooing-mcp-server-wrapper` v0.2.0
-이 같은 db 를 read-only 로 SELECT — TUI 가 owner.
-
-### Added
-
-* **Phase 6.2** `tui/src/whooing_tui/data.py` — WHOOING_DATA_DIR root +
-  `init_shared_schema()` + `open_rw()` / `open_ro()` (whooing_core.db 위 layer).
-* **Phase 6.3** `screens/statement_import.py` — Statement Import Wizard
-  (HTML/PDF). issuer auto-detect → password modal → adapter → dedup → preview
-  → entries-create + statement_import_log.
-* **Phase 6.4** `screens/annotator.py` — AnnotatorModal (entry_id 단위 메모 +
-  해시태그). `parse_hashtags_input()` helper.
-* **Phase 6.5** `screens/attachment_browser.py` — entry 별 첨부 list / add (path
-  modal) / delete / open (`open` / `xdg-open`).
-* **Phase 6.6** `screens/dashboard.py` — at-a-glance: import 통계 + annotation
-  카운트 + 첨부 합계 + db meta.
-
-### Tests
-
-  `tui/tests/test_data.py`                     9 tests
-  `tui/tests/test_statement_import.py`         10 tests
-  `tui/tests/test_annotator.py`                 9 tests
-  `tui/tests/test_attachment_browser.py`       12 tests
-  `tui/tests/test_dashboard.py`                10 tests
-  → +50 tests; total tui pytest 152 passed.
-
-### Notes
-
-* 모든 신규 화면이 `whooing_tui.data.{open_rw, open_ro}` 사용 — wrapper 와
-  같은 db 공유 (WAL + busy_timeout=5000 으로 동시 SELECT 안전).
-* CLI / app.py 에 'i' (import) / 'a' (annotator) / 'A' (attachments) / 'D'
-  (dashboard) 단축키 wiring 은 follow-up. 현재는 push_screen() 호출 가능한
-  programmatic API 만 제공.
-
-## CL #50961 — 0.6.1 — `.env` 공통 위치 (Step 10) (2026-05-10)
-
-후잉 토큰을 양쪽 도구 (whooing-tui + whooing-mcp-server-wrapper) 가
-공유하도록 공통 위치 `~/.config/whooing/.env` 채택. backward compatible —
-기존 project root `.env` 도 fallback 으로 계속 동작.
-
-### 수정
-
-- `tui/src/whooing_tui/auth.py`
-  - `_env_candidates()` 함수 분리. 우선순위: ① `$WHOOING_ENV` (절대
-    경로 override) → ② `~/.config/whooing/.env` (공통) → ③ project
-    root 의 `.env` (legacy).
-  - `load_dotenv(c, override=False)` — 셸 export 된 환경변수가 항상
-    최우선.
-  - 첫 발견 후보 1개만 로드 (override=False 라 의미상 동등).
-  - 미설정 시 에러 메시지에 권장 위치 (`~/.config/whooing/.env`) 안내.
-- `.env.example` (monorepo root) — 탐색 우선순위 + 공통 위치 마이그레이션
-  방법 (`mkdir / mv / chmod 600`) 안내 박스 추가.
-- `tui/tests/test_auth.py` — 3 cases 추가:
-  * `_env_candidates()` 후보에 공통 위치 포함.
-  * `$WHOOING_ENV` override 가 첫 후보.
-  * `WHOOING_ENV=<file>` 가 가리키는 토큰 로드.
-- `tui/CHANGELOG.md` / `tui/MEMORY.md` — 본 항목.
-- `tui/pyproject.toml` + `__init__.py` — 0.6.0 → 0.6.1.
-
-### Cross-project (mcp-server-wrapper 측, 별도 CL)
-
-같은 양쪽 정렬을 위해 `whooing-mcp-server-wrapper` 의 `server.py` 에도
-공통 위치 후보 추가 (CL #50962). wrapper 도 `~/.config/whooing/.env` 를
-우선 탐색하고 기존 `~/.config/whooing-mcp/.env` 는 backward compat 으로
-유지.
-
-### 검증
-
-- `make test` (monorepo) → core 72 + tui 102 = **174 passed**.
-- `cd ../whooing-mcp-server && pytest -q` → **188 passed** (wrapper 회귀 없음).
-
-### 사용자 마이그레이션 (선택)
-
-토큰을 한 곳에서 관리하려면:
-
-```bash
-mkdir -p ~/.config/whooing
-mv .env ~/.config/whooing/.env       # whooing-tui 의 .env 또는
-                                     # whooing-mcp-server 의 .env
-chmod 600 ~/.config/whooing/.env     # 권장
-```
-
-하지 않아도 기존 `.env` 가 그대로 동작 — backward compat 보장.
-
-## CL #50956 — 0.6.0 — 화면 도움말 모달 (Step 7) (2026-05-10)
-
-### 추가
-
-- `tui/src/whooing_tui/screens/help.py` — `HelpModal(ModalScreen[None])`.
-  현재 활성 Screen 의 `BINDINGS` 를 introspect 해서 `show=True` 인 항목을
-  표 형태로 노출. 같은 description 의 키들 (예: `q` / `ctrl+c`) 은 한 줄
-  로 묶어 보인다. `body_text: str` attribute 으로 평문 본문을 보관해 테스트
-  가 Static 의 사적 API (`renderable`) 에 의존하지 않게.
-- `tui/tests/test_help_modal.py` — 5 cases:
-  * `_format_bindings()` 단위: hidden 제외 / 같은 description 묶기 / 빈
-    visible 케이스 안내 메시지.
-  * 통합: HomeScreen `?` (action_help) → HelpModal push, 본문에
-    "Entries" / "Refresh" / "Help" 포함 → dismiss → HomeScreen 복귀.
-  * 통합: EntriesScreen → Help → 본문에 "New" / "Delete" / "Edit" /
-    "Refresh".
-
-### 수정
-
-- `tui/src/whooing_tui/screens/home.py` — `?` (`question_mark`) 키
-  바인딩 추가 (priority, key_display="?"). `action_help()` 가 `HomeScreen`
-  타이틀과 자체 BINDINGS 를 HelpModal 로 push.
-- `tui/src/whooing_tui/screens/entries.py` — 같은 패턴으로 `?` /
-  `action_help()`.
-- `tui/CHANGELOG.md` / `tui/MEMORY.md` — 본 항목 + 메모.
-- `tui/pyproject.toml` + `__init__.py` — 0.5.1 → 0.6.0.
-
-### 검증
-
-- `make test` → core 72 + tui 99 (= 5 new help cases) = **171 passed**.
-
-### 학습된 함정 (Phase 2c 의 학습과 일관)
-
-- textual 8.x 의 `Static` 은 `renderable` 속성이 없음 (반복 함정). 화면
-  자체에 평문 attribute (`HelpModal.body_text`) 를 보관해 테스트가
-  내부 API 에 의존하지 않게.
-- ModalScreen 의 `escape` binding 으로 textual 이 dispatch 시 `'list'
-  object has no attribute 'key_to_bindings'` 같은 internal AttributeError
-  를 보일 수 있음 (textual 8.2.5 환경). 테스트는 키 시뮬 대신 `dismiss(None)`
-  직접 호출로 단축. 실 사용자 경험에서는 escape 정상 동작.
-
-## CL #50951 — 0.5.1 — README 갱신 + 콘솔 스크립트 smoke + coverage 인프라 (2026-05-10)
-
-작은 인프라 정리. Step 5/6/8 묶음.
-
-### 수정
-
-- `tui/README.md` — Phase 1 시점의 outdated 안내문을 Phase 3 까지의 진행
-  반영. monorepo 구조 (`make install` from monorepo root) 명시. **TUI 키
-  바인딩 요약 표** 추가 — HomeScreen / EntriesScreen / EntryEditDialog 의
-  주요 키.
-- `tui/pyproject.toml` — dev deps 에 `pytest-cov>=4` 추가.
-- `Makefile` (monorepo root) — `make coverage` (tui 의 pytest --cov,
-  HTML report → `htmlcov/`) + `make smoke-cli` (콘솔 스크립트 + `python
-  -m` 양쪽 진입점이 모두 동작함을 dispatch 만으로 검증, 토큰 불필요)
-  타겟 추가.
-- `.gitignore` — `.coverage` / `htmlcov/` / `coverage.xml` 차단 추가.
-- `pyproject.toml` + `__init__.py` — 0.5.0 → 0.5.1.
-
-### 검증
-
-- `make smoke-cli` → "OK — 양쪽 진입점 모두 동작."
-- `make coverage` → 94 passed, **73% 라인 커버** (1208 lines, 330 missed).
-  주요 미커버는 cli.py 0% (서브커맨드 dispatch — 헤드리스 단위 테스트 미작성),
-  __main__.py 0%, app.py 62% (run_app 의 GUI 부팅 코드), edit_entry.py
-  69% (UI 폼 핸들러). 핵심 라이브러리 (auth/dates/errors/models/state) 는
-  100%, client.py 80%, cache.py 81%, entries.py 83%, home.py 92%.
-- `make test` → 166 passed (회귀 없음).
-
-### 의도적 누락 (다음 CL 로)
-
-- 화면 도움말 모달 (`?` 키) — Phase 2c 부터 자리만 잡혀 있음.
-- `.env` 공통 위치 (whooing-mcp-server-wrapper 와 함께 옮기는
-  cross-project 작업).
-
-## CL #50940 — 0.5.0 — Phase 3 문서 정리 (cache 통합 사실 기록) (2026-05-10)
-
-**경위**: Phase 3 (sqlite 캐시) 의 코드 변경 (cache.py / test_cache.py /
-config.py / app.py / screens 의 invalidate 통합) 은 monorepo 전환 중에
-다른 작업의 CL #50943 (monorepo CL B) 에 흡수되어 submit 됐다 — p4 move
-중 우리 새 파일도 함께 옮겨졌기 때문. 코드는 정상 위치 (`tui/`) 에 들어가
-있고 통합 테스트도 12개 모두 통과하지만, `CHANGELOG.md` / `DESIGN.md` /
-`MEMORY.md` 의 항목 갱신은 빠진 채라 본 CL 이 그 누락분만 보충한다.
-
-### 수정
-
-- `CHANGELOG.md` — 본 항목 (Phase 3) 추가.
-- `DESIGN.md` §6 — sqlite 캐시 (5번) 를 ✅ CL #50943 흡수 표시.
-- `MEMORY.md` §6 / §8 — Phase 3 진행 사실 + monorepo 전환의 영향 기록.
-- `pyproject.toml` + `__init__.py` — 0.4.0 → 0.5.0.
-
-### Phase 3 의 실제 코드 변경 (CL #50943 에 흡수, 2026-05-10)
-
-- `tui/src/whooing_tui/cache.py` — `CacheStore` (sqlite-backed inter-session
-  store). accounts TTL 1시간 / entries TTL 5분, mutation 시 invalidate.
-  `:memory:` 도 지원 (테스트). `default_cache_path()` 가
-  `.whooing-tui-cache/whooing-tui.sqlite` 반환 (gitignore 차단).
-- `tui/src/whooing_tui/client.py::CachedWhooingClient` — `WhooingClient` 와
-  같은 인터페이스의 wrapper. accounts/entries cache, mutation 시
-  invalidate, `invalidate_section(section_id)` public.
-- `tui/src/whooing_tui/config.py` — `[cache]` 섹션 (`enabled` /
-  `accounts_ttl_sec` / `entries_ttl_sec`).
-- `tui/src/whooing_tui/app.py::run_app` — `cfg.cache_enabled` 면 sqlite
-  캐시 wrapper 빌드해 주입.
-- `tui/src/whooing_tui/screens/home.py` / `entries.py` — `r` 액션이
-  `invalidate_section()` 을 callable 로 발견 시 강제 invalidate 후 fetch.
-- `tui/whooing-tui.toml.example` — `[cache]` 옵션 문서화.
-- `tui/tests/test_cache.py` — 12 cases (CacheStore 단위 + CachedWhooingClient
-  통합).
-
-검증: monorepo 전체 `make test` → core 72 + tui 94 = **166 passed**.
-
-### 의도적 누락 (다음 CL 로)
-
-- 자주입력·매월입력 매칭 (`frequent_items` / `monthly_items`).
-- 후잉 공식 MCP 직접 호출 (Phase 4).
-- 화면 도움말 모달 / 콘솔 스크립트 검증 / coverage / `.env` 공통 위치.
-
-## CL #50939 — 0.4.0 — Phase 2c: EntryEditDialog + WhooingClient CRUD (2026-05-10)
-
-후잉 거래의 추가/수정/삭제. 이 CL 부터 mcp-server-wrapper 와 정책 분기 —
-wrapper 는 read-only 로 mutating 을 공식 MCP 에 위임하지만, 본 TUI 는
-사용자가 직접 키보드로 다루는 도구라 후잉 REST 의 mutation endpoint 를
-직접 호출한다.
-
-### 추가
-
-- `src/whooing_tui/screens/edit_entry.py`
-  - `EntryEditDialog(ModalScreen[EntryDraft|None])` — 거래 추가/수정 폼.
-    필드 6개 (date / money / left / right / item / memo). `Ctrl+S` 저장,
-    `Esc` 취소.
-    * `_resolve_account()` — `account_id` 직접 입력 또는 표시명(한국어/
-      영문, 대소문자 무시, 양 끝 공백 허용) 양쪽 매칭.
-    * `_strip_comma_int()` — 천단위 콤마 입력 허용.
-    * 검증: YYYYMMDD, money 양수, left ≠ right, account 매칭.
-    * 수정 모드는 `existing` dict 로 prefill + `entry_id` 보존.
-  - `ConfirmModal(ModalScreen[bool])` — 짧은 yes/no 모달. 삭제처럼 되돌릴
-    수 없는 액션 직전. `y`/`n` 키와 button 둘 다.
-- `tests/test_edit_entry_dialog.py` — 폼 검증 단위 테스트 8 cases
-  (`_strip_comma_int`, `_resolve_account` by id/title/case-insensitive/
-  unknown, dataclass instantiation).
-- `tests/test_client_mutations.py` — `respx` 7 cases:
-  * create_entry POST body 정확성 + optional 필드 omit.
-  * update_entry PUT 변경 필드만 (None 은 omit — 덮어쓰기 방지).
-  * delete_entry DELETE + section_id 쿼리.
-  * 400 → USER_INPUT, 401 → AUTH 매핑.
-  * `_coerce_dict` variants.
-- `tests/test_entries_mutate.py` — App.run_test() 통합 5 cases:
-  * `n` (new) → dialog → dismiss(EntryDraft) → create_entry 호출 →
-    SessionState 의 type 으로 보강된 body. 재로드 후 row count 증가.
-  * `enter` (edit) → dialog 가 선택된 row prefill + entry_id → update_entry.
-  * `d` (delete) → ConfirmModal → No 면 호출 안 함, Yes 면 delete_entry.
-  * create 실패 시 status error.
-  * 빈 entries 에서 delete → "선택된 거래 없음" 안내.
-
-### 수정
-
-- `src/whooing_tui/client.py`
-  - `_request(method, path, ...)` 공통 HTTP 호출 — throttle / 429
-    backoff / 응답 매핑을 GET 외 POST/PUT/DELETE 도 사용하도록 추출.
-  - `_get` / `_post` / `_put` / `_delete` 단순 wrapper.
-  - **`create_entry` / `update_entry` / `delete_entry`** — 후잉 공식 MCP
-    의 `entries-create/update/delete` schema 와 동일한 입력 필드.
-    RESTful 가정으로 `POST /entries.json`, `PUT /entries/<id>.json`,
-    `DELETE /entries/<id>.json?section_id=` 호출. 라이브 검증에서 path
-    가 다르면 `_ENTRIES_PATH` / `_entry_path()` 만 조정 가능.
-  - `_coerce_dict()` — mutation 응답이 dict / list[dict] / 그 외 어떤
-    형태로 와도 dict 1개로 정규화 (보수적 처리).
-- `src/whooing_tui/screens/entries.py`
-  - 키 바인딩: `n` (New), `enter` (Edit), `d` (Delete) — 모두 priority.
-  - `_entries: list[dict]` — DataTable row index ↔ entry 1:1 매핑으로
-    선택된 거래의 entry_id 추적.
-  - `action_new_entry` / `action_edit_entry` / `action_delete_entry` +
-    `_submit_create` / `_submit_update` / `_submit_delete` (worker group
-    `mutate`). 성공 시 `refresh_entries` 자동 호출. 실패 시 status error.
-  - `_account_type()` — SessionState.flat 에서 type 조회.
-- `CHANGELOG.md` / `DESIGN.md` / `MEMORY.md` — Phase 2c 진행 상황.
-- `pyproject.toml` + `src/whooing_tui/__init__.py` — 0.3.0 → 0.4.0.
-
-### 검증
-
-  make test    82 passed in 5.24s
-               (Phase 1 48 + 2a 6 + 2b 6 + 2c 22)
-
-  라이브 검증은 사용자 수동으로 미룸 (분당 20 한도 부담 회피). `make run`
-  → 'n' 키로 테스트 섹션(s133178) 에 작은 거래 입력 시도. 후잉 REST 의
-  실 path 가 RESTful 가정과 다르면 `WhooingClient._ENTRIES_PATH` /
-  `_entry_path()` 만 조정.
-
-### 정책 분기 — mcp-server-wrapper 와의 차이
-
-- mcp-server-wrapper: read-only. 거래 mutation 은 후잉 공식 MCP 의
-  `entries-create/update/delete` 에 위임 (`tools/delete.py` 의 chained
-  call).
-- whooing-tui (본 도구): 사용자가 직접 키보드로 다룰 때 latency / 의존성
-  부담을 줄이기 위해 후잉 REST 를 직접 호출.
-
-같은 후잉 토큰을 공유하므로 한쪽 한도를 다른 쪽이 갉아먹는다 — 두 도구를
-동시에 사용할 때는 분당 20 한도가 합산임을 인지.
-
-### 의도적 누락 (다음 CL 로)
-
-- 자주입력·매월입력 매칭 (frequent_items.list / monthly_items.list).
-- 로컬 sqlite 캐시.
-- 라이브 검증 (사용자 수동).
-
-## CL #50937 — 문서 다이어그램을 mermaid 로 마이그레이션 (2026-05-10)
-
-DESIGN.md §2 자매 도구 관계 + §3.1 호출 그래프 ASCII → mermaid flowchart.
-§3 디렉토리 트리는 markdown 표로. MEMORY.md §10 — 다이어그램 가이드라인
-보존 (사용자 지시 2026-05-10).
-
-## CL #50936 — 0.3.0 — Phase 2b: EntriesScreen + 100-cap footer (2026-05-10)
-
-### 추가
-
-- `src/whooing_tui/screens/entries.py` — EntriesScreen.
-  - `DataTable` 컬럼: date / money / left / right / item / memo.
-  - 진입 시 최근 N일 (`config.entries.default_window_days`, 기본 30)
-    자동 fetch.
-  - account_id 는 `SessionState.title_of()` 로 즉시 표시명으로 변환 —
-    사용자에게는 코드 대신 이름.
-  - money 는 천단위 콤마 (`_fmt_money` — None / 빈 값 안전).
-  - 정렬: `entry_date desc`, 동일 일자는 `entry_id desc` 보조.
-  - **100-cap 인지 footer**: 같은 entry_date 가 정확히 100건이면 누락
-    가능성 의심 → status bar 의 `warn` 클래스 + `last_cap_warning=True`.
-    일자 목록을 메시지에 노출 (앞 3개 + "…").
-  - 키 바인딩: `q`/`escape` (Back), `r` (Refresh), `+` (윈도우 +7일,
-    max 5년), `-` (-7일, min 1일).
-- `tests/test_entries_screen.py` — `App.run_test()` 통합 6 cases:
-  - HomeScreen → `e` → EntriesScreen push + entries 자동 로드.
-  - account_id → title 변환, money 콤마 포맷.
-  - `q` 로 HomeScreen 복귀.
-  - `+` 가 윈도우 확장 + 재로드 (start_date 가 더 이른 날짜).
-  - 단일 일자에 100건 = warn 클래스 + 메시지.
-  - 후잉 ToolError 시 error 클래스 + 0행.
-  - 빈 sections 상태에서 `action_open_entries` 가 push 거부 + status
-    error.
-
-### 수정
-
-- `src/whooing_tui/screens/home.py` — `e` 키 바인딩 + `action_open_entries`.
-  - `Binding(priority=True)` — OptionList / Tree focus 일 때도 화면
-    레벨 액션이 우선이도록.
-  - 활성 섹션 없으면 status error 로 안내, push 거부.
-  - 지연 import (`from .entries import EntriesScreen`) 로 패키지 초기화
-    분리.
-- `CHANGELOG.md` / `DESIGN.md` / `MEMORY.md` — Phase 2b 진행 상황 갱신.
-- `pyproject.toml` + `src/whooing_tui/__init__.py` — 0.2.0 → 0.3.0.
-
-### 검증
-
-  make test    60 passed in 2.55s (Phase 1 48 + HomeScreen 6 + EntriesScreen 6)
-
-### 의도적 누락 (다음 CL 로)
-
-- EntryEditDialog (거래 추가/수정) + WhooingClient 의 POST/PUT/DELETE.
-- 로컬 sqlite 캐시.
-- 화면 도움말 (`?` 모달).
-- 날짜 범위 직접 입력 dialog (`d` 키 — bindings 자리 잡힘, dialog 미구현).
-
-### 학습된 함정
-
-- `DataTable.column_count` 속성은 textual 8.x 에 없음 — `len(table.columns)`
-  사용. 후속 화면 테스트에 동일 적용.
-- `default = sections or [...]` 패턴은 빈 리스트도 falsy 로 잡아 default
-  로 덮어버림 → `is None` 분기 필수. 후속 FakeClient 재사용 시 주의.
-- OptionList / Tree 안에서 화면 레벨 단축키를 잡으려면
-  `Binding(priority=True)` 필요. Phase 2a 의 `r` 도 함께 priority=True 로
-  승격해 두었다.
-
-## CL #50935 — 0.2.0 — Phase 2a: HomeScreen (2026-05-10)
-
-### 추가
-
-- `src/whooing_tui/screens/__init__.py` — Textual Screen 패키지.
-- `src/whooing_tui/screens/home.py` — HomeScreen.
-  - 좌: 섹션 picker (`OptionList`, 키보드 navigation + enter 선택).
-  - 우: 활성 섹션의 계정과목 트리 (`Tree`, type 별 그룹: 자산/부채/자본/
-    수입/지출/그룹).
-  - 첫 mount 시 `sections-list` 자동 호출 + 첫 섹션 자동 활성화 → 사용자
-    액션 없이도 화면이 의미있게 채워진다.
-  - `@work(exclusive=True)` 로 sections / accounts 호출을 그룹별 직렬화 —
-    빠른 섹션 전환 시 마지막 1개만 결과 적용.
-  - `r` (refresh): 활성 섹션의 accounts 재로드, 섹션 미선택이면 sections
-    재로드.
-  - 후잉 ToolError 발생 시 화면 하단 status bar 가 error 클래스로 표시
-    (모달 없음 — Phase 2a 는 화면 1개로 단순 유지).
-  - `HomeScreen.last_status` 가 마지막 메시지를 평문으로 보관 (테스트가
-    Static 의 사적 API 에 의존하지 않도록).
-- `tests/test_home_screen.py` — Textual `App.run_test()` 기반 통합
-  테스트 6 cases. `FakeClient` 로 실 후잉 호출 없이:
-  - 첫 mount 후 sections + accounts 자동 로드.
-  - 다른 섹션 선택 시 SessionState 갱신 + accounts 재호출 + 이전 섹션
-    캐시 무효화.
-  - sections / accounts 에러 시 status bar 의 error 클래스.
-  - 빈 sections 시 picker 가 disabled placeholder 1개만.
-  - `r` action 이 활성 섹션의 accounts 만 재로드 (sections 재호출 안 함).
-
-### 수정
-
-- `src/whooing_tui/app.py` — Phase 1 placeholder 제거.
-  - `WhooingTuiApp.__init__(client=...)` 로 의존성 주입 (테스트 친화).
-  - `self.session = SessionState()` — 단일 세션 상태가 모든 화면에 노출.
-  - `on_mount` 에서 `HomeScreen` push.
-  - `run_app()` 가 진입 시 `load_auth_from_env()` 검증 후 GUI 실행 — 토큰
-    문제 시 stderr 안내 + return 3 (TUI 에서 모달 띄우는 것보다 즉시
-    .env 를 고치게 만든다).
-- `src/whooing_tui/theming.tcss` — Header/Footer 의 dock + 색 미세조정
-  (HomeScreen DEFAULT_CSS 가 화면 디테일을 책임지므로 본 파일은 전역
-  최소만).
-- `tests/test_auth.py::test_load_auth_from_env_missing` — `monkeypatch.
-  setenv("WHOOING_AI_TOKEN", "")` 로 변경. dotenv 의 자동 로드가 monkeypatch.
-  delenv 직후 .env 의 토큰을 다시 채우는 문제를 회피 (load_dotenv 는
-  override=False 가 기본이라 빈 문자열은 유지된다).
-
-### 검증
-
-  make test           54 passed in 0.98s (Phase 1 48 + HomeScreen 6)
-  make run            HomeScreen 정상 mount + sections/accounts 로드 (육안 확인)
-
-### 의도적 누락 (다음 CL 로 이연)
-
-- EntriesScreen — HomeScreen 에서 enter 두 번에 push 되는 거래내역 표.
-- EntryEditDialog — 거래 추가/수정. WhooingClient 의 POST/PUT/DELETE 동시.
-- 로컬 sqlite 캐시.
-
-## CL #1 — 0.1.0 — Phase 1 골격 (2026-05-10)
-
-### 추가
-
-- 프로젝트 메타파일: `pyproject.toml` (hatchling, textual≥0.50, httpx,
-  pydantic, python-dotenv), `Makefile` (install/test/run/sections/clean),
-  `.gitignore`, `.env.example`, `whooing-tui.toml.example`, `LICENSE` (MIT).
-- 패키지 `src/whooing_tui/`:
-  - `auth.py` — `WhooingAuth` (X-API-Key, 마지막 4자 마스크) +
-    `load_auth_from_env`.
-  - `errors.py` — HTTP code → ToolError(USER_INPUT/AUTH/RATE_LIMIT/UPSTREAM)
-    매핑, `sanitize_for_log` 로 webhook_token 등 비밀 키 마스크.
-  - `dates.py` — KST(Asia/Seoul) 강제 YYYYMMDD/YYYYMM 파서, 1년 단위 분할.
-  - `models.py` — Pydantic `Section` / `Account` / `Entry` (extra=allow) +
-    `ToolError`.
-  - `client.py` — httpx 기반 `WhooingClient`. 분당 20 sliding-window
-    throttle, 429 backoff (1/2/4/8s, max 4회), 100-cap entries bisection,
-    응답 shape (list / {key: list} / {id: obj}) 정규화.
-  - `config.py` — TOML `[ui]` / `[entries]` 로더, `$WHOOING_TUI_CONFIG`
-    override.
-  - `state.py` — `SessionState` (활성 섹션 + 계정 양방향 인덱스).
-  - `cli.py` — `whooing-tui {sections|accounts|entries} list` 헤드리스
-    서브커맨드, `--json` / `-v` / `--section` / `--days` / `--start --end`,
-    종료 코드 (0/2/3/4/5/6).
-  - `app.py` + `theming.tcss` — Textual App 자리표시자 (`q` quit, `t`
-    theme toggle). Phase 2 에서 실제 화면으로 대체.
-  - `__main__.py` — `python -m whooing_tui` 진입점.
-- 테스트 `tests/`:
-  - `test_auth.py` — 토큰 마스크, env 로딩.
-  - `test_dates.py` — KST 포맷, 1년 분할, 잘못된 입력.
-  - `test_errors.py` — 응답 코드 매핑, secret sanitize.
-  - `test_config.py` — TOML 로딩, 부분 override, malformed fallback.
-  - `test_state.py` — 섹션 전환 시 계정 캐시 무효화.
-  - `test_client.py` — `respx` 로 sections / accounts / entries / 401 / 400.
-- 문서: `README.md` (한국어 quickstart), `DESIGN.md` (아키텍처·후잉 API
-  규칙), 본 `CHANGELOG.md`.
-
-### 의도적 누락 (Phase 2 로 이연)
-
-- HomeScreen / EntriesScreen / EntryEditDialog.
-- POST/PUT/DELETE 메서드 (`WhooingClient` 는 GET 만).
-- 로컬 sqlite 캐시.
-- 자주입력·매월입력 매칭.
-
-### 설계 결정 메모
-
-- whooing-mcp-server-wrapper 와 코드 중복: 의존성·릴리즈 사이클을 분리하기
-  위함. `auth.py` / `dates.py` / `errors.py` 는 거의 동일하게 인용.
-- `client.py` 는 mcp-server 쪽의 `read-only` 경로만 가져왔다. Phase 2 에서
-  CRUD 확장 예정.
-- TUI 가 아직 placeholder 인 이유: 헤드리스 CLI 로도 즉시 가치를 주고,
-  Phase 2 의 화면 작업을 별도 CL 로 깨끗이 떨어트리기 위해.
+**0.17.x 이전 (CL #51119 ~ #1)** — [`CHANGELOG-archive-0.17.md`](./CHANGELOG-archive-0.17.md) 참고.

@@ -382,6 +382,10 @@ class EntryEditDialog(ModalScreen[EntryDraft | None]):
                     placeholder="해시태그 (로컬 db only). 예: #식비 #저녁",
                     id="f-tags",
                 )
+                # CL #51149+ (H7): typing 중 매칭 태그 hint Static.
+                # Enter 로 TagsPicker 가 정식 picker 지만, hint 가 즉시
+                # 보여주면 사용자가 Picker 안 띄워도 직접 타이핑 완성 가능.
+                yield Static("", id="f-tags-hint")
             yield Static("", id="form-error")
             with Horizontal(id="button-row"):
                 yield Button("Save (Ctrl+S)", id="btn-save", variant="primary")
@@ -419,6 +423,52 @@ class EntryEditDialog(ModalScreen[EntryDraft | None]):
         if event.input.id != "f-tags":
             return
         self._open_tags_picker()
+
+    def on_input_changed(self, event: Input.Changed) -> None:
+        """CL #51149+ (H7): tags Input typing 중 hint 갱신 — top 3 매칭."""
+        if event.input.id != "f-tags":
+            return
+        self._refresh_tags_hint()
+
+    def _refresh_tags_hint(self) -> None:
+        """현재 tags Input value 의 마지막 토큰을 prefix 로 매칭. 비면 빈 hint."""
+        try:
+            tags_input = self.query_one("#f-tags", Input)
+            hint_static = self.query_one("#f-tags-hint", Static)
+        except Exception:  # pragma: no cover
+            return
+        from whooing_tui.screens.tags_picker import filter_tags
+
+        raw = tags_input.value
+        # 마지막 토큰만 — 사용자가 지금 타이핑 중인 것.
+        # whitespace/콤마/`#` 으로 split 한 마지막 비빈 token.
+        import re as _re
+        tokens = _re.split(r"[\s,]+", raw)
+        last = tokens[-1].lstrip("#").strip() if tokens else ""
+        if not last:
+            hint_static.update("")
+            return
+        # 이미 입력란에 있는 태그 (중복 추천 회피).
+        existing_in_input = set()
+        for t in tokens[:-1]:
+            t = t.lstrip("#").strip()
+            if t:
+                existing_in_input.add(t)
+        # 후보 = _all_tags_db (이미 prefill).
+        candidates = [
+            t for t in self._all_tags_db.keys()
+            if t not in existing_in_input
+        ]
+        matched = filter_tags(last, candidates)[:3]
+        if not matched:
+            hint_static.update("[dim](매칭 없음)[/dim]")
+            return
+        # `#tag (count)` 3개 까지.
+        bits = []
+        for t in matched:
+            count = self._all_tags_db.get(t, 0)
+            bits.append(f"#{t}[dim]({count})[/dim]")
+        hint_static.update("[dim]💡 추천:[/dim] " + " ".join(bits))
 
     def _open_account_picker(self, button_id: str) -> None:
         """left/right 버튼 → AccountPickerScreen push, 결과로 버튼 갱신."""

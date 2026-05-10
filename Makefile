@@ -93,6 +93,29 @@ run:
 sections:
 	$(PY) -m whooing_tui sections list
 
+# CL #51132+ (A2): 후잉에 없는 entry_id 의 첨부 row + 디스크 파일 정리.
+# 안전을 위해 default 는 dry-run — 실 삭제는 `make gc-attachments-go`.
+gc-attachments:
+	$(PY) -m whooing_tui gc-attachments --dry-run
+
+gc-attachments-go:
+	$(PY) -m whooing_tui gc-attachments
+
+# CL #51146+ (A17): 첨부 export — 사용자가 SECTION / OUT 변수 지정.
+# 예: make export-attachments SECTION=s9046 OUT=/tmp/whooing-attach.zip
+SECTION ?=
+ENTRY ?=
+OUT ?= /tmp/whooing-attachments.zip
+export-attachments:
+	@if [ -n "$(ENTRY)" ]; then \
+		$(PY) -m whooing_tui export-attachments --entry $(ENTRY) --out $(OUT); \
+	elif [ -n "$(SECTION)" ]; then \
+		$(PY) -m whooing_tui export-attachments --section $(SECTION) --out $(OUT); \
+	else \
+		echo "Usage: make export-attachments SECTION=s9046 OUT=/tmp/x.zip"; \
+		echo "       make export-attachments ENTRY=e1234 OUT=/tmp/x.zip"; \
+	fi
+
 clean:
 	find . -type d \( -name __pycache__ -o -name .pytest_cache -o -name .ruff_cache -o -name .mypy_cache -o -name '*.egg-info' \) -prune -exec rm -rf {} +
 	@echo "cleaned"

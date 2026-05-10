@@ -765,6 +765,155 @@ class WhooingClient:
             }),
         )
 
+    # ---- monthly entries (정기/반복) — CL #51152+ -----------------------
+    # 후잉 공식 docs 의 정확한 path 미공개 — 추정 RESTful 패턴.
+    # 라이브 검증 시 path 가 다르면 `_monthly_path` / `_monthly_collection_path`
+    # 만 조정. 사용 가능성 높은 후보 (관찰):
+    #   /monthly.json                — collection list / create
+    #   /monthly/<id>.json           — single update / delete
+    #   /entry_monthly.json          — alternative
+    # 첫 번째 후보로 시도, 실패 시 ToolError("ENDPOINT_UNKNOWN", ...).
+
+    @staticmethod
+    def _monthly_collection_path() -> str:
+        return "/monthly.json"
+
+    @staticmethod
+    def _monthly_path(monthly_id: str) -> str:
+        return f"/monthly/{monthly_id}.json"
+
+    async def list_monthly(self, *, section_id: str) -> list[dict[str, Any]]:
+        """매월 입력 거래 (반복 거래) 의 list. CL #51152+ 추정 endpoint.
+
+        spec 미확인 — 첫 호출 실패 시 ToolError 가 caller 에 전달돼 사용자
+        라이브 검증 안내. 실 path 가 다르면 `_monthly_collection_path` 만
+        조정해 즉시 정상 작동.
+        """
+        results = await self._get(
+            self._monthly_collection_path(),
+            params={"section_id": section_id},
+        )
+        return self._normalize_collection(results, key="rows")
+
+    async def create_monthly(
+        self,
+        *,
+        section_id: str,
+        target_day: int,
+        l_account: str,
+        l_account_id: str,
+        r_account: str,
+        r_account_id: str,
+        money: int,
+        item: str = "",
+        memo: str = "",
+    ) -> dict[str, Any]:
+        """매월 입력 거래 신규. `target_day` = 1~31 (예: 25일).
+
+        다른 필드는 일반 entry 와 동일.
+        """
+        body: dict[str, Any] = {
+            "section_id": section_id,
+            "target_day": int(target_day),
+            "l_account": l_account, "l_account_id": l_account_id,
+            "r_account": r_account, "r_account_id": r_account_id,
+            "money": int(money),
+            "item": item, "memo": memo,
+        }
+        results = await self._post(self._monthly_collection_path(), json_body=body)
+        return _coerce_dict(results)
+
+    async def delete_monthly(
+        self, *, section_id: str, monthly_id: str,
+    ) -> dict[str, Any]:
+        """매월 입력 거래 삭제. CL #51152+."""
+        results = await self._delete(
+            self._monthly_path(monthly_id),
+            params={"section_id": section_id},
+        )
+        return _coerce_dict(results)
+
+    # ---- budget setter — CL #51153+ --------------------------------------
+    # 후잉의 budget 은 `/budget/<account>.json` (account = expenses / income)
+    # GET 으로 조회 가능. setter 는 동일 path POST 또는 PUT 추정.
+
+    async def set_budget(
+        self,
+        *,
+        section_id: str,
+        account: str,            # 'expenses' | 'income'
+        account_id: str,         # 어느 항목 (예: x50 식비)
+        amount: int,
+        start_date: str | None = None,
+        end_date: str | None = None,
+    ) -> dict[str, Any]:
+        """예산 1건 set/update. CL #51153+ 추정 endpoint.
+
+        같은 (section_id, account_id, period) 면 upsert 가정. 라이브 검증
+        실패 시 `_budget_path` 변경 또는 PUT 으로 전환.
+        """
+        body: dict[str, Any] = _drop_none({
+            "section_id": section_id,
+            "account_id": account_id,
+            "amount": int(amount),
+            "start_date": start_date, "end_date": end_date,
+        })
+        results = await self._post(
+            f"/budget/{account}.json", json_body=body,
+        )
+        return _coerce_dict(results)
+
+    async def delete_budget(
+        self,
+        *,
+        section_id: str,
+        account: str,
+        account_id: str,
+    ) -> dict[str, Any]:
+        """예산 1건 제거. CL #51153+."""
+        results = await self._delete(
+            f"/budget/{account}.json",
+            params={"section_id": section_id, "account_id": account_id},
+        )
+        return _coerce_dict(results)
+
+    # ---- goal setter — CL #51154+ ----------------------------------------
+
+    async def set_budget_goal(
+        self,
+        *,
+        section_id: str,
+        amount: int,
+        target_date: str | None = None,
+    ) -> dict[str, Any]:
+        """장기목표 set. CL #51154+ 추정 endpoint."""
+        body = _drop_none({
+            "section_id": section_id,
+            "amount": int(amount),
+            "target_date": target_date,
+        })
+        results = await self._post("/budget_goal.json", json_body=body)
+        return _coerce_dict(results)
+
+    async def set_goal(
+        self,
+        *,
+        section_id: str,
+        target_month: str,    # YYYYMM
+        amount: int,
+    ) -> dict[str, Any]:
+        """월별 자본 목표값 set. CL #51154+ 추정 endpoint.
+
+        장기목표 파생이지만 month-별 override 가능 (후잉의 일반적 패턴).
+        """
+        body = {
+            "section_id": section_id,
+            "target_month": target_month,
+            "amount": int(amount),
+        }
+        results = await self._post("/goal.json", json_body=body)
+        return _coerce_dict(results)
+
     @staticmethod
     def _normalize_collection(results: Any, key: str) -> list[dict[str, Any]]:
         """후잉 응답이 list / {key: [...]} / {id: obj} 셋 다 가능하다.
