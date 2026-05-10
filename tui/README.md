@@ -9,7 +9,7 @@
 > [`mcp/`](../mcp) 에 보존되며, TUI 의 `mcp_bridge.py` 가 그 `OfficialMcpClient`
 > 를 한정적으로 호출 (deprecated, 후속 정리 예정).
 
-**현재 0.13.1 — Phase 6 + 계정과목 picker 트리 + tags picker + UI 정렬 정리 (CL #51087)**:
+**현재 0.13.2 — Phase 6 + 계정과목 picker 트리 + tags picker + UI 정렬 정리 + ←/→ 트리 nav (CL #51096)**:
 
 - Phase 1: 핵심 라이브러리 + 헤드리스 CLI
 - Phase 2a: HomeScreen (섹션 picker + 활성 섹션 계정과목 트리)

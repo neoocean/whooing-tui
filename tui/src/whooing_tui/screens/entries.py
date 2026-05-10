@@ -107,6 +107,21 @@ class EntriesScreen(Screen):
         height: 1fr;
         border: round $accent;
     }
+    /* CL #51096+: cursor 가 sentinel ([+ 새 거래 추가]) 위에 있을 때만
+       적용되는 클래스. 일반 거래 row 의 파란 cursor 와 색을 다르게 해
+       사용자가 "이 row 는 다른 기능 (입력 추가) 임" 을 즉시 인지하도록.
+       focused / blurred 양쪽 다 같은 노란/검정 톤으로 통일 — 의도적으로
+       눈에 띄게.  */
+    #entries-table.sentinel-active > .datatable--cursor {
+        background: $warning;
+        color: black;
+        text-style: bold;
+    }
+    #entries-table.sentinel-active:focus > .datatable--cursor {
+        background: $warning;
+        color: black;
+        text-style: bold;
+    }
     #status {
         height: 1;
         padding: 0 1;
@@ -442,10 +457,30 @@ class EntriesScreen(Screen):
         sentinel row (0) 에 cursor 가 가면 marker 가 자동으로 cleanup
         되고, status 에 "Enter = 새 거래 추가" 안내. `_column_active=False`
         이면 _update_active_cell_marker 가 알아서 early return.
+
+        CL #51096+: cursor 가 sentinel 위에 있는 동안 table 에 `.sentinel-
+        active` class 를 토글 — CSS 가 cursor cell 의 배경/글자색을 노란/
+        검정 으로 바꿔 일반 거래 row 와 시각적으로 구분.
         """
         self._update_active_cell_marker()
+        self._update_sentinel_cursor_class()
         if self._is_on_sentinel_row():
             self.set_status("[Enter = 새 거래 추가]")
+
+    def _update_sentinel_cursor_class(self) -> None:
+        """sentinel row 위에서만 `.sentinel-active` class 를 table 에 부여.
+
+        row_highlighted 이벤트 + `_render_table` 마지막 양쪽에서 호출 —
+        초기 빈 entries 처럼 cursor 이동이 없는 케이스도 일관되게 갱신.
+        """
+        try:
+            table = self.query_one("#entries-table", DataTable)
+        except Exception:  # pragma: no cover — 화면 unmount 직후
+            return
+        if self._is_on_sentinel_row():
+            table.add_class("sentinel-active")
+        else:
+            table.remove_class("sentinel-active")
 
     def _update_active_cell_marker(self) -> None:
         """marker 상태와 cell content 를 동기화. sentinel-aware (CL #51074+).
@@ -1133,9 +1168,13 @@ class EntriesScreen(Screen):
         except Exception:  # pragma: no cover — coord stale
             pass
 
-        # render 후 marker 재적용 (sentinel 아닌 row 에서만).
+        # render 후 marker 재적용 (sentinel 아닌 row 에서만) + sentinel
+        # cursor 색상 클래스 동기화. row_highlighted 이벤트가 발화하지 않는
+        # edge case (예: cursor 가 같은 row 에 머무는 빈 entries 부팅) 도
+        # 안전하게 갱신.
         self._marked_cell = None
         self._update_active_cell_marker()
+        self._update_sentinel_cursor_class()
 
     def _update_window_status(
         self,

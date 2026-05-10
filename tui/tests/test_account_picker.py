@@ -215,6 +215,68 @@ async def test_picker_branch_enter_toggles_expand():
 
 
 @pytest.mark.asyncio
+async def test_picker_right_arrow_expands_or_descends():
+    """CL #51096+: → 가 접힌 카테고리는 펼침, 펼친 카테고리는 첫 자식으로 이동."""
+    fake = FakeClient()
+    app = WhooingTuiApp(client=fake)  # type: ignore[arg-type]
+    async with app.run_test() as pilot:
+        await _open_entries(app)
+        from textual.widgets import Tree
+
+        await app.push_screen(AccountPickerScreen(app.session, side="left"))
+        await pilot.pause()
+        tree = app.screen.query_one("#acc-tree", Tree)
+        cats = list(tree.root.children)
+        expenses_cat = next(c for c in cats if c.data == "expenses")
+        # 초기에는 첫 카테고리(자산)가 펼쳐져 있을 수 있음 — expenses 는 접힘
+        assert expenses_cat.is_expanded is False
+        # cursor 를 expenses 로 옮기고 → 누름
+        tree.move_cursor(expenses_cat)
+        await pilot.press("right")
+        await pilot.pause()
+        assert expenses_cat.is_expanded is True
+        # cursor 그대로 (펼침만)
+        assert tree.cursor_node is expenses_cat
+        # 다시 → → 첫 자식 (식비) 으로 cursor 이동
+        await pilot.press("right")
+        await pilot.pause()
+        assert tree.cursor_node.data == ("x20", "식비", "expenses")
+
+
+@pytest.mark.asyncio
+async def test_picker_left_arrow_collapses_or_ascends():
+    """CL #51096+: ← 가 펼친 카테고리는 접음, leaf 는 부모로 이동."""
+    fake = FakeClient()
+    app = WhooingTuiApp(client=fake)  # type: ignore[arg-type]
+    async with app.run_test() as pilot:
+        await _open_entries(app)
+        from textual.widgets import Tree
+
+        await app.push_screen(
+            AccountPickerScreen(app.session, side="left", current_id="x20"),
+        )
+        await pilot.pause()
+        tree = app.screen.query_one("#acc-tree", Tree)
+        cats = list(tree.root.children)
+        expenses_cat = next(c for c in cats if c.data == "expenses")
+        # current_id="x20" 이라 expenses 자동 펼침 + cursor 가 식비 leaf 위.
+        assert expenses_cat.is_expanded is True
+        assert tree.cursor_node.data == ("x20", "식비", "expenses")
+        # leaf 위에서 ← 누르면 부모 카테고리로 cursor 이동, 펼침은 유지.
+        await pilot.press("left")
+        await pilot.pause()
+        assert tree.cursor_node is expenses_cat
+        assert expenses_cat.is_expanded is True
+        # 카테고리 위에서 ← 누르면 접힘, cursor 유지.
+        await pilot.press("left")
+        await pilot.pause()
+        assert expenses_cat.is_expanded is False
+        assert tree.cursor_node is expenses_cat
+        # 모달 그대로
+        assert isinstance(app.screen, AccountPickerScreen)
+
+
+@pytest.mark.asyncio
 async def test_picker_leaf_enter_dismisses_with_account():
     """항목 leaf 위에서 Enter → dismiss((aid, title, type_key))."""
     fake = FakeClient()

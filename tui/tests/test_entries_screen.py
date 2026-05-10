@@ -1217,6 +1217,53 @@ async def test_sentinel_cell_uses_center_justified_text():
 
 
 @pytest.mark.asyncio
+async def test_sentinel_active_class_toggles_with_cursor():
+    """CL #51096+: cursor 가 sentinel 위에 있을 때만 table 에 `.sentinel-
+    active` 클래스가 부여돼 cursor 색상이 노란/검정 톤으로 바뀐다."""
+    fake = FakeClient(entries_by_section={"s1": _entries_for_filter()})
+    app = WhooingTuiApp(client=fake)  # type: ignore[arg-type]
+    async with app.run_test() as pilot:
+        from whooing_tui.screens.entries import EntriesScreen
+        await _wait_for(
+            lambda: isinstance(app.screen, EntriesScreen)
+            and app.screen.last_entry_count == 4,
+            timeout=3.0,
+        )
+        es: EntriesScreen = app.screen  # type: ignore[assignment]
+        table = es.query_one("#entries-table", DataTable)
+        # 초기 = sentinel 숨김 → class 없음
+        assert "sentinel-active" not in table.classes
+        # ↑ → sentinel 등장, cursor 가 sentinel
+        await pilot.press("up")
+        await pilot.pause()
+        assert es._is_on_sentinel_row()
+        assert "sentinel-active" in table.classes
+        # ↓ → sentinel 숨김, cursor 가 첫 실거래
+        await pilot.press("down")
+        await pilot.pause()
+        assert not es._is_on_sentinel_row()
+        assert "sentinel-active" not in table.classes
+
+
+@pytest.mark.asyncio
+async def test_sentinel_active_class_when_empty_entries():
+    """빈 entries 진입 시 sentinel only — 처음부터 class 부여."""
+    fake = FakeClient(entries_by_section={"s1": []})
+    app = WhooingTuiApp(client=fake)  # type: ignore[arg-type]
+    async with app.run_test() as pilot:
+        from whooing_tui.screens.entries import EntriesScreen
+        await _wait_for(
+            lambda: isinstance(app.screen, EntriesScreen)
+            and len(fake.list_entries_calls) >= 1,
+            timeout=3.0,
+        )
+        es: EntriesScreen = app.screen  # type: ignore[assignment]
+        table = es.query_one("#entries-table", DataTable)
+        assert es._is_on_sentinel_row()
+        assert "sentinel-active" in table.classes
+
+
+@pytest.mark.asyncio
 async def test_money_column_uses_right_justified_text():
     """CL #51087+: money 컬럼의 cell 은 Rich Text(justify="right") — 회계
     컨벤션에 맞춰 숫자를 오른쪽 정렬."""

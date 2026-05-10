@@ -2,6 +2,55 @@
 
 각 항목은 Perforce CL 단위로 끊는다.
 
+## CL #51096 — 0.13.2 — AccountPicker ←/→ 트리 펼침/접힘 + sentinel 하이라이트 색상 (사용자 요청) (2026-05-10)
+
+사용자 요청 2건 (한 CL 에 모두):
+
+1. **AccountPickerScreen 의 카테고리 트리에서 Enter 외에 ←/→ 방향키로도
+   펼침/접힘 가능하게**.
+2. **거래 목록의 sentinel ([+ 새 거래 추가]) 가 하이라이트 됐을 때 cursor
+   색상을 다른 톤으로** — 일반 거래 row 와 시각상 구분.
+
+### 추가
+
+- **AccountPickerScreen ←/→ 바인딩** (priority=True):
+  - `→` (`action_tree_expand_or_descend`):
+    - 접힌 카테고리 → 펼침 (cursor 유지).
+    - 펼친 카테고리 → 첫 자식 (leaf) 으로 cursor 이동.
+    - leaf → noop.
+  - `←` (`action_tree_collapse_or_ascend`):
+    - 펼친 카테고리 → 접음 (cursor 유지).
+    - 접힌 카테고리 → noop (가짜 root 가 숨김 — 부모로 갈 곳 없음).
+    - leaf → 부모 카테고리로 cursor 이동.
+  - hint 라벨 갱신: `↑/↓ 이동 / ←/→ 접힘·펼침 / Enter 선택 / Esc 취소`.
+
+- **sentinel 하이라이트 cursor 색상**: `EntriesScreen` 의 DataTable 에
+  `.sentinel-active` CSS 클래스를 동적 부여.
+  - cursor 가 sentinel row 위에 있을 때만 클래스 추가, 떠나면 제거.
+  - 클래스가 적용되면 `> .datatable--cursor` 의 background 가 `$warning`,
+    color `black`, text-style `bold` — 일반 거래 row 의 파란 cursor 와
+    시각상 구분.
+  - 토글 helper: `_update_sentinel_cursor_class()`.
+  - row_highlighted 이벤트 + `_render_table` 마지막 양쪽에서 호출 — 빈
+    entries 부팅 같은 edge case 도 일관 갱신.
+
+### 함정 / 회귀 방지
+
+- `tree.move_cursor(target_leaf)` 가 `on_mount` 직후엔 무효 (Tree 의
+  `_tree_lines` layout 이 같은 frame 에 안 끝나 `node._line == -1` →
+  cursor 가 첫 가시 노드로 떨어짐). `call_after_refresh` 로 한 frame
+  미뤄 cursor 가 정확히 target leaf 위에 안착.
+
+### 테스트
+
+- `tui/tests/test_account_picker.py` — 2 신규:
+  - `test_picker_right_arrow_expands_or_descends`
+  - `test_picker_left_arrow_collapses_or_ascends`
+- `tui/tests/test_entries_screen.py` — 2 신규:
+  - `test_sentinel_active_class_toggles_with_cursor`
+  - `test_sentinel_active_class_when_empty_entries`
+- 합계: 402 → **406 통과** (+4).
+
 ## CL #51087 — 0.13.1 — sentinel 가운데 정렬 + 카테고리 Enter 펼침 버그 + money 오른쪽 정렬 (사용자 요청) (2026-05-10)
 
 사용자 요청 3건 (한 CL 에 모두):

@@ -93,6 +93,11 @@ class AccountPickerScreen(ModalScreen[tuple[str, str, str] | None]):
     BINDINGS = [
         Binding("escape", "cancel", "Cancel", show=True),
         *bind_ko("q", "cancel", "Cancel", show=False),
+        # CL #51096+: 표준 트리 UX — ←/→ 로 카테고리 펼침/접힘 + 부모/첫
+        # 자식 이동. priority=True 로 Tree 의 default cursor 동작 (없음)
+        # 보다 우선.
+        Binding("right", "tree_expand_or_descend", "펼침/자식", show=True, priority=True),
+        Binding("left", "tree_collapse_or_ascend", "접힘/부모", show=True, priority=True),
     ]
 
     def __init__(
@@ -118,7 +123,8 @@ class AccountPickerScreen(ModalScreen[tuple[str, str, str] | None]):
                 f"[bold]계정과목 선택 — {side_label}[/bold]", id="picker-title",
             )
             yield Static(
-                "↑/↓ 이동 / Enter 펼침·선택 / Esc 취소", id="picker-hint",
+                "↑/↓ 이동 / ←/→ 접힘·펼침 / Enter 선택 / Esc 취소",
+                id="picker-hint",
             )
             tree: Tree[tuple[str, str, str] | str] = Tree("계정과목", id="acc-tree")
             tree.show_root = False  # 가짜 루트 숨김 — 카테고리가 시각상 최상위.
@@ -156,7 +162,10 @@ class AccountPickerScreen(ModalScreen[tuple[str, str, str] | None]):
         else:
             # cursor 를 target leaf 로 — `select_node` 는 `NodeSelected`
             # 이벤트를 발사해 모달이 즉시 dismiss 되므로 `move_cursor`.
-            tree.move_cursor(target_leaf)
+            # 다만 mount 직후엔 Tree 의 `_tree_lines` 가 아직 layout 안
+            # 된 상태일 수 있어 `node._line` 이 -1 → cursor 가 첫 가시 노드
+            # 로 떨어지는 회귀 (CL #51096 발견). 한 frame 미루기.
+            self.call_after_refresh(tree.move_cursor, target_leaf)
         tree.focus()
 
     # ---- helpers ------------------------------------------------------
@@ -177,6 +186,52 @@ class AccountPickerScreen(ModalScreen[tuple[str, str, str] | None]):
 
     def action_cancel(self) -> None:
         self.dismiss(None)
+
+    def action_tree_expand_or_descend(self) -> None:
+        """→ : 표준 트리 UX. 동작 표는 다음과 같다.
+
+        | 현재 위치       | →                            |
+        | -------------- | ----------------------------- |
+        | 접힌 카테고리    | 펼침 (cursor 유지)             |
+        | 펼친 카테고리    | 첫 자식 (leaf) 으로 cursor 이동  |
+        | leaf            | noop                          |
+        """
+        tree = self.query_one("#acc-tree", Tree)
+        node = tree.cursor_node
+        if node is None or node is tree.root:
+            return
+        if node.allow_expand:
+            if not node.is_expanded:
+                node.expand()
+                return
+            # 펼친 상태 — 첫 자식으로 cursor 이동.
+            children = list(node.children)
+            if children:
+                tree.move_cursor(children[0])
+
+    def action_tree_collapse_or_ascend(self) -> None:
+        """← : 표준 트리 UX. 동작 표는 다음과 같다.
+
+        | 현재 위치          | ←                              |
+        | ----------------- | ------------------------------ |
+        | 펼친 카테고리       | 접힘 (cursor 유지)              |
+        | 접힌 카테고리       | noop (이미 최상위 — 가짜 root 숨김) |
+        | leaf              | 부모 (카테고리) 로 cursor 이동      |
+        """
+        tree = self.query_one("#acc-tree", Tree)
+        node = tree.cursor_node
+        if node is None or node is tree.root:
+            return
+        if node.allow_expand:
+            if node.is_expanded:
+                node.collapse()
+            # 접힌 카테고리에서 ← 는 noop (root 가 숨김이라 부모로 갈 곳이
+            # 없다 — 사용자에게 시각상 변화 없음).
+            return
+        # leaf — 부모 카테고리로 cursor 이동.
+        parent = node.parent
+        if parent is not None and parent is not tree.root:
+            tree.move_cursor(parent)
 
     def on_tree_node_selected(self, event: Tree.NodeSelected) -> None:
         """leaf 가 선택됐으면 dismiss. branch 면 noop — Tree 의 `auto_expand`
