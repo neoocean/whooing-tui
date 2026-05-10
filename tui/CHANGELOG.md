@@ -2,6 +2,57 @@
 
 각 항목은 Perforce CL 단위로 끊는다.
 
+## CL #51068 — 0.10.3 — Esc 가 활성 필터도 함께 해제 (사용자 요청) (2026-05-10)
+
+사용자 요청: "오렌지색 커서로 필터링이 적용된 상태에서 ESC 키를 누르면
+커서 하이라이트 해제 및 동시에 필터도 해제되어야 합니다."
+
+이전 (0.10.2) 은 Esc 가 컬럼 marker 만 해제 — 필터는 별도 `c` 키. 사용자
+입장에서 marker + filter 가 한 묶음의 "활성 상태" 인데 Esc 가 일부만 해제
+해서 부자연스러움.
+
+### 변경
+
+`action_deactivate_column` 의 동작 결합:
+
+| 활성 marker | 활성 필터 | Esc 결과 |
+|---|---|---|
+| ✓ | ✓ | **둘 다 해제** (사용자 요청) |
+| ✓ | ✗ | marker 만 해제 |
+| ✗ | ✓ | filter 만 해제 (정상 도달 어려운 상태) |
+| ✗ | ✗ | noop (앱 종료 X — CL #51064 그대로) |
+
+### 수정
+
+- `screens/entries.py::action_deactivate_column`
+  * `_column_active` + `_active_filter` 둘 다 비활성이면 noop (변경 없음).
+  * 활성 marker → `_column_active=False`, marker cleanup.
+  * 활성 filter → `_active_filter=None`, `_entries = list(_all_entries)`,
+    `_render_table` 으로 plain 테이블 재렌더 (marker 비활성이라 깨끗).
+  * status 메시지: 필터까지 해제됐으면 `"컬럼 선택 / 필터 해제"`,
+    marker 만이면 `"컬럼 선택 해제"`.
+- `tests/test_entries_screen.py` — 2 cases 추가:
+  * `test_escape_with_active_filter_clears_both_marker_and_filter` — 필터
+    + marker 둘 다 활성 상태에서 Esc → 둘 다 해제, 4건 원본 복원, 표
+    안 어디에도 marker 없음.
+  * `test_escape_with_only_marker_no_filter_clears_only_marker` — marker
+    만 활성, filter 비활성 → Esc 가 marker 만 해제 (entries 변동 없음).
+- `tui/README.md` — Esc 동작 안내 갱신 (marker + 활성 필터 동시 해제).
+- `tui/CHANGELOG.md` / `tui/MEMORY.md` — 본 항목.
+- `tui/pyproject.toml` + `__init__.py` — 0.10.2 → 0.10.3.
+
+### 검증
+
+- `make test-tui` → **268 passed** (266 + 2 new).
+
+### `c` 키와의 차별
+
+- `c` (action_clear_filter): **필터만 해제**. marker 그대로 유지. 사용자
+  가 필터 후에도 같은 컬럼에 marker 가 있길 원하는 (다른 row 선택해서
+  같은 컬럼으로 다시 필터하려는) 경우.
+- `Esc` (action_deactivate_column): **marker + 필터 둘 다 해제**. 사용자
+  가 "필터링 작업 자체를 끝낸다" 의미.
+
 ## CL #51064 — 0.10.2 — 컬럼 marker 활성/비활성 상태 분리 + Esc 로 컬럼만 해제 + 종료는 q 만 (2026-05-10)
 
 사용자 요청 (2026-05-10):

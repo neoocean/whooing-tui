@@ -328,17 +328,41 @@ class EntriesScreen(Screen):
             self._announce_active_column()
 
     def action_deactivate_column(self) -> None:
-        """Esc — 활성 컬럼 marker 만 해제. 비활성 상태에서는 noop (앱 종료 X).
+        """Esc — 활성 컬럼 marker + 활성 필터를 함께 해제. 둘 다 비활성이면
+        noop (앱 종료 X).
 
-        사용자 지시 (CL #51064): "ESC를 누르면 오렌지색 커서만 선택취소…
-        파란색 커서만 있는 상태에서 ESC는 아무 동작도 하지 않습니다.
-        ESC로 종료되지 않게 해주세요. 종료키는 q 입니다."
+        사용자 지시:
+          * CL #51064: "ESC를 누르면 오렌지색 커서만 선택취소… 파란색
+            커서만 있는 상태에서 ESC는 아무 동작도 하지 않습니다. ESC로
+            종료되지 않게 해주세요. 종료키는 q 입니다."
+          * CL #51068: "오렌지색 커서로 필터링이 적용된 상태에서 ESC 키
+            를 누르면 커서 하이라이트 해제 및 동시에 필터도 해제되어야
+            합니다."
+
+        결합 정의: 둘 다 활성 → 둘 다 해제. 한 쪽만 활성 → 그것만 해제.
+        둘 다 비활성 → noop (사용자 명시 — 앱 종료 X).
         """
-        if not self._column_active:
-            return  # noop — 사용자 명시
-        self._column_active = False
-        self._update_active_cell_marker()  # marker cleanup
-        self.set_status("컬럼 선택 해제 — ←/→ 다시 눌러 재활성.")
+        if not self._column_active and self._active_filter is None:
+            return  # noop — 둘 다 비활성
+
+        had_filter = self._active_filter is not None
+
+        if self._column_active:
+            self._column_active = False
+            self._update_active_cell_marker()  # marker cleanup
+
+        if had_filter:
+            self._active_filter = None
+            self._entries = list(self._all_entries)
+            # _render_table 끝의 _update_active_cell_marker 가 _column_active
+            # 비활성이라 marker 재적용 X — 깨끗한 plain table 로 그려진다.
+            self._render_table(self._entries)
+
+        # status 안내 — 어떤 게 해제됐는지 명시.
+        if had_filter:
+            self.set_status("컬럼 선택 / 필터 해제 — ←/→ 다시 눌러 재활성.")
+        else:
+            self.set_status("컬럼 선택 해제 — ←/→ 다시 눌러 재활성.")
 
     def on_data_table_row_highlighted(
         self, event: DataTable.RowHighlighted,

@@ -853,6 +853,71 @@ async def test_escape_when_column_inactive_is_noop():
 
 
 @pytest.mark.asyncio
+async def test_escape_with_active_filter_clears_both_marker_and_filter():
+    """CL #51068: 필터 적용된 상태에서 Esc → marker + filter 동시 해제."""
+    fake = FakeClient(entries_by_section={"s1": _entries_for_filter()})
+    app = WhooingTuiApp(client=fake)  # type: ignore[arg-type]
+    async with app.run_test() as pilot:
+        from whooing_tui.screens.entries import EntriesScreen
+        await _wait_for(
+            lambda: isinstance(app.screen, EntriesScreen)
+            and app.screen.last_entry_count == 4,
+            timeout=3.0,
+        )
+        es: EntriesScreen = app.screen  # type: ignore[assignment]
+        # 컬럼 활성화 + enter → 필터 적용
+        es.action_next_column()
+        await pilot.pause()
+        es.action_context_enter()
+        await pilot.pause()
+        assert es._column_active is True
+        assert es._active_filter is not None
+        assert len(es._entries) < 4  # 필터된 부분집합
+
+        # Esc → 둘 다 해제 (marker + filter)
+        es.action_deactivate_column()
+        await pilot.pause()
+        assert es._column_active is False
+        assert es._marked_cell is None
+        assert es._active_filter is None
+        assert len(es._entries) == 4  # 원본 복원
+        # 표 안 어디에도 marker 없음
+        table = es.query_one("#entries-table", DataTable)
+        for row in range(4):
+            for col in range(6):
+                cell = str(table.get_cell_at((row, col)))
+                assert "[black on yellow]" not in cell
+
+
+@pytest.mark.asyncio
+async def test_escape_with_only_marker_no_filter_clears_only_marker():
+    """marker 만 활성, 필터 비활성 → Esc 가 marker 만 해제 (entries 그대로)."""
+    fake = FakeClient(entries_by_section={"s1": _entries_for_filter()})
+    app = WhooingTuiApp(client=fake)  # type: ignore[arg-type]
+    async with app.run_test() as pilot:
+        from whooing_tui.screens.entries import EntriesScreen
+        await _wait_for(
+            lambda: isinstance(app.screen, EntriesScreen)
+            and app.screen.last_entry_count == 4,
+            timeout=3.0,
+        )
+        es: EntriesScreen = app.screen  # type: ignore[assignment]
+        # 컬럼만 활성화 (filter 적용 안 함)
+        es.action_next_column()
+        await pilot.pause()
+        assert es._column_active is True
+        assert es._active_filter is None
+        before_count = len(es._entries)
+
+        es.action_deactivate_column()
+        await pilot.pause()
+        assert es._column_active is False
+        assert es._active_filter is None
+        # entries 그대로 (필터가 없었으니 변동 없음)
+        assert len(es._entries) == before_count
+
+
+@pytest.mark.asyncio
 async def test_escape_via_pressed_key_does_not_quit():
     """실제 'escape' 키 입력으로도 앱이 종료되지 않는지 — 사용자가 가장
     걱정한 시나리오."""
