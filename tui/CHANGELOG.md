@@ -2,6 +2,77 @@
 
 각 항목은 Perforce CL 단위로 끊는다.
 
+## CL #51041 — 0.9.1 — 한글 IME 모드에서도 단축키 동작 (영문 ↔ 한글 자모 binding 매핑) (2026-05-10)
+
+사용자 보고 (2026-05-10): "q를 누르면 종료되는데 IME가 한글 모드일 때는
+종료되지 않습니다. 한글 모드일 때도 종료되도록 수정하고 나머지 단축키도
+같은 처리를 해주세요."
+
+원인: macOS / Linux 의 한글 IME (두벌식) 가 켜진 상태에서 사용자가 'q'
+글쇠를 누르면 textual 의 key event 의 character 가 'ㅂ' 으로 들어와 영문
+binding ("q") 과 매칭되지 않는다. 모든 영문 letter 단축키 (q/s/a/n/d/r/y)
+가 같은 문제.
+
+### 해결
+
+각 영문 letter binding 옆에 **두벌식 매핑 한글 자모 binding 을 같이
+등록**. textual 8.x 의 key dispatch 가 한글 자모 character 도 매칭에
+사용함을 단위 + 통합 테스트로 확인.
+
+### 추가 (2 files)
+
+- `tui/src/whooing_tui/ime.py`
+  * `KOREAN_OF`: 두벌식 표준 영문 → 한글 자모 매핑 (26 letter 전체).
+  * `bind_ko(en_key, action, description, **kwargs) -> list[Binding]` —
+    영문 binding 1개 + 한글 자모 binding 1개 (`show=False`, Footer 미표시,
+    `priority` 등 다른 kwargs 는 양쪽에 전달). 매핑 없는 키 (예:
+    `escape`, `enter`, `question_mark`, `plus` 등 IME 영향 없는 키) 는
+    영문 binding 1개만.
+- `tui/tests/test_ime.py` — 17 cases:
+  * `KOREAN_OF` 매핑 정확성 (q→ㅂ / s→ㄴ / a→ㅁ / n→ㅜ / d→ㅇ / r→ㄱ /
+    y→ㅛ 등 우리 단축키 전수).
+  * `bind_ko` 헬퍼 — letter 키는 2개 binding, 매핑 없는 키는 1개 binding.
+  * `priority` / `show=False` / 빈 description 등 옵션 전달.
+  * **통합**: `pilot.press("ㅂ")` 가 `Binding("ㅂ", ...)` 의 action 을
+    fire 하는지 textual 환경에서 직접 검증.
+
+### 수정 (5 screens)
+
+각 화면의 BINDINGS 에서 영문 letter 키를 `*bind_ko(...)` spread 로 교체.
+IME 영향 없는 키 (`escape`, `enter`, `question_mark`, `plus`, `minus`,
+`equals_sign`) 는 그대로.
+
+| 파일 | 영향 받은 키 |
+| --- | --- |
+| `screens/entries.py` | q / s / a / n / d / r |
+| `screens/sections.py` | q / r |
+| `screens/accounts.py` | q / r / n / d |
+| `screens/edit_entry.py` (ConfirmModal) | y / n |
+| `screens/help.py` | q |
+
+### 수정 (그 외)
+
+- `tui/CHANGELOG.md` / `tui/MEMORY.md` — 본 항목.
+- `tui/pyproject.toml` + `__init__.py` — 0.9.0 → 0.9.1.
+
+### 검증
+
+- `make test-tui` → **222 passed** (205 + 17 new ime). 회귀 0.
+- 통합 검증: textual 8.2.5 가 `Binding("ㅂ", ...)` 매칭 + `pilot.press("ㅂ")`
+  발화를 정상 처리.
+
+### 사용자 가시 동작
+
+이전엔 한글 IME 일 때 q / s / a / n / d / r / y 가 모두 무반응이었는데,
+이제 영문 IME 와 동일하게 동작. Footer 의 키 표시는 영문만 (한글 binding
+은 `show=False`) — 사용자가 영문/한글 모두 같은 글쇠를 누르면 같은 액션.
+
+### 학습된 패턴
+
+textual 의 Binding key 는 단일 한글 자모 character 도 valid — 별도
+wrapping / on_key handler 없이 binding 만 추가하면 동작. 후속 단축키
+추가 시 `bind_ko` 패턴을 그대로 사용.
+
 ## CL #51031 — 0.9.0 — 자동 섹션 선택: Default 우선 + last_section 영구 저장/복원, 빈 결과 안내 (2026-05-10)
 
 사용자 보고 (2026-05-10): "내용이 비어있던 이유는 테스트 섹션이 선택되어

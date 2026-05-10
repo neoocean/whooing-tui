@@ -46,6 +46,7 @@ from textual.widgets import DataTable, Footer, Header, Static
 from whooing_tui.client import WhooingClient
 from whooing_tui.config import load_config
 from whooing_tui.dates import days_ago_yyyymmdd, today_yyyymmdd
+from whooing_tui.ime import bind_ko
 from whooing_tui.models import ToolError
 from whooing_tui.screens.edit_entry import (
     ConfirmModal, EntryDraft, EntryEditDialog,
@@ -97,15 +98,18 @@ class EntriesScreen(Screen):
     }
     """
 
+    # 영문 letter key 는 한글 IME 일 때도 동작하도록 `bind_ko` 로 자모
+    # binding 을 같이 등록 (CL #51041). escape / enter / question_mark /
+    # plus / minus / equals_sign 은 IME 영향이 없으므로 그대로.
     BINDINGS = [
-        Binding("q", "back", "Quit", show=True),
+        *bind_ko("q", "back", "Quit", show=True),
         Binding("escape", "back", "Quit", show=False),
-        Binding("s", "open_sections", "Sections", show=True, priority=True),
-        Binding("a", "open_accounts", "Accounts", show=True, priority=True),
-        Binding("n", "new_entry", "New", show=True, priority=True),
+        *bind_ko("s", "open_sections", "Sections", show=True, priority=True),
+        *bind_ko("a", "open_accounts", "Accounts", show=True, priority=True),
+        *bind_ko("n", "new_entry", "New", show=True, priority=True),
         Binding("enter", "edit_entry", "Edit", show=True, priority=True),
-        Binding("d", "delete_entry", "Delete", show=True, priority=True),
-        Binding("r", "refresh", "Refresh", show=True, priority=True),
+        *bind_ko("d", "delete_entry", "Delete", show=True, priority=True),
+        *bind_ko("r", "refresh", "Refresh", show=True, priority=True),
         Binding("question_mark", "help", "Help", show=True, priority=True, key_display="?"),
         Binding("plus", "extend_window", "+7d", show=True),
         Binding("minus", "shrink_window", "-7d", show=True),

@@ -17,6 +17,8 @@ from textual.containers import Vertical
 from textual.screen import ModalScreen
 from textual.widgets import Static
 
+from whooing_tui.ime import bind_ko
+
 
 def _format_bindings(bindings: Iterable[Binding]) -> str:
     """BINDINGS list 를 사람이 읽기 좋은 정렬 표로.
@@ -83,7 +85,7 @@ class HelpModal(ModalScreen[None]):
     BINDINGS = [
         Binding("escape", "close", "Close", show=True),
         Binding("question_mark", "close", "Close", show=False),
-        Binding("q", "close", "Close", show=False),
+        *bind_ko("q", "close", "Close", show=False),
     ]
 
     def __init__(self, screen_title: str, bindings: list[Binding]) -> None:

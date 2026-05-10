@@ -30,6 +30,7 @@ from textual.widgets import (
 
 from whooing_tui.client import WhooingClient
 from whooing_tui.dates import parse_yyyymmdd, today_yyyymmdd
+from whooing_tui.ime import bind_ko
 from whooing_tui.models import ToolError
 from whooing_tui.screens.edit_entry import ConfirmModal
 from whooing_tui.state import SessionState
@@ -277,12 +278,12 @@ class AccountsScreen(Screen):
     """
 
     BINDINGS = [
-        Binding("q", "back", "Back", show=True),
+        *bind_ko("q", "back", "Back", show=True),
         Binding("escape", "back", "Back", show=False),
-        Binding("r", "refresh", "Refresh", show=True, priority=True),
-        Binding("n", "new_account", "New", show=True, priority=True),
+        *bind_ko("r", "refresh", "Refresh", show=True, priority=True),
+        *bind_ko("n", "new_account", "New", show=True, priority=True),
         Binding("enter", "edit_account", "Edit", show=True, priority=True),
-        Binding("d", "delete_account", "Delete", show=True, priority=True),
+        *bind_ko("d", "delete_account", "Delete", show=True, priority=True),
         Binding("question_mark", "help", "Help", show=True, priority=True, key_display="?"),
     ]
 

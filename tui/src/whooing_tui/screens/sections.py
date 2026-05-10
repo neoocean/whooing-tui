@@ -25,6 +25,7 @@ from textual.widgets import OptionList, Static
 from textual.widgets.option_list import Option
 
 from whooing_tui.client import WhooingClient
+from whooing_tui.ime import bind_ko
 from whooing_tui.models import ToolError
 
 log = logging.getLogger(__name__)
@@ -65,8 +66,8 @@ class SectionPickerScreen(ModalScreen[tuple[str, str | None] | None]):
 
     BINDINGS = [
         Binding("escape", "cancel", "Cancel", show=True),
-        Binding("q", "cancel", "Cancel", show=False),
-        Binding("r", "refresh", "Refresh", show=True),
+        *bind_ko("q", "cancel", "Cancel", show=False),
+        *bind_ko("r", "refresh", "Refresh", show=True),
     ]
 
     def __init__(

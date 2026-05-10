@@ -32,6 +32,7 @@ from textual.screen import ModalScreen
 from textual.widgets import Button, Input, Label, Static
 
 from whooing_tui.dates import parse_yyyymmdd, today_yyyymmdd
+from whooing_tui.ime import bind_ko
 from whooing_tui.state import SessionState
 
 
@@ -295,8 +296,8 @@ class ConfirmModal(ModalScreen[bool]):
 
     BINDINGS = [
         Binding("escape", "no", "No", show=True),
-        Binding("y", "yes", "Yes", show=True, priority=True),
-        Binding("n", "no", "No", show=True, priority=True),
+        *bind_ko("y", "yes", "Yes", show=True, priority=True),
+        *bind_ko("n", "no", "No", show=True, priority=True),
     ]
 
     def __init__(self, message: str, *, title: str = "확인") -> None:
