@@ -2,6 +2,45 @@
 
 각 항목은 Perforce CL 단위로 끊는다.
 
+## CL #50980 — 0.7.1 — cli.py 헤드리스 dispatch 단위 테스트 (2026-05-10)
+
+권장 후속 4번. 0.5.1 의 `make coverage` 에서 `cli.py` 가 0% 였던 것을
+보충 — 의미있는 수치로 끌어올림.
+
+### 추가
+
+- `tui/tests/test_cli.py` — 18 cases:
+  * sections list 의 표 / `--json` 출력 + sanitize_for_log 의 secret
+    masking 검증.
+  * 종료 코드 매핑: AUTH=3, RATE_LIMIT=4, UPSTREAM=5, USER_INPUT=2.
+  * 토큰 누락 (load_auth_from_env ValueError) → exit 2.
+  * accounts list — `--section` 명시 / `WHOOING_SECTION_ID` env / 자동
+    첫 섹션 선택 분기.
+  * entries list — 기본 윈도우 / 명시 `--start --end` / `--start` 만 줄
+    때 USER_INPUT / 잘못된 YYYYMMDD / 음수 days / `--json` / 빈 결과
+    `(empty)` + `총 0건` 표기.
+  * `--help` 가 SystemExit(0) + sections/accounts/entries 모두 노출.
+  * 서브커맨드 없을 때 GUI 부팅 진입 (run_app 의 토큰 검증으로 exit 3).
+
+### 수정
+
+- `tui/CHANGELOG.md` — 본 항목.
+- `tui/MEMORY.md` — §8 변경이력.
+- `tui/pyproject.toml` + `__init__.py` — 0.7.0 → 0.7.1.
+
+### 검증
+
+- `make test` → core 72 + tui 170 = **242 passed** (Phase 6 152 + 18 new cli).
+- `cli.py` 라인 커버: **0% → 91%** (150 lines, 13 missed — 주로 verbose
+  로깅 / unreachable internal command path).
+
+### 학습된 패턴 (후속 단위 테스트에 재사용)
+
+cli.py 가 `WhooingClient(auth)` 인스턴스화 + `WhooingClient.flatten_accounts(...)`
+staticmethod 양쪽을 호출. monkeypatch 가 함수로 교체하면 staticmethod
+접근이 깨진다 → **fake `__new__` 클래스 + 진짜 staticmethod 보존**
+패턴 (`_FakeWhooingClient`) 으로 둘 다 통과시킴.
+
 ## v0.7.0 — Phase 6 (statement import / annotator / attachment / dashboard) (2026-05-10)
 
 monorepo 의 sibling `whooing-core` 라이브러리에서 어댑터 / 첨부 storage /
