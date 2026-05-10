@@ -2,6 +2,98 @@
 
 각 항목은 Perforce CL 단위로 끊는다.
 
+## CL #51031 — 0.9.0 — 자동 섹션 선택: Default 우선 + last_section 영구 저장/복원, 빈 결과 안내 (2026-05-10)
+
+사용자 보고 (2026-05-10): "내용이 비어있던 이유는 테스트 섹션이 선택되어
+있었기 때문. 앱을 시작할 때 Default 섹션이 선택되어 있도록. 이전에
+선택했던 섹션을 저장했다가 다음 실행 때 되돌려주세요." + 진단 중 발견한
+빈 결과 UX 문제도 함께.
+
+### 변경된 자동 활성화 우선순위
+
+```mermaid
+flowchart TB
+    BOOT[EntriesScreen.refresh_entries 자동 부팅] --> Q1{saved last_section_id<br/>(state.json)}
+    Q1 -->|매칭| USE[활성화]
+    Q1 -->|없음| Q2{is_default=true<br/>또는 title=Default}
+    Q2 -->|매칭| USE
+    Q2 -->|없음| Q3{$WHOOING_SECTION_ID<br/>(legacy)}
+    Q3 -->|매칭| USE
+    Q3 -->|없음| Q4[첫 섹션]
+    Q4 --> USE
+    USE --> SAVE[save_last_section_id<br/>→ state.json]
+```
+
+#### 이전 (0.8.1)
+
+```
+WHOOING_SECTION_ID 우선 → 첫 섹션
+```
+
+문제: `.env` 의 `WHOOING_SECTION_ID=s133178` (테스트 섹션, 거래 0건) 가
+강제 우선순위라 사용자가 거래내역이 비어 보이는 화면을 봄.
+
+#### 새 (0.9.0)
+
+```
+saved (state.json) > Default (is_default 또는 title 매칭)
+                   > WHOOING_SECTION_ID (env, legacy fallback)
+                   > 첫 섹션
+```
+
+### 추가
+
+- `tui/src/whooing_tui/state.py` 에 영구 사용자 상태 helper:
+  * `_state_path()` — `$XDG_CONFIG_HOME/whooing-tui/state.json` (기본
+    `~/.config/whooing-tui/state.json`).
+  * `load_state()` / `save_state(dict)` — atomic write (`.tmp` rename).
+  * `load_last_section_id()` / `save_last_section_id(sid)` — 같은 값
+    skip (잦은 set 시 io 절약). 다른 키들은 보존.
+- `tui/tests/conftest.py` — autouse fixture `_isolated_user_state` 가
+  모든 테스트에서 `XDG_CONFIG_HOME` 을 tmp_path 로 격리 + `WHOOING_SECTION_ID`
+  delete. 실 사용자 home 을 만지지 않도록.
+
+### 수정
+
+- `tui/src/whooing_tui/screens/entries.py`
+  * `refresh_entries` 의 자동 활성화 로직을 새 우선순위 (saved → Default
+    → env → 첫 섹션) 로. 결정 후 `save_last_section_id` 로 저장 (자동도).
+  * `action_open_sections` 의 `_on_close` callback 에서도 사용자 명시
+    선택 시 `save_last_section_id` 호출.
+  * `_update_window_status` 의 빈 결과 메시지를 친절하게 — "거래내역
+    없음 — 다른 섹션 [s] / 윈도우 확장 [+] / 새 거래 [n]" + warn 클래스.
+    section_title 이 있으면 "Default (s9046)" 형태로 표시.
+- `tui/tests/test_state.py` — 11 cases 추가 (load/save/atomic/corrupted/
+  non-dict/last_section_id roundtrip/skip when unchanged/overwrite/
+  preserve other keys/empty string returns None/missing returns None).
+- `tui/tests/test_entries_screen.py` — 6 cases 추가 (Default 자동 선택,
+  is_default flag 우선, saved 복원 (1차→2차 부팅 시뮬), env fallback,
+  첫 섹션 fallback, 빈 결과 안내 메시지에 [s]/[+]/[n] 검증).
+- `tui/CHANGELOG.md` / `tui/MEMORY.md` — 본 항목.
+- `tui/pyproject.toml` + `__init__.py` — 0.8.1 → 0.9.0 (영구 상태 도입,
+  minor bump).
+
+### 검증
+
+- `make test-tui` → **205 passed** (188 + 11 state + 6 entries 우선순위
+  / 빈 결과).
+
+### 사용자 가시 동작
+
+- 처음 실행: 사용자 후잉 환경에 "Default" 섹션이 있으면 그걸 선택 (이전
+  의 `WHOOING_SECTION_ID=s133178` 영향 제거). 한 번 활성화된 섹션은
+  `~/.config/whooing-tui/state.json` 에 저장됨.
+- 다음 실행: state.json 의 `last_section_id` 가 적용 — 사용자가 `s` 로
+  명시 선택한 섹션이 그대로 복원.
+- 거래 0건 화면: status bar 가 빨간색 대신 노란색 (warn) 으로 다음 액션
+  명시 (`s` / `+` / `n`).
+
+### 학습된 패턴
+
+테스트가 `~/.config/whooing-tui/state.json` 같은 사용자 글로벌 상태를
+건드리지 않도록 **autouse conftest fixture 로 `XDG_CONFIG_HOME` 격리**.
+후속 영구 상태 도입 시 같은 패턴.
+
 ## CL #51023 — 0.8.1 — UI 재구성: 초기 화면을 EntriesScreen 으로, 옵션 화면 분리 (2026-05-10)
 
 사용자 지시 (2026-05-10): "초기화면에 거래내역, 섹션 선택과 계정과목은

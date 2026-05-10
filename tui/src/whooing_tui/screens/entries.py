@@ -50,7 +50,11 @@ from whooing_tui.models import ToolError
 from whooing_tui.screens.edit_entry import (
     ConfirmModal, EntryDraft, EntryEditDialog,
 )
-from whooing_tui.state import default_section_id_from_env
+from whooing_tui.state import (
+    default_section_id_from_env,
+    load_last_section_id,
+    save_last_section_id,
+)
 
 log = logging.getLogger(__name__)
 
@@ -170,6 +174,8 @@ class EntriesScreen(Screen):
                 # 같은 섹션 — 그대로 둔다.
                 return
             session.set_section(sid, title)
+            # 사용자 명시 선택은 영구 저장 — 다음 부팅 시 복원.
+            save_last_section_id(sid)
             self.set_status(
                 f"섹션 {sid} ({title or '?'}) 으로 전환. 재로드 중…",
             )
@@ -419,19 +425,46 @@ class EntriesScreen(Screen):
                     error=True,
                 )
                 return
-            # WHOOING_SECTION_ID 우선, 없으면 첫 섹션.
-            env_id = default_section_id_from_env()
+            # 자동 활성화 우선순위 (CL #51031+):
+            #   ① 저장된 last_section_id (사용자가 한 번이라도 's' 로 직접
+            #      선택했으면 그 선택을 다음 부팅에 복원).
+            #   ② "Default" 섹션 — title="Default" 또는 응답의 is_default=true.
+            #      후잉이 새 계정에 default 로 만드는 섹션의 표준 이름.
+            #   ③ WHOOING_SECTION_ID 환경변수 — legacy fallback.
+            #   ④ 첫 섹션 — 그것마저 매칭 안 되면.
             chosen = None
-            if env_id:
+
+            saved_sid = load_last_section_id()
+            if saved_sid:
                 chosen = next(
                     (s for s in sections
-                     if str(s.get("section_id") or s.get("id")) == env_id),
+                     if str(s.get("section_id") or s.get("id")) == saved_sid),
                     None,
                 )
+
+            if chosen is None:
+                chosen = next(
+                    (s for s in sections
+                     if s.get("is_default") is True or s.get("title") == "Default"),
+                    None,
+                )
+
+            if chosen is None:
+                env_id = default_section_id_from_env()
+                if env_id:
+                    chosen = next(
+                        (s for s in sections
+                         if str(s.get("section_id") or s.get("id")) == env_id),
+                        None,
+                    )
+
             if chosen is None:
                 chosen = sections[0]
+
             sid = str(chosen.get("section_id") or chosen.get("id"))
             session.set_section(sid, chosen.get("title"))
+            # 자동 활성화도 저장 — 다음 부팅에 같은 결정이 빠르게 적용된다.
+            save_last_section_id(sid)
 
         # 2. accounts 캐시 미로드 시 fetch.
         if not session.accounts_flat:
@@ -508,9 +541,26 @@ class EntriesScreen(Screen):
         cap_dates = [d for d, c in per_date.items() if c >= self._SERVER_PAGE_CAP]
         self.last_cap_warning = bool(cap_dates)
 
+        section_id = self.app.session.section_id  # type: ignore[attr-defined]
+        section_title = self.app.session.section_title  # type: ignore[attr-defined]
+        sec_label = (
+            f"{section_title} ({section_id})" if section_title else str(section_id)
+        )
+
+        if n == 0:
+            # 빈 결과 — 사용자가 *왜* 비어있는지 한눈에 알 수 있도록 다음
+            # 액션을 status bar 에 명시. warn 클래스로 시각 구분.
+            msg = (
+                f"거래내역 없음 — section={sec_label}, 최근 {self._window_days}일 "
+                f"({start_date}~{end_date}). "
+                f"다른 섹션 [s] / 윈도우 확장 [+] / 새 거래 [n]"
+            )
+            self.set_status(msg, warn=True)
+            return
+
         msg = (
             f"{n}건 표시 ({start_date} ~ {end_date}, 최근 {self._window_days}일, "
-            f"section={self.app.session.section_id})"  # type: ignore[attr-defined]
+            f"section={sec_label})"
         )
         if self.last_cap_warning:
             cap_list = ", ".join(cap_dates[:3]) + (" …" if len(cap_dates) > 3 else "")

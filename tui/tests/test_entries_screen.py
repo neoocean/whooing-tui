@@ -21,6 +21,8 @@ from whooing_tui.app import WhooingTuiApp
 from whooing_tui.models import ToolError
 
 
+
+
 class FakeClient:
     """HomeScreen 테스트 의 FakeClient 를 entries 까지 확장."""
 
@@ -243,3 +245,191 @@ async def test_entries_screen_empty_sections_shows_error():
         assert ok
         # entries 호출은 발생하지 않아야 (sections 단계에서 fail)
         assert fake.list_entries_calls == []
+
+
+# ---- 자동 활성화 우선순위 (CL #51031+) -------------------------------
+
+
+@pytest.mark.asyncio
+async def test_default_section_chosen_when_no_saved():
+    """saved last_section 없으면 'Default' title 매칭. (사용자 환경에서
+    `Default` / `테스트` 가 있고 .env 의 WHOOING_SECTION_ID 가 설정 안
+    됐을 때 Default 를 자동 선택해야 한다는 사용자 요구.)
+    """
+    fake = FakeClient(
+        sections=[
+            {"section_id": "s133178", "title": "테스트"},
+            {"section_id": "s9046", "title": "Default"},
+        ],
+        accounts_by_section={
+            "s9046": {"assets": [{"account_id": "x11", "title": "현금"}]},
+        },
+        entries_by_section={"s9046": []},
+    )
+    app = WhooingTuiApp(client=fake)  # type: ignore[arg-type]
+    async with app.run_test() as pilot:
+        from whooing_tui.screens.entries import EntriesScreen
+        await _wait_for(
+            lambda: isinstance(app.screen, EntriesScreen)
+            and app.session.section_id == "s9046",
+            timeout=3.0,
+        )
+        assert app.session.section_title == "Default"
+
+
+@pytest.mark.asyncio
+async def test_is_default_flag_chosen_over_title():
+    """응답의 `is_default: true` 가 title 매칭보다 우선 — 후잉이 그 플래그
+    를 노출하면 그것이 가장 신뢰할 수 있는 신호."""
+    fake = FakeClient(
+        sections=[
+            {"section_id": "sA", "title": "Default", "is_default": False},
+            {"section_id": "sB", "title": "메인", "is_default": True},
+            {"section_id": "sC", "title": "기타"},
+        ],
+        accounts_by_section={"sB": {}},
+        entries_by_section={"sB": []},
+    )
+    app = WhooingTuiApp(client=fake)  # type: ignore[arg-type]
+    async with app.run_test() as pilot:
+        from whooing_tui.screens.entries import EntriesScreen
+        await _wait_for(
+            lambda: isinstance(app.screen, EntriesScreen)
+            and app.session.section_id == "sB",
+            timeout=3.0,
+        )
+
+
+@pytest.mark.asyncio
+async def test_saved_section_restored_on_next_boot():
+    """1차 실행: 사용자가 's' 로 다른 섹션 선택 → 저장.
+    2차 실행: saved 가 적용 (Default 가 있어도 saved 가 우선).
+    """
+    sections = [
+        {"section_id": "s9046", "title": "Default"},
+        {"section_id": "s133178", "title": "테스트"},
+    ]
+    accounts_by_section = {
+        "s9046": {},
+        "s133178": {},
+    }
+    entries_by_section = {"s9046": [], "s133178": []}
+
+    # 1차
+    fake1 = FakeClient(
+        sections=sections,
+        accounts_by_section=accounts_by_section,
+        entries_by_section=entries_by_section,
+    )
+    app1 = WhooingTuiApp(client=fake1)  # type: ignore[arg-type]
+    async with app1.run_test() as pilot:
+        from whooing_tui.screens.entries import EntriesScreen
+        await _wait_for(
+            lambda: isinstance(app1.screen, EntriesScreen)
+            and app1.session.section_id == "s9046",
+            timeout=3.0,
+        )
+        # 사용자가 's' 로 picker 열고 테스트 선택
+        es: EntriesScreen = app1.screen  # type: ignore[assignment]
+        es.action_open_sections()
+        await pilot.pause()
+        # picker 가 sections 로드 후 dismiss
+        from whooing_tui.screens.sections import SectionPickerScreen
+        await _wait_for(
+            lambda: isinstance(app1.screen, SectionPickerScreen), timeout=2.0,
+        )
+        app1.screen.dismiss(("s133178", "테스트"))
+        await _wait_for(
+            lambda: app1.session.section_id == "s133178", timeout=2.0,
+        )
+
+    # 2차 — 같은 isolated_state_home 안에서 다시 부팅. saved=s133178 적용.
+    fake2 = FakeClient(
+        sections=sections,
+        accounts_by_section=accounts_by_section,
+        entries_by_section=entries_by_section,
+    )
+    app2 = WhooingTuiApp(client=fake2)  # type: ignore[arg-type]
+    async with app2.run_test() as pilot:
+        from whooing_tui.screens.entries import EntriesScreen
+        ok = await _wait_for(
+            lambda: isinstance(app2.screen, EntriesScreen)
+            and app2.session.section_id == "s133178",
+            timeout=3.0,
+        )
+        assert ok, (
+            f"saved 가 복원되지 않음 — 활성 섹션={app2.session.section_id}"
+        )
+
+
+@pytest.mark.asyncio
+async def test_env_section_used_when_no_saved_and_no_default():
+    """saved 없음 + Default 매칭 안 됨 → WHOOING_SECTION_ID env 적용."""
+    import os
+    os.environ["WHOOING_SECTION_ID"] = "sB"
+    try:
+        fake = FakeClient(
+            sections=[
+                {"section_id": "sA", "title": "alpha"},
+                {"section_id": "sB", "title": "beta"},
+                {"section_id": "sC", "title": "gamma"},
+            ],
+            accounts_by_section={"sB": {}},
+            entries_by_section={"sB": []},
+        )
+        app = WhooingTuiApp(client=fake)  # type: ignore[arg-type]
+        async with app.run_test() as pilot:
+            from whooing_tui.screens.entries import EntriesScreen
+            await _wait_for(
+                lambda: isinstance(app.screen, EntriesScreen)
+                and app.session.section_id == "sB",
+                timeout=3.0,
+            )
+    finally:
+        os.environ.pop("WHOOING_SECTION_ID", None)
+
+
+@pytest.mark.asyncio
+async def test_first_section_when_nothing_matches():
+    """saved 없음 + Default 없음 + WHOOING_SECTION_ID 없음 → 첫 섹션."""
+    fake = FakeClient(
+        sections=[
+            {"section_id": "sFirst", "title": "first"},
+            {"section_id": "sSecond", "title": "second"},
+        ],
+        accounts_by_section={"sFirst": {}},
+        entries_by_section={"sFirst": []},
+    )
+    app = WhooingTuiApp(client=fake)  # type: ignore[arg-type]
+    async with app.run_test() as pilot:
+        from whooing_tui.screens.entries import EntriesScreen
+        await _wait_for(
+            lambda: isinstance(app.screen, EntriesScreen)
+            and app.session.section_id == "sFirst",
+            timeout=3.0,
+        )
+
+
+# ---- 빈 결과 안내 -------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_empty_entries_status_includes_action_hints():
+    """거래 0건일 때 status 가 다른 섹션 / 윈도우 / 새 거래 액션을 안내."""
+    fake = FakeClient(entries_by_section={"s1": []})
+    app = WhooingTuiApp(client=fake)  # type: ignore[arg-type]
+    async with app.run_test() as pilot:
+        from whooing_tui.screens.entries import EntriesScreen
+        await _wait_for(
+            lambda: isinstance(app.screen, EntriesScreen)
+            and len(fake.list_entries_calls) >= 1
+            and "거래내역 없음" in app.screen.last_status,
+            timeout=3.0,
+        )
+        msg = app.screen.last_status
+        # 핵심 액션 키들이 모두 들어 있어야 — 사용자가 막혔을 때 가이드
+        assert "[s]" in msg
+        assert "[+]" in msg
+        assert "[n]" in msg
+        bar = app.screen.query_one("#status", Static)
+        assert "warn" in bar.classes
