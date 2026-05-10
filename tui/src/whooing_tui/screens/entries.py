@@ -140,6 +140,10 @@ class EntriesScreen(Screen):
         *bind_ko("c", "clear_filter", "Clear", show=True, priority=True),
         Binding("left", "prev_column", "←", show=False, priority=True),
         Binding("right", "next_column", "→", show=False, priority=True),
+        # ↑/↓ 는 default DataTable 의 cursor 이동을 가로채서 sentinel
+        # 토글까지 처리한다 (CL #51074+).
+        Binding("up", "row_up", "↑", show=False, priority=True),
+        Binding("down", "row_down", "↓", show=False, priority=True),
         Binding("question_mark", "help", "Help", show=True, priority=True, key_display="?"),
         Binding("plus", "extend_window", "+7d", show=True),
         Binding("minus", "shrink_window", "-7d", show=True),
@@ -202,6 +206,12 @@ class EntriesScreen(Screen):
         # 마지막으로 마커링한 cell 좌표 — _column_active 가 True 인 동안만
         # 의미. False 일 때 None.
         self._marked_cell: tuple[int, int] | None = None
+        # CL #51074 부터: sentinel row 의 가시성. 평소엔 False (숨김).
+        # 거래 목록 맨 위 (cursor row 0) 에서 ↑ 한 번 더 누르면 True 로 —
+        # sentinel 이 row 0 으로 등장하고 cursor 도 sentinel 로 이동.
+        # sentinel 에서 ↓ 누르면 다시 False, sentinel 사라지고 cursor 가
+        # 첫 실거래로. 빈 entries 일 때는 강제 True (사용자 진입점 보장).
+        self._show_sentinel: bool = False
 
     # ---- compose -------------------------------------------------------
 
@@ -307,6 +317,48 @@ class EntriesScreen(Screen):
         self._render_table(self._entries)
         self._update_window_status_after_filter_clear()
 
+    # ---- row navigation + sentinel 토글 (CL #51074+) ------------------
+
+    def action_row_up(self) -> None:
+        """↑ — 거래 목록 맨 위 row 에서 한 번 더 누르면 sentinel 등장.
+
+        그 외에는 default DataTable cursor 이동에 위임. 토글 직후 cursor
+        는 새 sentinel (= row 0) 로 이동 — 사용자 시야상 위로 한 칸 이동.
+        """
+        table = self.query_one("#entries-table", DataTable)
+        cur = table.cursor_row
+        first_entry_row = 1 if self._show_sentinel else 0
+        if (
+            self._entries
+            and not self._show_sentinel
+            and cur == first_entry_row  # 거래 목록 맨 위 = row 0 (숨김 상태)
+        ):
+            # sentinel 표시 토글 + cursor 가 새 sentinel (row 0) 로
+            self._show_sentinel = True
+            self._render_table(self._entries, target_cursor=0)
+            return
+        # 그 외 — default cursor up 위임
+        try:
+            table.action_cursor_up()
+        except Exception:  # pragma: no cover — boundary 등
+            pass
+
+    def action_row_down(self) -> None:
+        """↓ — sentinel row (0) 에서 누르면 sentinel 숨김 + cursor 가 첫
+        실거래로. 그 외엔 default cursor 이동."""
+        table = self.query_one("#entries-table", DataTable)
+        cur = table.cursor_row
+        if self._show_sentinel and cur == 0 and self._entries:
+            # sentinel 사라지면 entries 가 row 0+ 부터 시작 — cursor 를 row 0
+            # 으로 (= 이전 row 1 의 첫 실거래).
+            self._show_sentinel = False
+            self._render_table(self._entries, target_cursor=0)
+            return
+        try:
+            table.action_cursor_down()
+        except Exception:  # pragma: no cover
+            pass
+
     # ---- 컬럼 navigation (CL #51053+, 활성/비활성 상태는 #51064+) -----
 
     def action_prev_column(self) -> None:
@@ -384,24 +436,24 @@ class EntriesScreen(Screen):
             self.set_status("[Enter = 새 거래 추가]")
 
     def _update_active_cell_marker(self) -> None:
-        """marker 상태와 cell content 를 동기화.
+        """marker 상태와 cell content 를 동기화. sentinel-aware (CL #51074+).
 
-        DataTable row 0 은 "새 거래 추가" sentinel (CL #51072+) — entry
-        index 와 1 차이. row N → entries[N-1]. row 0 에는 marker 안 적용.
-
-        - `_column_active=False`: 기존 marker 가 있으면 plain 복원, 새 marker X.
-        - `_column_active=True`: 이전 marker cell 복원 + (cursor_row,
-          _active_col) 에 markup 적용. cursor_row 가 0 (sentinel) 이면 새
-          marker 안 적용 (sentinel 은 항상 plain).
+        sentinel row 가 보이면 그 자리 (row 0) 는 항상 plain — marker 안
+        적용. entry index 변환은 `_entry_index_for_row` 가 책임.
         """
         table = self.query_one("#entries-table", DataTable)
 
         # 이전 marker cell 복원. _column_active 와 무관하게 항상 먼저.
         if self._marked_cell is not None:
             prev_row, prev_col = self._marked_cell
-            prev_entry_idx = prev_row - 1  # row 1 → entries[0]
-            if 0 <= prev_entry_idx < len(self._entries) and 0 <= prev_col < len(self._COLUMN_NAMES):
-                plain_prev = self._format_cell(self._entries[prev_entry_idx], prev_col)
+            prev_entry_idx = self._entry_index_for_row(prev_row)
+            if (
+                prev_entry_idx is not None
+                and 0 <= prev_col < len(self._COLUMN_NAMES)
+            ):
+                plain_prev = self._format_cell(
+                    self._entries[prev_entry_idx], prev_col,
+                )
                 try:
                     table.update_cell_at(
                         Coordinate(prev_row, prev_col),
@@ -417,11 +469,11 @@ class EntriesScreen(Screen):
             return
 
         cur_row = table.cursor_row
-        # sentinel row (0) 또는 boundary 외이면 marker 안 적용.
-        if cur_row is None or cur_row < 1 or cur_row > len(self._entries):
+        cur_entry_idx = self._entry_index_for_row(cur_row)
+        if cur_entry_idx is None:
+            # sentinel row 또는 boundary 외 — marker 안 적용.
             return
         cur_col = self._active_col
-        cur_entry_idx = cur_row - 1
 
         plain_cur = self._format_cell(self._entries[cur_entry_idx], cur_col)
         marker_text = plain_cur if plain_cur else " "  # 빈 cell 도 보이게
@@ -537,26 +589,44 @@ class EntriesScreen(Screen):
 
     # ---- new / edit / delete -----------------------------------------
 
+    def _entry_index_for_row(self, row: int | None) -> int | None:
+        """DataTable row index → `_entries` 의 index. sentinel row 이거나
+        out-of-range 면 None.
+
+        sentinel 가시성 (`_show_sentinel`) 에 따라 +1 shift 가 동적:
+          - sentinel 표시: row 0 = sentinel, row N → entries[N-1]
+          - sentinel 숨김: row N → entries[N]
+        """
+        if row is None:
+            return None
+        if self._show_sentinel:
+            if row < 1:
+                return None
+            idx = row - 1
+        else:
+            if row < 0:
+                return None
+            idx = row
+        if idx >= len(self._entries):
+            return None
+        return idx
+
     def _selected_entry(self) -> dict[str, Any] | None:
         """현재 DataTable cursor 가 가리키는 entry. sentinel row 또는
         선택 불가 상태면 None.
-
-        DataTable row 0 = "새 거래 추가" sentinel. entry 는 row 1 부터
-        (CL #51072+). row N → entries[N-1].
         """
         if not self._entries:
             return None
         table = self.query_one("#entries-table", DataTable)
-        row = table.cursor_row
-        if row is None or row < 1:
-            return None
-        idx = row - 1
-        if idx >= len(self._entries):
+        idx = self._entry_index_for_row(table.cursor_row)
+        if idx is None:
             return None
         return self._entries[idx]
 
     def _is_on_sentinel_row(self) -> bool:
-        """cursor 가 sentinel row (= 0) 인지."""
+        """cursor 가 sentinel row 인지 — `_show_sentinel=True` 이고 row 0."""
+        if not self._show_sentinel:
+            return False
         table = self.query_one("#entries-table", DataTable)
         return table.cursor_row == 0
 
@@ -857,51 +927,63 @@ class EntriesScreen(Screen):
             return entry.get("memo") or ""
         return ""
 
-    def _render_table(self, entries: list[dict[str, Any]]) -> None:
-        """DataTable 을 sentinel row 1개 + entries N개로 (총 N+1 rows) 렌더.
+    def _render_table(
+        self,
+        entries: list[dict[str, Any]],
+        *,
+        target_cursor: int | None = None,
+    ) -> None:
+        """DataTable 을 (선택적으로) sentinel row 1개 + entries N개로 렌더.
 
-        CL #51072+: row 0 = "새 거래 추가" sentinel. cursor 가 거기 있을
-        때 enter 가 action_new_entry 호출. 실 거래는 row 1+.
+        CL #51074+: sentinel 은 `_show_sentinel=True` 일 때만 row 0 으로
+        등장. 평소엔 숨겨져 있고, 사용자가 거래 목록 맨 위 row 에서 ↑ 한
+        번 더 누르면 토글된다 (`action_row_up`). 빈 entries 일 때는
+        진입점 보장을 위해 강제 표시.
+
+        `target_cursor` 가 명시되면 render 후 그 row 로 cursor 이동.
+        명시 안 되면 prev_cursor 보존 또는 default (첫 실거래 / sentinel).
         """
+        # 빈 entries 면 sentinel 강제 표시 (사용자 진입점 보장).
+        if not entries:
+            self._show_sentinel = True
+
         table = self.query_one("#entries-table", DataTable)
-        # 사용자 cursor 위치 보존 — render 전 위치를 기억해 entries 가
-        # 그대로일 때 같은 row 로 복귀시킨다.
         prev_cursor = table.cursor_row
         table.clear()
 
-        # Sentinel row 0 — 첫 cell 만 안내, 나머지 column 은 빈 cell.
-        empty_cells = [""] * (len(self._COLUMN_NAMES) - 1)
-        table.add_row(self._NEW_ENTRY_SENTINEL_LABEL, *empty_cells)
+        if self._show_sentinel:
+            empty_cells = [""] * (len(self._COLUMN_NAMES) - 1)
+            table.add_row(self._NEW_ENTRY_SENTINEL_LABEL, *empty_cells)
 
         for e in entries:
             cells = [self._format_cell(e, i) for i in range(len(self._COLUMN_NAMES))]
             table.add_row(*cells)
 
-        # 첫 mount 또는 entries 변동 후 cursor 위치 결정:
-        # - prev_cursor 가 row 1+ 의 valid 위치면 그대로 복귀 (사용자가
-        #   의도해서 거기 둔 상태 — refresh / filter / clear 가 발생해도
-        #   비슷한 row 에서 시작).
-        # - prev_cursor 가 sentinel (0) 또는 None / out-of-range 면 첫
-        #   실거래 row 1 로 이동 (사용자 가시적 첫 거래에서 시작).
-        # - entries 가 비어있으면 sentinel (0) 만 가능.
-        max_row = len(entries)  # row 0 = sentinel + entries N → 마지막 row = N
-        if entries:
+        # cursor 위치 결정:
+        # - target_cursor 명시 → 그대로
+        # - 그 외: prev_cursor 가 valid entry row 면 보존, 아니면 첫
+        #   entry row, entries 비면 sentinel.
+        if target_cursor is not None:
+            target_row = target_cursor
+        else:
+            first_entry_row = 1 if self._show_sentinel else 0
+            last_entry_row = first_entry_row + len(entries) - 1
             if (
-                prev_cursor is not None
-                and 1 <= prev_cursor <= max_row
+                entries
+                and prev_cursor is not None
+                and first_entry_row <= prev_cursor <= last_entry_row
             ):
                 target_row = prev_cursor
+            elif entries:
+                target_row = first_entry_row
             else:
-                target_row = 1
-        else:
-            target_row = 0  # sentinel only
+                target_row = 0  # sentinel only
         try:
             table.move_cursor(row=target_row, animate=False)
         except Exception:  # pragma: no cover — coord stale
             pass
 
-        # render 후 marker 가 stale 이라 reset + 재적용. cursor row 가
-        # sentinel 이면 _update_active_cell_marker 가 알아서 skip.
+        # render 후 marker 재적용 (sentinel 아닌 row 에서만).
         self._marked_cell = None
         self._update_active_cell_marker()
 

@@ -2,6 +2,55 @@
 
 각 항목은 Perforce CL 단위로 끊는다.
 
+## CL #51074 — 0.11.1 — sentinel row 평소 숨김 + ↑/↓ 로 토글 (사용자 요청) (2026-05-10)
+
+사용자 요청: "새 거래 추가 메뉴는 평소에는 숨겨져있다가 거래 목록 맨
+윗줄에서 위쪽 방향키를 한번 더 누를 때 나오도록 수정해주세요. 새 거래
+추가 메뉴에서 다시 아래 방향키를 눌러 거래 목록으로 돌아가면 숨겨주세요."
+
+### 동작
+
+- 첫 mount: sentinel **숨김** (entries 가 있을 때). cursor = row 0 = 첫
+  실거래. 평소 거래 목록만 보임.
+- 거래 목록 맨 위 (row 0) 에서 ↑ → sentinel 등장, cursor = sentinel (row 0).
+  실거래는 row 1+ 로 shift.
+- sentinel 에서 ↑ 한 번 더 → boundary clamp (sentinel 그대로).
+- sentinel 에서 ↓ → sentinel 사라짐, cursor = row 0 (첫 실거래로 복귀).
+- **빈 entries** 일 때는 sentinel 강제 표시 (사용자 진입점 보장).
+
+### 추가
+
+- `_show_sentinel: bool` — sentinel 가시성 상태. 초기 False.
+- `_entry_index_for_row(row) -> int | None` — DataTable row → entries
+  index 변환 helper. sentinel 가시성에 따라 0 또는 1 shift 동적.
+- `action_row_up` / `action_row_down` — `↑` / `↓` priority binding 으로
+  default cursor 이동을 가로채서 sentinel 토글까지 처리. sentinel 토글
+  조건이 맞지 않으면 `table.action_cursor_up()` / `action_cursor_down()`
+  에 위임.
+- `_render_table(entries, *, target_cursor=None)` — `target_cursor` 옵션
+  으로 명시적 cursor 위치 지정 가능 (sentinel 토글 후 정확한 위치 보장).
+
+### 수정
+
+- `_render_table` — `_show_sentinel=True` 일 때만 sentinel row add. 빈
+  entries 면 강제 True.
+- `_selected_entry` / `_is_on_sentinel_row` / `_update_active_cell_marker`
+  — 모두 `_entry_index_for_row` 통해 sentinel-aware 한 변환.
+- 기존 통합 테스트 row index 의 +1 shift 를 다시 -1 (sentinel 안 보이는
+  default 가 표준).
+- 새 4 케이스 (CL #51074):
+  * `test_sentinel_hidden_by_default_with_entries` — row count = entries,
+    sentinel 라벨 없음, cursor row 0 = 첫 실거래.
+  * `test_up_arrow_at_first_entry_reveals_sentinel` — ↑ → sentinel 등장
+    + 실거래는 row 1+, cursor 가 sentinel.
+  * `test_down_from_sentinel_hides_it_and_returns_to_first_entry` — ↓ →
+    sentinel 사라지고 cursor 첫 실거래.
+  * `test_up_at_sentinel_is_boundary_clamp` — ↑ 한 번 더 → boundary.
+
+### 검증
+
+- `make test-tui` → **275 passed** (273 + 2 net 새).
+
 ## CL #51072 — 0.11.0 — EntriesScreen 맨 위에 "새 거래 추가" sentinel row (2026-05-10)
 
 사용자 요청 (2026-05-10): "거래내역 맨 위에서 위쪽 화살표로 한칸 더 올리면
