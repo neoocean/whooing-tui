@@ -229,6 +229,79 @@ async def test_create_failure_shows_error_status():
 
 
 @pytest.mark.asyncio
+async def test_update_persists_memo_and_tags_to_local_sqlite():
+    """CL #51076+: 거래 수정 후 memo + 해시태그가 로컬 sqlite 에 저장."""
+    from whooing_core import db as core_db
+    from whooing_tui import data as tui_data
+
+    fake = FakeClient()
+    app = WhooingTuiApp(client=fake)  # type: ignore[arg-type]
+    async with app.run_test() as pilot:
+        es = await _open_entries(app, pilot)
+        es.action_edit_entry()
+        await pilot.pause()
+        assert isinstance(app.screen, EntryEditDialog)
+        # 사용자가 memo + tags 를 채워 저장한 결과를 직접 dismiss.
+        draft = EntryDraft(
+            entry_date="20260510", money=12000,
+            l_account_id="x20", r_account_id="x11",
+            l_type="expenses", r_type="assets",
+            item="스타벅스", memo="회의비 정산",
+            tags=["커피", "회의"],
+            entry_id="e1",
+        )
+        app.screen.dismiss(draft)
+        ok = await _wait_for(
+            lambda: len(fake.update_calls) == 1, timeout=3.0,
+        )
+        assert ok
+        # 후잉 호출의 memo 가 포함됐는지
+        assert fake.update_calls[0]["memo"] == "회의비 정산"
+        # 로컬 db 에서도 같은 memo + 해시태그 확인
+        await _wait_for(
+            lambda: tui_data.db_path().exists(), timeout=2.0,
+        )
+        with tui_data.open_ro() as conn:
+            info = core_db.get_annotations_for(conn, ["e1"])
+        assert info["e1"]["note"] == "회의비 정산"
+        assert sorted(info["e1"]["hashtags"]) == ["커피", "회의"]
+
+
+@pytest.mark.asyncio
+async def test_delete_purges_local_annotation_and_tags():
+    """CL #51076+: 거래 삭제 시 로컬 annotation/해시태그도 함께 정리."""
+    from whooing_core import db as core_db
+    from whooing_tui import data as tui_data
+
+    fake = FakeClient()
+    app = WhooingTuiApp(client=fake)  # type: ignore[arg-type]
+    async with app.run_test() as pilot:
+        es = await _open_entries(app, pilot)
+        # 먼저 annotation 을 db 에 심어둔다 — 삭제가 정말 정리하는지 확인.
+        tui_data.init_shared_schema()
+        with tui_data.open_rw() as conn:
+            core_db.upsert_annotation(
+                conn, entry_id="e1", section_id="s1", note="기존메모",
+            )
+            core_db.set_hashtags(conn, "e1", ["삭제전"])
+        es.action_delete_entry()
+        await pilot.pause()
+        assert isinstance(app.screen, ConfirmModal)
+        app.screen.dismiss(True)
+        ok = await _wait_for(
+            lambda: len(fake.delete_calls) == 1, timeout=3.0,
+        )
+        assert ok
+        await _wait_for(
+            lambda: app.screen.query_one("#entries-table", DataTable).row_count == 0,
+            timeout=2.0,
+        )
+        with tui_data.open_ro() as conn:
+            info = core_db.get_annotations_for(conn, ["e1"])
+        assert info == {}
+
+
+@pytest.mark.asyncio
 async def test_delete_with_no_selection_shows_error():
     fake = FakeClient(entries=[])
     app = WhooingTuiApp(client=fake)  # type: ignore[arg-type]

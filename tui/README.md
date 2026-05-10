@@ -9,7 +9,7 @@
 > [`mcp/`](../mcp) 에 보존되며, TUI 의 `mcp_bridge.py` 가 그 `OfficialMcpClient`
 > 를 한정적으로 호출 (deprecated, 후속 정리 예정).
 
-**현재 0.7.3 — Phase 6 까지 완료**:
+**현재 0.12.0 — Phase 6 + EntryEditDialog 폼 전면 개선 (CL #51076)**:
 
 - Phase 1: 핵심 라이브러리 + 헤드리스 CLI
 - Phase 2a: HomeScreen (섹션 picker + 활성 섹션 계정과목 트리)
@@ -119,16 +119,28 @@ entries 일 때는 sentinel 자동 표시 (진입점 보장).
 | `?` | 화면 도움말 |
 | `q` / Esc | EntriesScreen 으로 복귀 |
 
-### EntryEditDialog
+### EntryEditDialog (0.12.0+)
 
 | 키 | 동작 |
 | --- | --- |
 | Tab | 필드 이동 |
 | Ctrl+S | 저장 |
 | Esc | 취소 |
+| Enter (left/right 위) | 계정과목 picker 모달 |
 
-`left` / `right` 필드는 `account_id` (예: `x20`) 와 표시명 (예: `식비`,
-대소문자 무시) 양쪽 입력을 지원합니다.
+**필드별 입력 규칙** (CL #51076+):
+
+- **date** — `YYYY-MM-DD` 형식. 숫자만 입력해도 자동으로 `-` 가 삽입됨
+  (예: `20260509` → `2026-05-09`). 사용자가 직접 `-` 를 타이핑해도 무시됨.
+- **money** — 천단위 콤마 자동 포매팅 (`1,234,567`). 입력 중 실시간 갱신.
+- **left / right** — *이름* 으로 표시 (`식비  (x20)`). Enter / 클릭 → 메뉴
+  picker 모달 (`AccountPickerScreen`) 에서 선택. 모달은 OptionList 의
+  type-to-search 로 빠른 검색 가능, 자산→부채→자본→수입→지출→그룹 정렬.
+- **item** — 적요 (예: `스타벅스`). 후잉의 item 필드와 동일.
+- **memo** — 후잉의 memo + 로컬 sqlite 의 `entry_annotations.note` 에
+  동시 저장 (검색·통계용 미러).
+- **tags** — 해시태그 (로컬 sqlite only, 후잉에는 보내지 않음). 공백 / `,`
+  / `#` 모두 분리자 (예: `#식비 #저녁` 또는 `식비, 저녁`). 중복 제거.
 
 ## 헤드리스 CLI
 

@@ -44,6 +44,9 @@ from textual.coordinate import Coordinate
 from textual.screen import Screen
 from textual.widgets import DataTable, Footer, Header, Static
 
+from whooing_core import db as core_db
+
+from whooing_tui import data as tui_data
 from whooing_tui.client import WhooingClient
 from whooing_tui.config import load_config
 from whooing_tui.dates import days_ago_yyyymmdd, today_yyyymmdd
@@ -225,6 +228,14 @@ class EntriesScreen(Screen):
     # ---- mount ---------------------------------------------------------
 
     def on_mount(self) -> None:
+        # 로컬 sqlite (annotations / hashtags) 스키마 보장 — 첫 실행이거나
+        # 마이그레이션 직후라도 entry edit 시 db_path 가 비어있을 수 있다.
+        # init_schema 는 멱등이므로 매 mount 마다 호출해도 안전.
+        try:
+            tui_data.init_shared_schema()
+        except Exception:  # pragma: no cover
+            log.exception("init_shared_schema failed; 로컬 메모/해시태그 비활성화")
+
         table = self.query_one("#entries-table", DataTable)
         # 컬럼별 width — `left` 는 사용자 요청 (CL #51051) 으로 12 cells 로
         # fixed (한글 계정과목명 6자 + 약간의 여유). 그 이상은 textual 의
@@ -660,7 +671,12 @@ class EntriesScreen(Screen):
                 return
             self._submit_update(draft)
 
-        self.app.push_screen(EntryEditDialog(session, existing=target), _on_close)
+        # 로컬 sqlite 의 해시태그를 prefill 해서 dialog 에 넘긴다 — annotation
+        # 자체는 후잉 memo 와 동일하므로 별도 fetch 불필요.
+        local_tags = self._fetch_local_tags(target.get("entry_id") or "")
+        existing = dict(target)
+        existing["_local_tags"] = local_tags
+        self.app.push_screen(EntryEditDialog(session, existing=existing), _on_close)
 
     def action_delete_entry(self) -> None:
         target = self._selected_entry()
@@ -701,14 +717,15 @@ class EntriesScreen(Screen):
     @work(exclusive=True, group="mutate", name="create_entry")
     async def _submit_create(self, draft: EntryDraft) -> None:
         session = self.app.session  # type: ignore[attr-defined]
-        # account_id 의 type 을 SessionState 에서 조회해 함께 보낸다.
-        l_type = self._account_type(draft.l_account_id)
-        r_type = self._account_type(draft.r_account_id)
+        # picker 가 type 을 직접 채워주므로 그것을 우선 사용; 신뢰할 수 없으면
+        # SessionState fallback.
+        l_type = draft.l_type or self._account_type(draft.l_account_id)
+        r_type = draft.r_type or self._account_type(draft.r_account_id)
         if not l_type or not r_type:
             self.set_status("계정 type 조회 실패 — accounts-list 를 다시 받으세요.", error=True)
             return
         try:
-            await self._client.create_entry(
+            response = await self._client.create_entry(
                 section_id=session.section_id,
                 l_account=l_type,
                 l_account_id=draft.l_account_id,
@@ -726,6 +743,15 @@ class EntriesScreen(Screen):
             log.exception("create_entry failed")
             self.set_status(f"거래 생성 실패 (INTERNAL): {e}", error=True)
             return
+        # 후잉 응답에서 entry_id 를 회수해 로컬 db 에 memo + 해시태그 저장.
+        new_eid = self._extract_entry_id(response)
+        if new_eid and (draft.memo or draft.tags):
+            self._persist_local(
+                entry_id=new_eid,
+                section_id=session.section_id,
+                memo=draft.memo,
+                tags=draft.tags,
+            )
         self.set_status("거래 생성 완료. 재로드 중…")
         self.refresh_entries()
 
@@ -735,8 +761,8 @@ class EntriesScreen(Screen):
         if not draft.entry_id:
             self.set_status("entry_id 가 없습니다 — 수정 불가.", error=True)
             return
-        l_type = self._account_type(draft.l_account_id)
-        r_type = self._account_type(draft.r_account_id)
+        l_type = draft.l_type or self._account_type(draft.l_account_id)
+        r_type = draft.r_type or self._account_type(draft.r_account_id)
         try:
             await self._client.update_entry(
                 section_id=session.section_id,
@@ -757,6 +783,12 @@ class EntriesScreen(Screen):
             log.exception("update_entry failed")
             self.set_status(f"거래 수정 실패 (INTERNAL): {e}", error=True)
             return
+        self._persist_local(
+            entry_id=str(draft.entry_id),
+            section_id=session.section_id,
+            memo=draft.memo,
+            tags=draft.tags,
+        )
         self.set_status("거래 수정 완료. 재로드 중…")
         self.refresh_entries()
 
@@ -777,6 +809,9 @@ class EntriesScreen(Screen):
             log.exception("delete_entry failed")
             self.set_status(f"거래 삭제 실패 (INTERNAL): {e}", error=True)
             return
+        # 로컬 db 의 annotation/해시태그도 함께 정리 — 후잉에서 사라진 거래
+        # 의 메모만 남아있을 이유가 없다.
+        self._purge_local(str(eid))
         self.set_status(f"거래 {eid} 삭제 완료. 재로드 중…")
         self.refresh_entries()
 
@@ -787,6 +822,86 @@ class EntriesScreen(Screen):
             if a.get("account_id") == account_id:
                 return a.get("type") or ""
         return ""
+
+    # ---- local sqlite (memo + 해시태그) helpers ------------------------
+
+    def _fetch_local_tags(self, entry_id: str) -> list[str]:
+        """edit dialog 진입 직전, 로컬 db 에서 entry_id 의 해시태그 prefill.
+
+        실패는 fatal 이 아니다 — db 가 비어있거나 entry 가 처음 보는 거래면
+        그냥 빈 list 반환. 어떤 경우든 dialog 가 열리는 흐름을 막지 않는다.
+        """
+        if not entry_id:
+            return []
+        try:
+            with tui_data.open_ro() as conn:
+                rows = core_db.get_annotations_for(conn, [str(entry_id)])
+        except Exception:  # pragma: no cover — db 미존재 등
+            log.exception("fetch_local_tags failed")
+            return []
+        info = rows.get(str(entry_id)) or {}
+        return list(info.get("hashtags") or [])
+
+    def _persist_local(
+        self,
+        *,
+        entry_id: str,
+        section_id: str,
+        memo: str,
+        tags: list[str],
+    ) -> None:
+        """후잉 mutation 성공 후 로컬 sqlite 에 memo + 해시태그 동기화.
+
+        memo 는 후잉과 동일값을 그대로 mirror (검색·통계용 로컬 인덱스).
+        tags 는 로컬 전용 (후잉에는 보내지 않는다). 둘 다 비었을 때도
+        annotation row 는 만들어 둬 (set_hashtags 가 FK 위해 강제 생성).
+        """
+        if not entry_id:
+            return
+        try:
+            with tui_data.open_rw() as conn:
+                core_db.upsert_annotation(
+                    conn,
+                    entry_id=str(entry_id),
+                    section_id=section_id or None,
+                    note=memo or None,
+                )
+                core_db.set_hashtags(conn, str(entry_id), list(tags or []))
+        except Exception:  # pragma: no cover
+            log.exception("persist_local annotation/hashtags failed")
+
+    def _purge_local(self, entry_id: str) -> None:
+        """삭제된 거래의 annotation / 해시태그 정리. CASCADE 가 처리하므로
+        upsert 의 역으로 `remove_annotation` 만 호출."""
+        if not entry_id:
+            return
+        try:
+            with tui_data.open_rw() as conn:
+                core_db.remove_annotation(conn, str(entry_id))
+        except Exception:  # pragma: no cover
+            log.exception("purge_local annotation failed")
+
+    @staticmethod
+    def _extract_entry_id(response: Any) -> str | None:
+        """후잉 create_entry 응답에서 새 entry_id 회수. 가능한 모양들:
+            - {"entry_id": "..."}
+            - {"entries": [{"entry_id": "..."}]}
+            - {"results": [{"entry_id": "..."}]}
+        못 찾으면 None — 이 경우 로컬 persist 는 건너뛴다 (수정 시점엔
+        draft.entry_id 가 이미 있어 본 함수를 안 탄다).
+        """
+        if not isinstance(response, dict):
+            return None
+        eid = response.get("entry_id")
+        if eid:
+            return str(eid)
+        for key in ("entries", "results", "data"):
+            seq = response.get(key)
+            if isinstance(seq, list) and seq and isinstance(seq[0], dict):
+                eid = seq[0].get("entry_id")
+                if eid:
+                    return str(eid)
+        return None
 
     # ---- worker --------------------------------------------------------
 

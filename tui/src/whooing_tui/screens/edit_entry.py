@@ -4,27 +4,28 @@ ModalScreen[EntryDraft | None] 으로 열린다. 사용자가 저장하면 Entry
 객체를 dismiss 결과로 반환하고, 취소 / esc 면 None.
 
 호출자(EntriesScreen)는 dismiss 결과를 받아 WhooingClient.create_entry /
-update_entry 를 부른다 — dialog 자체는 client 를 모른다 (테스트와
-재사용을 위해).
+update_entry 를 부른다 + 로컬 sqlite 의 annotations / hashtags 도 동기화.
 
-UI 는 단순한 input 필드 6개:
-  date     YYYYMMDD (편집 시 prefill, 새 입력 시 오늘)
-  money    숫자 (천단위 콤마 입력 허용)
-  left     account_id (예: x20). SessionState.id_of() 로 한국어 입력 보조
-           — 이름을 입력해도 즉시 id 로 변환.
-  right    같은 규칙
-  item     적요 (선택)
-  memo     메모 (선택)
-
-자주입력·매월입력 매칭은 별도 CL (Phase 2d) — 본 dialog 는 manual 입력
-fallback 만.
+UI 필드 (CL #51076+):
+  date     YYYY-MM-DD (auto-dash — 숫자만 입력하면 자동으로 - 삽입,
+           - 직접 타이핑은 무시).
+  money    숫자, 입력 시 천단위 콤마 자동 포매팅 (1,234,567).
+  left     계정과목 — Button 형태로 *이름* 표시. Enter / click 시
+           AccountPickerScreen 으로 메뉴 선택.
+  right    같은 규칙.
+  item     적요 (Input).
+  memo     메모 (후잉 + 로컬 db 양쪽에 저장).
+  tags     해시태그 (로컬 db only). 공백/콤마/`#` 구분 — `식비, 저녁`
+           또는 `#식비 #저녁`.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+import re
+from dataclasses import dataclass, field
 from typing import Any
 
+from textual import on
 from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Grid, Horizontal, Vertical
@@ -41,50 +42,189 @@ class EntryDraft:
     """사용자가 dialog 에서 확정한 거래 입력값.
 
     EntriesScreen 이 이 객체를 받아 client.create_entry / update_entry 의
-    인자로 풀어 넣는다. l_account / r_account 는 SessionState 의 type 인덱스
-    로부터 보강된다.
+    인자로 풀어 넣는다. `l_type` / `r_type` 은 picker 가 직접 채워 넣어
+    SessionState 재조회 없이 바로 후잉 호출에 쓸 수 있다.
     """
     entry_date: str
     money: int
     l_account_id: str
     r_account_id: str
+    l_type: str = ""           # CL #51076+: picker 결과 직접 보존
+    r_type: str = ""           # CL #51076+
     item: str = ""
     memo: str = ""
+    # CL #51076+: 로컬 sqlite 의 annotations/hashtags 동기화 — 후잉에는
+    # 보내지 않는다. tags 는 normalize 된 list (중복/공백/`#` 처리).
+    tags: list[str] = field(default_factory=list)
     # 수정 모드면 entry_id, 새 입력이면 None.
     entry_id: str | None = None
 
 
+# ---- 입력 normalize helpers --------------------------------------------
+
+
+def _digits_only(s: str, max_len: int | None = None) -> str:
+    """숫자가 아닌 문자 (영문 / `-` / `,` / 공백 등) 모두 제거. 선택적 max_len."""
+    out = re.sub(r"[^0-9]", "", s or "")
+    if max_len is not None:
+        out = out[:max_len]
+    return out
+
+
+def _format_date_dashed(digits: str) -> str:
+    """`"20260509"` → `"2026-05-09"` 같은 부분 입력의 점진 포매팅.
+
+    digits 길이에 따라:
+      0~4   : 그대로 (예: "20" → "20")
+      5~6   : "YYYY-M" / "YYYY-MM"
+      7~8   : "YYYY-MM-D" / "YYYY-MM-DD"
+    """
+    if len(digits) >= 7:
+        return f"{digits[:4]}-{digits[4:6]}-{digits[6:8]}"
+    if len(digits) >= 5:
+        return f"{digits[:4]}-{digits[4:]}"
+    return digits
+
+
+def _format_money_comma(digits: str) -> str:
+    """숫자 문자열을 천단위 콤마로. 빈 문자열이면 그대로."""
+    if not digits:
+        return ""
+    return f"{int(digits):,}"
+
+
 def _strip_comma_int(s: str) -> int:
-    """천단위 콤마 입력을 정수로. 빈 문자열은 0 이 아니라 ValueError."""
-    cleaned = s.replace(",", "").strip()
+    """천단위 콤마/공백 입력을 정수로. 빈 문자열이면 ValueError."""
+    cleaned = (s or "").replace(",", "").strip()
     if not cleaned:
         raise ValueError("금액이 비어있습니다.")
-    n = int(cleaned)  # int() 는 음수도 허용 — 호출자가 양수 검증
-    return n
+    return int(cleaned)
 
 
-def _resolve_account(session: SessionState, raw: str) -> tuple[str, str] | None:
-    """입력 (account_id 또는 표시명) → (account_id, type) 튜플.
-
-    1) raw 가 'x' 로 시작하면 account_id 로 가정 → flat 에서 type 조회
-    2) 아니면 title 로 매칭 (대소문자 무시)
-    찾지 못하면 None.
+def _parse_dashed_date_to_yyyymmdd(s: str) -> str:
+    """`"2026-05-09"` (또는 `"20260509"`) 입력을 8자리 YYYYMMDD 로 정규화 후
+    `parse_yyyymmdd` 검증 통과시킨다.
     """
-    if not raw:
-        return None
-    cand = raw.strip()
-    if not cand:
-        return None
-    # account_id 직접 입력
-    by_id = {a["account_id"]: a for a in session.accounts_flat}
-    if cand in by_id:
-        a = by_id[cand]
-        return cand, a.get("type") or ""
-    # title 매칭
-    aid = session.id_of(cand)
-    if aid is not None and aid in by_id:
-        return aid, by_id[aid].get("type") or ""
-    return None
+    digits = _digits_only(s)
+    return parse_yyyymmdd(digits)
+
+
+def parse_hashtags_input(text: str) -> list[str]:
+    """`"#식비 #외식, 점심"` → `["식비", "외식", "점심"]` (정규화 + dedup).
+
+    공백 / 콤마 / `#` 모두 구분자. 양 끝 공백 제거. 중복 제거 (insertion order
+    보존). 빈 토큰 무시.
+    """
+    if not text:
+        return []
+    tokens = re.split(r"[\s,#]+", text)
+    seen: list[str] = []
+    for t in tokens:
+        t = t.strip()
+        if t and t not in seen:
+            seen.append(t)
+    return seen
+
+
+# ---- date / money input 위젯 -------------------------------------------
+
+
+class _DateInput(Input):
+    """숫자만 받아 `YYYY-MM-DD` 로 auto-format. `-` 직접 타이핑은 무시.
+
+    `Input.Changed` 이벤트에서 raw value 의 숫자만 추출해 dash 자리에
+    삽입한 string 으로 다시 set. 무한 루프 방지를 위해 `prevent` 사용.
+    """
+
+    def __init__(self, value: str = "", **kwargs: Any) -> None:
+        # 초기 value 도 정규화 — `"20260509"` 로 들어와도 `"2026-05-09"` 표시.
+        digits = _digits_only(value, max_len=8)
+        super().__init__(value=_format_date_dashed(digits), **kwargs)
+
+    @on(Input.Changed)
+    def _on_changed(self, event: Input.Changed) -> None:
+        if event.input is not self:
+            return
+        digits = _digits_only(self.value, max_len=8)
+        formatted = _format_date_dashed(digits)
+        if formatted != self.value:
+            with self.prevent(Input.Changed):
+                self.value = formatted
+                # cursor 를 끝에 두는 게 사용자 흐름에 자연 (입력 직후).
+                try:
+                    self.cursor_position = len(formatted)
+                except Exception:  # pragma: no cover
+                    pass
+
+
+class _MoneyInput(Input):
+    """숫자만 받아 천단위 콤마 자동 포매팅."""
+
+    def __init__(self, value: str = "", **kwargs: Any) -> None:
+        digits = _digits_only(value)
+        super().__init__(value=_format_money_comma(digits), **kwargs)
+
+    @on(Input.Changed)
+    def _on_changed(self, event: Input.Changed) -> None:
+        if event.input is not self:
+            return
+        digits = _digits_only(self.value)
+        formatted = _format_money_comma(digits)
+        if formatted != self.value:
+            with self.prevent(Input.Changed):
+                self.value = formatted
+                try:
+                    self.cursor_position = len(formatted)
+                except Exception:  # pragma: no cover
+                    pass
+
+
+# ---- account button (left/right 자리에 표시되는 버튼) -------------------
+
+
+class _AccountButton(Button):
+    """left/right 자리에 들어가는 picker 버튼.
+
+    label 은 "title (account_id)" 형태로 *이름* 노출. button 의 .data 를
+    통해 EntryEditDialog 가 account_id / type 을 추적.
+    """
+
+    DEFAULT_CSS = """
+    _AccountButton {
+        width: 1fr;
+        text-align: left;
+    }
+    """
+
+    def __init__(
+        self,
+        *,
+        account_id: str = "",
+        title: str = "",
+        type_key: str = "",
+        button_id: str | None = None,
+    ) -> None:
+        super().__init__(
+            self._make_label(title, account_id),
+            id=button_id,
+        )
+        self.account_id = account_id
+        # textual.widgets.Button 의 instance attribute 와 충돌 안 하도록
+        # 다른 이름.
+        self.acc_title = title
+        self.type_key = type_key
+
+    @staticmethod
+    def _make_label(title: str, account_id: str) -> str:
+        if not account_id:
+            return "(엔터로 선택)"
+        return f"{title or '?'}  ({account_id})"
+
+    def set_account(self, account_id: str, title: str, type_key: str) -> None:
+        self.account_id = account_id
+        self.acc_title = title
+        self.type_key = type_key
+        self.label = self._make_label(title, account_id)
 
 
 class EntryEditDialog(ModalScreen[EntryDraft | None]):
@@ -95,7 +235,7 @@ class EntryEditDialog(ModalScreen[EntryDraft | None]):
         align: center middle;
     }
     #dialog-frame {
-        width: 64;
+        width: 76;
         height: auto;
         padding: 1 2;
         border: thick $accent;
@@ -107,9 +247,9 @@ class EntryEditDialog(ModalScreen[EntryDraft | None]):
         color: $accent;
     }
     #form-grid {
-        grid-size: 2 6;
+        grid-size: 2 7;
         grid-columns: 9 1fr;
-        grid-rows: 3 3 3 3 3 3;
+        grid-rows: 3 3 3 3 3 3 3;
         height: auto;
         padding: 1 0;
     }
@@ -124,7 +264,7 @@ class EntryEditDialog(ModalScreen[EntryDraft | None]):
     }
     #button-row Button {
         margin: 0 1;
-        min-width: 12;
+        min-width: 18;
     }
     #form-error {
         height: auto;
@@ -144,38 +284,60 @@ class EntryEditDialog(ModalScreen[EntryDraft | None]):
         *,
         existing: dict[str, Any] | None = None,
     ) -> None:
-        """`existing` 이 주어지면 수정 모드 (값 prefill + entry_id 보존)."""
+        """`existing` 이 주어지면 수정 모드 (값 prefill + entry_id 보존).
+
+        `existing` 에는 후잉 거래 dict 외에 `_local_tags` 키로 사전조회한
+        해시태그 list 를 끼워 넣을 수 있다 (호출자가 sqlite 에서 미리 fetch).
+        """
         super().__init__()
         self._session = session
         self._existing = existing or {}
         self._is_edit = bool(self._existing.get("entry_id"))
+        # left/right 의 초기 (account_id, title, type) — _AccountButton 에 set.
+        self._initial_left = self._lookup_account(self._existing.get("l_account_id"))
+        self._initial_right = self._lookup_account(self._existing.get("r_account_id"))
+
+    def _lookup_account(self, aid: str | None) -> tuple[str, str, str]:
+        """account_id → (id, title, type). 못 찾으면 (id, "", "")."""
+        if not aid:
+            return ("", "", "")
+        for a in self._session.accounts_flat:
+            if a.get("account_id") == aid:
+                return (aid, a.get("title") or "", a.get("type") or "")
+        return (aid, "", "")
 
     def compose(self) -> ComposeResult:
         title = "거래 수정" if self._is_edit else "거래 추가"
+        # 초기 date 값: existing 이 8자리 YYYYMMDD 면 그대로, 신규면 today.
+        date_init = self._existing.get("entry_date") or today_yyyymmdd()
+        money_init = str(self._existing.get("money") or "")
+        tags_init = " ".join(self._existing.get("_local_tags") or [])
         with Vertical(id="dialog-frame"):
             yield Static(f"[bold]{title}[/bold]", id="dialog-title")
             with Grid(id="form-grid"):
                 yield Label("date")
-                yield Input(
-                    value=self._existing.get("entry_date") or today_yyyymmdd(),
-                    placeholder="YYYYMMDD", id="f-date", max_length=8,
+                yield _DateInput(
+                    value=date_init,
+                    placeholder="YYYY-MM-DD", id="f-date",
                 )
                 yield Label("money")
-                yield Input(
-                    value=str(self._existing.get("money") or ""),
-                    placeholder="숫자 (천단위 콤마 OK)", id="f-money",
+                yield _MoneyInput(
+                    value=money_init,
+                    placeholder="숫자 (자동 콤마 포매팅)", id="f-money",
                 )
                 yield Label("left")
-                yield Input(
-                    value=self._existing.get("l_account_id") or "",
-                    placeholder="account_id (예: x20) 또는 항목명",
-                    id="f-left",
+                yield _AccountButton(
+                    account_id=self._initial_left[0],
+                    title=self._initial_left[1],
+                    type_key=self._initial_left[2],
+                    button_id="f-left",
                 )
                 yield Label("right")
-                yield Input(
-                    value=self._existing.get("r_account_id") or "",
-                    placeholder="account_id (예: x11) 또는 항목명",
-                    id="f-right",
+                yield _AccountButton(
+                    account_id=self._initial_right[0],
+                    title=self._initial_right[1],
+                    type_key=self._initial_right[2],
+                    button_id="f-right",
                 )
                 yield Label("item")
                 yield Input(
@@ -185,7 +347,13 @@ class EntryEditDialog(ModalScreen[EntryDraft | None]):
                 yield Label("memo")
                 yield Input(
                     value=self._existing.get("memo") or "",
-                    placeholder="(선택)", id="f-memo",
+                    placeholder="(후잉 + 로컬 db 양쪽 저장)", id="f-memo",
+                )
+                yield Label("tags")
+                yield Input(
+                    value=tags_init,
+                    placeholder="해시태그 (로컬 db only). 예: #식비 #저녁",
+                    id="f-tags",
                 )
             yield Static("", id="form-error")
             with Horizontal(id="button-row"):
@@ -206,51 +374,81 @@ class EntryEditDialog(ModalScreen[EntryDraft | None]):
             self.dismiss(draft)
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
-        if event.button.id == "btn-cancel":
+        bid = event.button.id
+        if bid == "btn-cancel":
             self.action_cancel()
-        elif event.button.id == "btn-save":
+        elif bid == "btn-save":
             self.action_save()
+        elif bid in ("f-left", "f-right"):
+            # left/right 버튼 — 계정과목 picker 모달.
+            self._open_account_picker(bid)
+
+    def _open_account_picker(self, button_id: str) -> None:
+        """left/right 버튼 → AccountPickerScreen push, 결과로 버튼 갱신."""
+        from whooing_tui.screens.account_picker import AccountPickerScreen
+
+        side = "left" if button_id == "f-left" else "right"
+        btn = self.query_one(f"#{button_id}", _AccountButton)
+
+        def _on_pick(result: tuple[str, str, str] | None) -> None:
+            if result is None:
+                return
+            aid, title, type_key = result
+            btn.set_account(aid, title, type_key)
+
+        self.app.push_screen(
+            AccountPickerScreen(
+                self._session, side=side, current_id=btn.account_id or None,
+            ),
+            _on_pick,
+        )
 
     # ---- form → draft -------------------------------------------------
 
-    def _build_draft(self) -> EntryDraft | str | None:
+    def _build_draft(self) -> EntryDraft | None:
         """폼 값을 EntryDraft 로. 검증 실패 시 form-error 에 메시지를 쓰고
         None 을 반환 (dialog 는 닫지 않는다)."""
-        v = lambda wid: self.query_one(f"#{wid}", Input).value  # noqa: E731
+        date_raw = self.query_one("#f-date", Input).value
+        money_raw = self.query_one("#f-money", Input).value
+        item_raw = self.query_one("#f-item", Input).value
+        memo_raw = self.query_one("#f-memo", Input).value
+        tags_raw = self.query_one("#f-tags", Input).value
+        left_btn = self.query_one("#f-left", _AccountButton)
+        right_btn = self.query_one("#f-right", _AccountButton)
 
         try:
-            date = parse_yyyymmdd(v("f-date"))
+            date = _parse_dashed_date_to_yyyymmdd(date_raw)
         except ValueError as e:
             self._show_error(f"date: {e}")
             return None
         try:
-            money = _strip_comma_int(v("f-money"))
+            money = _strip_comma_int(money_raw)
         except ValueError as e:
             self._show_error(f"money: {e}")
             return None
         if money <= 0:
             self._show_error("money 는 양수여야 합니다 (음양은 차변/대변으로 표현).")
             return None
-
-        left = _resolve_account(self._session, v("f-left"))
-        if left is None:
-            self._show_error(f"left: account_id / 항목명 매칭 실패 — {v('f-left')!r}")
+        if not left_btn.account_id:
+            self._show_error("left: 엔터로 계정과목을 선택하세요.")
             return None
-        right = _resolve_account(self._session, v("f-right"))
-        if right is None:
-            self._show_error(f"right: account_id / 항목명 매칭 실패 — {v('f-right')!r}")
+        if not right_btn.account_id:
+            self._show_error("right: 엔터로 계정과목을 선택하세요.")
             return None
-        if left[0] == right[0]:
+        if left_btn.account_id == right_btn.account_id:
             self._show_error("left 와 right 는 서로 다른 항목이어야 합니다.")
             return None
 
         return EntryDraft(
             entry_date=date,
             money=money,
-            l_account_id=left[0],
-            r_account_id=right[0],
-            item=v("f-item").strip(),
-            memo=v("f-memo").strip(),
+            l_account_id=left_btn.account_id,
+            r_account_id=right_btn.account_id,
+            l_type=left_btn.type_key,
+            r_type=right_btn.type_key,
+            item=item_raw.strip(),
+            memo=memo_raw.strip(),
+            tags=parse_hashtags_input(tags_raw),
             entry_id=self._existing.get("entry_id"),
         )
 

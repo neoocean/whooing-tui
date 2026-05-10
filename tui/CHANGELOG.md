@@ -2,6 +2,93 @@
 
 각 항목은 Perforce CL 단위로 끊는다.
 
+## CL #51076 — 0.12.0 — EntryEditDialog 폼 전면 개선 + 로컬 메모/해시태그 (사용자 요청) (2026-05-10)
+
+사용자 요청 (한 CL 에 모두):
+1. **date** 만 표시 (시각 제거), `2026-05-09` 형식, 숫자만 입력해도 자동 `-`
+   삽입, 사용자가 직접 `-` 타이핑하면 무시.
+2. **money** 입력 시 천단위 콤마 자동 포매팅 (`1,234,567`).
+3. **left / right** 가 ID (`x20`) 로 표시되던 것을 *이름* (`식비`) 으로
+   변경. Enter / 클릭 시 메뉴에서 선택 (`AccountPickerScreen`).
+4. **memo** 는 후잉 memo 와 동일값 + 로컬 sqlite 에도 저장 (검색·통계용
+   미러).
+5. **해시태그** 입력 필드 신설 — 로컬 sqlite only, 후잉에는 보내지 않음.
+6. **Save / Cancel** 버튼이 잘려 보이는 문제 수정 (frame 64 → 76, button
+   min-width 12 → 18).
+
+### 추가
+
+- `tui/src/whooing_tui/screens/account_picker.py`
+  - `AccountPickerScreen(ModalScreen[tuple[str, str, str] | None])` —
+    OptionList 기반 계정과목 선택 모달. `_TYPE_ORDER` 로 자산 → 부채 →
+    자본 → 수입 → 지출 → 그룹 정렬. 타이핑 검색은 OptionList 자체 기능.
+- `tui/src/whooing_tui/screens/edit_entry.py`
+  - `_DateInput(Input)` — 숫자만 받아 `YYYY-MM-DD` 로 auto-format.
+    `Input.Changed` 이벤트에서 raw → digits → formatted 재대입 (무한
+    루프 방지를 위해 `prevent(Input.Changed)`).
+  - `_MoneyInput(Input)` — 같은 패턴, 천단위 콤마.
+  - `_AccountButton(Button)` — `account_id` / `acc_title` / `type_key`
+    instance attribute 로 picker 결과 보존. label = `"식비  (x20)"`.
+  - helper: `_digits_only`, `_format_date_dashed`, `_format_money_comma`,
+    `_parse_dashed_date_to_yyyymmdd`, `parse_hashtags_input` (`#` /
+    공백 / `,` 분리 + 중복 제거).
+  - `EntryDraft` 에 `l_type` / `r_type` / `tags` field 추가. picker 가
+    type 을 직접 채워주므로 `EntriesScreen._account_type` lookup 우회.
+- `tui/src/whooing_tui/screens/entries.py`
+  - `_persist_local(entry_id, section_id, memo, tags)` — 후잉 mutation
+    성공 후 `whooing_core.db.upsert_annotation` + `set_hashtags` 호출.
+  - `_purge_local(entry_id)` — 거래 삭제 시 로컬 annotation/해시태그
+    정리.
+  - `_fetch_local_tags(entry_id)` — edit 진입 시 로컬 db 에서 해시태그
+    prefill (`existing["_local_tags"]` 키로 dialog 에 전달).
+  - `_extract_entry_id(response)` — 후잉 create_entry 응답에서 새 entry_id
+    회수 (`{"entry_id": ...}` / `{"entries": [...]}` / `{"results": ...}`).
+  - `on_mount` 에서 `tui_data.init_shared_schema()` 호출 — annotation
+    db 의 schema 보장 (멱등).
+
+### 수정
+
+- `EntryEditDialog.compose()` — 7-row Grid (date / money / left / right
+  / item / memo / **tags**). frame width 64 → 76.
+- `EntryEditDialog._build_draft()` — `_resolve_account` free-text 로직
+  제거, `_AccountButton.account_id` 직접 사용. tags 는
+  `parse_hashtags_input` 로 normalize.
+- `EntriesScreen._submit_create / _submit_update / _submit_delete` —
+  picker 가 type 을 채워주는 path (`draft.l_type or self._account_type(...)`)
+  + 로컬 persist / purge wiring.
+- `tui/tests/conftest.py` — `WHOOING_DATA_DIR` 도 tmp_path 로 격리 (실
+  사용자 `~/.whooing/whooing-data.sqlite` 보호).
+
+### 제거
+
+- `_resolve_account(session, raw)` 헬퍼 — picker 모달이 진입점 단일화
+  (account_id / 표시명 양쪽 입력 코드 더 이상 호출되지 않음).
+
+### 테스트
+
+- `tui/tests/test_edit_entry_dialog.py` — 35 케이스 (digits_only / date
+  포매팅 / money 포매팅 / hashtags parse / EntryDraft 기본값).
+- `tui/tests/test_account_picker.py` — 3 통합 케이스 (push from edit
+  dialog / cancel keep button / type-sorted list).
+- `tui/tests/test_entries_mutate.py` — 2 추가 (로컬 sqlite memo+tags
+  persist on update / purge on delete). 5 → 7 케이스.
+- 합계: 275 → 377 통과 (+102 — 신규 + 기존 보존).
+
+### 사용자 흐름 다이어그램
+
+```mermaid
+graph LR
+    A[EntriesScreen<br/>n / Enter] --> B[EntryEditDialog]
+    B -->|date 8자리 입력| B1[2026-05-09<br/>auto-dash]
+    B -->|money 입력| B2[1,234,567<br/>auto-comma]
+    B -->|left/right Enter| C[AccountPickerScreen<br/>OptionList]
+    C -->|항목 선택| B3[버튼 라벨<br/>식비 x20]
+    C -->|Esc| B
+    B -->|tags 입력| B4[#식비 #저녁<br/>로컬 db only]
+    B -->|Ctrl+S| D[create_entry / update_entry<br/>후잉 REST]
+    D --> E[upsert_annotation<br/>+ set_hashtags<br/>로컬 sqlite]
+```
+
 ## CL #51074 — 0.11.1 — sentinel row 평소 숨김 + ↑/↓ 로 토글 (사용자 요청) (2026-05-10)
 
 사용자 요청: "새 거래 추가 메뉴는 평소에는 숨겨져있다가 거래 목록 맨
