@@ -7,4 +7,4 @@
 관련 코드는 monorepo 의 `mcp/` 에 archive 형태로 보존.
 """
 
-__version__ = "0.10.1"
+__version__ = "0.10.2"

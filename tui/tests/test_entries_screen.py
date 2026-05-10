@@ -133,6 +133,8 @@ async def test_entries_screen_is_initial_and_self_bootstraps():
         assert "식비" in row0_joined
         assert "현금" in row0_joined
         assert "스타벅스" in row0_joined
+        # 초기 상태 (CL #51064+): 컬럼 marker 비활성 — 노란 markup 없음.
+        assert "[black on yellow]" not in row0_joined
 
         # 100-cap 경고 없음
         assert app.screen.last_cap_warning is False
@@ -505,6 +507,7 @@ async def test_active_col_starts_at_zero():
 
 @pytest.mark.asyncio
 async def test_arrow_keys_navigate_columns():
+    """CL #51064+: 첫 ←/→ = 컬럼 활성화 (col 그대로), 두번째부터 ±1."""
     fake = FakeClient(entries_by_section={"s1": _entries_for_filter()})
     app = WhooingTuiApp(client=fake)  # type: ignore[arg-type]
     async with app.run_test() as pilot:
@@ -515,21 +518,30 @@ async def test_arrow_keys_navigate_columns():
             timeout=3.0,
         )
         es: EntriesScreen = app.screen  # type: ignore[assignment]
-        # → 5번 이동: date(0) → money → left → right → item → memo(5).
+        # 초기: 컬럼 비활성, _active_col=0
+        assert es._column_active is False
+        assert es._active_col == 0
+        # 첫 → = 활성화, col 0 그대로
+        es.action_next_column()
+        assert es._column_active is True
+        assert es._active_col == 0
+        # 추가 → 5번: col 0 → 1 → 2 → 3 → 4 → 5 (memo).
         for _ in range(5):
             es.action_next_column()
-        assert es._active_col == 5  # memo
+        assert es._active_col == 5
         # 끝에서 한 번 더 → boundary clamp
         es.action_next_column()
         assert es._active_col == 5
-        # ← 두 번 → memo - 2 = right(3)
+        # ← 두 번 → col 5 - 2 = 3 (right)
         es.action_prev_column()
         es.action_prev_column()
-        assert es._active_col == 3  # right
+        assert es._active_col == 3
         # 처음 boundary
         for _ in range(10):
             es.action_prev_column()
         assert es._active_col == 0
+        # 활성 상태 유지
+        assert es._column_active is True
 
 
 @pytest.mark.asyncio
@@ -544,6 +556,11 @@ async def test_enter_on_date_column_filters_same_day():
             timeout=3.0,
         )
         es: EntriesScreen = app.screen  # type: ignore[assignment]
+        # CL #51064+: 컬럼 marker 활성화 후 enter — 첫 → 누름이 활성화 +
+        # col 0 (date) 유지.
+        es.action_next_column()
+        assert es._column_active is True
+        assert es._active_col == 0
         # 정렬: 20260510×2, 20260509, 20260508 → row 0/1 = 20260510, row 2 = 20260509
         # row 0 (= 20260510) cursor 그대로. _active_col = 0 (date). enter.
         es.action_context_enter()
@@ -566,7 +583,8 @@ async def test_enter_on_left_column_filters_same_l_account():
             timeout=3.0,
         )
         es: EntriesScreen = app.screen  # type: ignore[assignment]
-        # 활성 컬럼을 left(2) 로 이동
+        # CL #51064+: 첫 → = 활성화 (col 0), 추가 → → → → col 2 (left).
+        es.action_next_column()
         es.action_next_column()
         es.action_next_column()
         assert es._active_col == 2
@@ -589,8 +607,8 @@ async def test_enter_on_right_column_filters_same_r_account():
             timeout=3.0,
         )
         es: EntriesScreen = app.screen  # type: ignore[assignment]
-        # 활성 컬럼 right(3)
-        for _ in range(3):
+        # CL #51064+: 첫 → = 활성화 (col 0), 추가 → 3번 → col 3 (right).
+        for _ in range(4):
             es.action_next_column()
         assert es._active_col == 3
         es.action_context_enter()
@@ -611,8 +629,8 @@ async def test_enter_on_item_column_filters_outside_paren_keyword():
             timeout=3.0,
         )
         es: EntriesScreen = app.screen  # type: ignore[assignment]
-        # 활성 컬럼 item(4)
-        for _ in range(4):
+        # CL #51064+: 첫 → = 활성화 (col 0), 추가 → 4번 → col 4 (item).
+        for _ in range(5):
             es.action_next_column()
         assert es._active_col == 4
         # 정렬 후 row 0 = e2 (지하철). 괄호 바깥 = "지하철".
@@ -636,7 +654,8 @@ async def test_enter_on_money_column_opens_edit_dialog():
             timeout=3.0,
         )
         es: EntriesScreen = app.screen  # type: ignore[assignment]
-        # money 컬럼으로
+        # CL #51064+: 첫 → = 활성화 (col 0), 추가 → → col 1 (money).
+        es.action_next_column()
         es.action_next_column()
         assert es._active_col == 1
         es.action_context_enter()
@@ -656,7 +675,8 @@ async def test_clear_filter_restores_all_entries():
             timeout=3.0,
         )
         es: EntriesScreen = app.screen  # type: ignore[assignment]
-        # 필터 적용
+        # CL #51064+: 컬럼 활성화 후 필터 적용
+        es.action_next_column()
         es.action_context_enter()
         await pilot.pause()
         assert es._active_filter is not None
@@ -669,9 +689,64 @@ async def test_clear_filter_restores_all_entries():
 
 
 @pytest.mark.asyncio
-async def test_active_cell_marker_applied_to_cursor_row_active_col():
-    """좌우 방향키로 컬럼 이동 시 (cursor_row, _active_col) cell 에 markup
-    (CL #51058) 이 적용되고 다른 cell 은 plain 그대로."""
+async def test_initial_state_has_no_column_marker():
+    """CL #51064+: 첫 mount 시 _column_active=False — 노란 marker 안 보임.
+    파란 row cursor (textual default) 만 보인다.
+    """
+    fake = FakeClient(entries_by_section={"s1": _entries_for_filter()})
+    app = WhooingTuiApp(client=fake)  # type: ignore[arg-type]
+    async with app.run_test() as pilot:
+        from whooing_tui.screens.entries import EntriesScreen
+        await _wait_for(
+            lambda: isinstance(app.screen, EntriesScreen)
+            and app.screen.last_entry_count == 4,
+            timeout=3.0,
+        )
+        es: EntriesScreen = app.screen  # type: ignore[assignment]
+        assert es._column_active is False
+        assert es._marked_cell is None
+        # 표 안 어디에도 marker markup 없음
+        table = es.query_one("#entries-table", DataTable)
+        for row in range(4):
+            for col in range(6):
+                cell = str(table.get_cell_at((row, col)))
+                assert "[black on yellow]" not in cell, (
+                    f"row={row} col={col} cell={cell!r}"
+                )
+
+
+@pytest.mark.asyncio
+async def test_first_arrow_press_activates_column_marker():
+    """CL #51064+: 첫 ←/→ 누름 = 활성화 + col 0 (이동 X). marker 등장."""
+    fake = FakeClient(entries_by_section={"s1": _entries_for_filter()})
+    app = WhooingTuiApp(client=fake)  # type: ignore[arg-type]
+    async with app.run_test() as pilot:
+        from whooing_tui.screens.entries import EntriesScreen
+        await _wait_for(
+            lambda: isinstance(app.screen, EntriesScreen)
+            and app.screen.last_entry_count == 4,
+            timeout=3.0,
+        )
+        es: EntriesScreen = app.screen  # type: ignore[assignment]
+        table = es.query_one("#entries-table", DataTable)
+        assert es._column_active is False
+        # 첫 → = 활성화, col 0 그대로
+        es.action_next_column()
+        await pilot.pause()
+        assert es._column_active is True
+        assert es._active_col == 0
+        assert "[black on yellow]" in str(table.get_cell_at((0, 0)))
+        # 두번째 → = col 1
+        es.action_next_column()
+        await pilot.pause()
+        assert es._active_col == 1
+        assert "[black on yellow]" not in str(table.get_cell_at((0, 0)))
+        assert "[black on yellow]" in str(table.get_cell_at((0, 1)))
+
+
+@pytest.mark.asyncio
+async def test_active_cell_marker_follows_cursor_row():
+    """↓ 로 cursor row 가 바뀌면 marker 도 따라 이동 — 단, 컬럼 활성 상태일 때만."""
     fake = FakeClient(entries_by_section={"s1": _entries_for_filter()})
     app = WhooingTuiApp(client=fake)  # type: ignore[arg-type]
     async with app.run_test() as pilot:
@@ -687,31 +762,46 @@ async def test_active_cell_marker_applied_to_cursor_row_active_col():
         def _cell(row, col):
             return str(table.get_cell_at((row, col)))
 
-        # 초기: row 0 의 col 0 (date) 에 marker.
+        # 컬럼 활성화 (CL #51064+)
+        es.action_next_column()
+        await pilot.pause()
         assert "[black on yellow]" in _cell(0, 0)
-        # 다른 cell 은 plain
-        assert "[black on yellow]" not in _cell(0, 1)  # money
-        assert "[black on yellow]" not in _cell(1, 0)  # row 1 의 date
-
-        # → 한 칸: col 0 → 1 (money). col 0 marker 사라지고 col 1 marker
-        es.action_next_column()
+        # cursor 를 row 2 로 이동 (↓ 두 번)
+        await pilot.press("down")
+        await pilot.press("down")
         await pilot.pause()
-        assert "[black on yellow]" not in _cell(0, 0)  # 복원
-        assert "[black on yellow]" in _cell(0, 1)
-        assert "[black on yellow]" not in _cell(1, 0)
+        # row 0 marker 사라지고 row 2 에 marker
+        assert "[black on yellow]" not in _cell(0, 0)
+        assert "[black on yellow]" in _cell(2, 0)
 
-        # → 두 칸 더: col 1 → 2 → 3 (right)
-        es.action_next_column()
-        es.action_next_column()
-        await pilot.pause()
-        assert "[black on yellow]" not in _cell(0, 1)
-        assert "[black on yellow]" in _cell(0, 3)
+
+# ---- CL #51064+: Enter / Esc 의 column-active 분기 ---------------------
 
 
 @pytest.mark.asyncio
-async def test_active_cell_marker_follows_cursor_row():
-    """↓ 로 cursor row 가 바뀌면 marker 도 따라 이동 (이전 row 는 plain
-    복원)."""
+async def test_enter_without_column_active_opens_edit_dialog():
+    """파란 row 만 있는 상태에서 enter = EntryEditDialog (필터 X)."""
+    fake = FakeClient(entries_by_section={"s1": _entries_for_filter()})
+    app = WhooingTuiApp(client=fake)  # type: ignore[arg-type]
+    async with app.run_test() as pilot:
+        from whooing_tui.screens.edit_entry import EntryEditDialog
+        from whooing_tui.screens.entries import EntriesScreen
+        await _wait_for(
+            lambda: isinstance(app.screen, EntriesScreen)
+            and app.screen.last_entry_count == 4,
+            timeout=3.0,
+        )
+        es: EntriesScreen = app.screen  # type: ignore[assignment]
+        assert es._column_active is False
+        # column 비활성 상태에서 enter
+        es.action_context_enter()
+        await pilot.pause()
+        assert isinstance(app.screen, EntryEditDialog)
+
+
+@pytest.mark.asyncio
+async def test_escape_when_column_active_deactivates_marker():
+    """Esc — 컬럼 활성 상태에서 marker 만 해제, 앱 종료 X."""
     fake = FakeClient(entries_by_section={"s1": _entries_for_filter()})
     app = WhooingTuiApp(client=fake)  # type: ignore[arg-type]
     async with app.run_test() as pilot:
@@ -721,20 +811,64 @@ async def test_active_cell_marker_follows_cursor_row():
             and app.screen.last_entry_count == 4,
             timeout=3.0,
         )
-        table = app.screen.query_one("#entries-table", DataTable)
-
-        def _cell(row, col):
-            return str(table.get_cell_at((row, col)))
-
-        # 초기 marker (0, 0)
-        assert "[black on yellow]" in _cell(0, 0)
-        # cursor 를 row 2 로 이동 (↓ 두 번)
-        await pilot.press("down")
-        await pilot.press("down")
+        es: EntriesScreen = app.screen  # type: ignore[assignment]
+        # 활성화
+        es.action_next_column()
         await pilot.pause()
-        # row 0 marker 사라지고 row 2 에 marker
-        assert "[black on yellow]" not in _cell(0, 0)
-        assert "[black on yellow]" in _cell(2, 0)
+        assert es._column_active is True
+        # Esc 직접 호출 (key 시뮬보다 안정)
+        es.action_deactivate_column()
+        await pilot.pause()
+        assert es._column_active is False
+        assert es._marked_cell is None
+        # 앱은 그대로 — EntriesScreen 이 active screen
+        assert isinstance(app.screen, EntriesScreen)
+        # marker 사라졌는지
+        table = es.query_one("#entries-table", DataTable)
+        assert "[black on yellow]" not in str(table.get_cell_at((0, 0)))
+
+
+@pytest.mark.asyncio
+async def test_escape_when_column_inactive_is_noop():
+    """초기 상태 (파란만) 에서 Esc = 아무 동작 안 함, 앱 종료 안 함."""
+    fake = FakeClient(entries_by_section={"s1": _entries_for_filter()})
+    app = WhooingTuiApp(client=fake)  # type: ignore[arg-type]
+    async with app.run_test() as pilot:
+        from whooing_tui.screens.entries import EntriesScreen
+        await _wait_for(
+            lambda: isinstance(app.screen, EntriesScreen)
+            and app.screen.last_entry_count == 4,
+            timeout=3.0,
+        )
+        es: EntriesScreen = app.screen  # type: ignore[assignment]
+        assert es._column_active is False
+        # Esc on 비활성 → noop
+        es.action_deactivate_column()
+        await pilot.pause()
+        # 상태 그대로
+        assert es._column_active is False
+        assert isinstance(app.screen, EntriesScreen)
+        # 앱이 종료되지 않았는지 — _exit 플래그 체크 (textual 8 의 App
+        # 내부 attribute, 환경 의존이라 직접 검사보다 screen 생존만 확인)
+
+
+@pytest.mark.asyncio
+async def test_escape_via_pressed_key_does_not_quit():
+    """실제 'escape' 키 입력으로도 앱이 종료되지 않는지 — 사용자가 가장
+    걱정한 시나리오."""
+    fake = FakeClient(entries_by_section={"s1": _entries_for_filter()})
+    app = WhooingTuiApp(client=fake)  # type: ignore[arg-type]
+    async with app.run_test() as pilot:
+        from whooing_tui.screens.entries import EntriesScreen
+        await _wait_for(
+            lambda: isinstance(app.screen, EntriesScreen)
+            and app.screen.last_entry_count == 4,
+            timeout=3.0,
+        )
+        await pilot.press("escape")
+        await pilot.pause()
+        # 여전히 EntriesScreen (앱 종료 X)
+        assert isinstance(app.screen, EntriesScreen)
 
 
 @pytest.mark.asyncio
@@ -749,6 +883,8 @@ async def test_refresh_clears_active_filter():
             timeout=3.0,
         )
         es: EntriesScreen = app.screen  # type: ignore[assignment]
+        # CL #51064+: 컬럼 활성화 후 필터 적용
+        es.action_next_column()
         es.action_context_enter()  # 필터 적용
         await pilot.pause()
         assert es._active_filter is not None

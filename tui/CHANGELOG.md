@@ -2,6 +2,81 @@
 
 각 항목은 Perforce CL 단위로 끊는다.
 
+## CL #51064 — 0.10.2 — 컬럼 marker 활성/비활성 상태 분리 + Esc 로 컬럼만 해제 + 종료는 q 만 (2026-05-10)
+
+사용자 요청 (2026-05-10):
+> "거래내역이 선택된 상태에서 처음부터 오렌지색 칼럼 커서가 보입니다.
+> 이를 처음에는 거래내역을 선택한 파란 커서만 표시해 이 상태에서 엔터키
+> 를 누르면 거래내역 수정 화면으로 이동하고 방향키를 눌러 칼럼 오렌지
+> 색 커서가 나타나면 이때부터 엔터키를 누르면 필터 기능으로 동작하게
+> 해주세요. 그리고 ESC를 누르면 오렌지색 커서만 선택취소해주세요. 파
+> 란색 커서만 있는 상태에서 ESC는 아무 동작도 하지 않습니다. ESC로 종료
+> 되지 않게 해주세요. 종료키는 q 입니다."
+
+### 동작 표
+
+| 상태 | Enter | ←/→ | Esc | q |
+|---|---|---|---|---|
+| 파란만 (초기) | EntryEditDialog | **컬럼 marker 활성화** (col 그대로) | **noop** (종료 안 함) | 종료 |
+| 파란+노란 (컬럼 활성) | 컬럼별 필터 / edit | col ±1 (boundary clamp) | **marker만 해제** | 종료 |
+
+### 추가
+
+- `_column_active: bool` — marker 활성/비활성 상태 (CL #51064+ 새 field).
+  초기 `False`. ←/→ 첫 누름 시 `True`, Esc 시 `False`.
+- `action_deactivate_column` — Esc binding 의 새 action. 활성 상태이면
+  marker 해제 + status 안내, 비활성이면 noop.
+
+### 수정
+
+- `screens/entries.py::BINDINGS`:
+  * `Binding("escape", "deactivate_column", ...)` — 이전 `"back"` (=
+    app.exit) 에서 변경. **종료는 `q` 만**.
+  * `Binding("escape", ...)` 의 `show=False` 그대로 (Footer 에 영문 키만).
+- `action_prev_column` / `action_next_column`:
+  * 비활성 → 활성화 (`_column_active = True`), `_active_col` 그대로,
+    marker 등장.
+  * 활성 → ±1 (boundary clamp).
+- `action_context_enter`:
+  * 비활성 → `action_edit_entry` (거래 수정).
+  * 활성 → 기존 분기 (`FILTERABLE_COLUMNS` 면 필터, money/memo 면 edit).
+- `_update_active_cell_marker`:
+  * 이전 marker cleanup 을 항상 먼저 (활성/비활성 무관).
+  * `_column_active=False` 면 새 marker 적용 X — early return.
+- `on_data_table_row_highlighted`:
+  * 활성 상태일 때만 marker 가 row 따라 이동 (비활성이면 marker 없음 그대로).
+
+### 수정 (테스트)
+
+- `tests/test_entries_screen.py`:
+  * 기존 `test_arrow_keys_navigate_columns` 가 첫 → 활성화 / 두번째부터
+    이동 흐름으로 갱신.
+  * `test_enter_on_*_column_filters_*` 4 cases 가 컬럼 활성화 step 추가
+    (한 번 더 `action_next_column`).
+  * `test_enter_on_money_column_opens_edit_dialog` 같은 패턴.
+  * `test_clear_filter_restores_all_entries` / `test_refresh_clears_active_filter`
+    도 활성화 step.
+  * 기존 `test_active_cell_marker_applied_to_cursor_row_active_col` 를
+    분할 → `test_initial_state_has_no_column_marker` (비활성 검증) +
+    `test_first_arrow_press_activates_column_marker` (활성화 검증).
+  * `test_active_cell_marker_follows_cursor_row` 도 활성화 step.
+- 새 4 cases:
+  * `test_enter_without_column_active_opens_edit_dialog` — 비활성에서 enter = EntryEditDialog.
+  * `test_escape_when_column_active_deactivates_marker` — 활성 상태 Esc → 해제.
+  * `test_escape_when_column_inactive_is_noop` — 비활성 Esc → noop.
+  * `test_escape_via_pressed_key_does_not_quit` — `pilot.press("escape")` 가 EntriesScreen 그대로 (앱 종료 X) — 사용자 가장 우려 시나리오.
+
+### 수정 (그 외)
+
+- `tui/README.md` — 키 바인딩 표를 두 상태 (파란만 / 파란+노랑) 로 분리.
+- `tui/CHANGELOG.md` / `tui/MEMORY.md` — 본 항목.
+- `tui/pyproject.toml` + `__init__.py` — 0.10.1 → 0.10.2.
+
+### 검증
+
+- `make test-tui` → **266 passed** (261 → 266, 정확히 +5 새 케이스).
+- `pilot.press("escape")` 후 EntriesScreen 그대로 — 앱 종료 안 됨 검증.
+
 ## CL #51058 — 0.10.1 — 활성 컬럼을 cell 단위 시각 마커로 (cursor row 의 파란색과 구분되는 노란색) (2026-05-10)
 
 사용자 요청 (2026-05-10): "지금은 거래 내역 하나를 활성화하면 파란색 배경

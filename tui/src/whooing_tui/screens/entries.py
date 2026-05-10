@@ -123,13 +123,16 @@ class EntriesScreen(Screen):
     # CL #51053+: 좌우 방향키로 컬럼 navigation, Enter 의 의미가 column
     # 별 컨텍스트 액션 (date/left/right/item = 필터 적용, money/memo = 거래
     # 수정 dialog). 필터 활성 상태에서 'r' 또는 'c' 로 해제.
+    # CL #51064 부터: 종료 = `q` 만. `escape` 는 컬럼 marker 해제 전용
+    # (marker 가 없는 초기 상태에서는 noop). 사용자 지시: "ESC로 종료되지
+    # 않게 해주세요. 종료키는 q 입니다."
     BINDINGS = [
         *bind_ko("q", "back", "Quit", show=True),
-        Binding("escape", "back", "Quit", show=False),
+        Binding("escape", "deactivate_column", "Cancel col", show=False),
         *bind_ko("s", "open_sections", "Sections", show=True, priority=True),
         *bind_ko("a", "open_accounts", "Accounts", show=True, priority=True),
         *bind_ko("n", "new_entry", "New", show=True, priority=True),
-        # Enter 의 의미는 _active_col 에 따라 분기 (action_context_enter).
+        # Enter 의 의미는 _column_active + _active_col 에 따라 분기.
         Binding("enter", "context_enter", "Enter", show=True, priority=True),
         *bind_ko("e", "edit_entry", "Edit", show=True, priority=True),
         *bind_ko("d", "delete_entry", "Delete", show=True, priority=True),
@@ -186,8 +189,12 @@ class EntriesScreen(Screen):
         # cursor_type 이 "row" 라 textual 자체로는 column 추적이 안 된다 —
         # 화면이 직접 관리.
         self._active_col: int = 0
-        # 마지막으로 마커링한 cell 좌표 — row cursor 가 이동하거나 _active_col
-        # 이 변경될 때 이전 cell 을 plain 으로 복원하기 위해 보관 (CL #51058+).
+        # CL #51064 부터: 컬럼 marker 의 활성/비활성 상태 분리. 초기는
+        # False — 거래 row 의 파란 cursor 만 보이고 노란 cell marker 는
+        # 없다. ←/→ 첫 누름 시 True 로 (marker 등장), Esc 로 다시 False.
+        self._column_active: bool = False
+        # 마지막으로 마커링한 cell 좌표 — _column_active 가 True 인 동안만
+        # 의미. False 일 때 None.
         self._marked_cell: tuple[int, int] | None = None
 
     # ---- compose -------------------------------------------------------
@@ -294,44 +301,71 @@ class EntriesScreen(Screen):
         self._render_table(self._entries)
         self._update_window_status_after_filter_clear()
 
-    # ---- 컬럼 navigation (CL #51053+) ---------------------------------
+    # ---- 컬럼 navigation (CL #51053+, 활성/비활성 상태는 #51064+) -----
 
     def action_prev_column(self) -> None:
+        """← 키 — marker 비활성이면 활성화만 (_active_col 그대로), 활성이면 -1."""
+        if not self._column_active:
+            self._column_active = True
+            self._update_active_cell_marker()
+            self._announce_active_column()
+            return
         if self._active_col > 0:
             self._active_col -= 1
             self._update_active_cell_marker()
             self._announce_active_column()
 
     def action_next_column(self) -> None:
+        """→ 키 — marker 비활성이면 활성화만, 활성이면 +1."""
+        if not self._column_active:
+            self._column_active = True
+            self._update_active_cell_marker()
+            self._announce_active_column()
+            return
         if self._active_col < len(self._COLUMN_NAMES) - 1:
             self._active_col += 1
             self._update_active_cell_marker()
             self._announce_active_column()
 
+    def action_deactivate_column(self) -> None:
+        """Esc — 활성 컬럼 marker 만 해제. 비활성 상태에서는 noop (앱 종료 X).
+
+        사용자 지시 (CL #51064): "ESC를 누르면 오렌지색 커서만 선택취소…
+        파란색 커서만 있는 상태에서 ESC는 아무 동작도 하지 않습니다.
+        ESC로 종료되지 않게 해주세요. 종료키는 q 입니다."
+        """
+        if not self._column_active:
+            return  # noop — 사용자 명시
+        self._column_active = False
+        self._update_active_cell_marker()  # marker cleanup
+        self.set_status("컬럼 선택 해제 — ←/→ 다시 눌러 재활성.")
+
     def on_data_table_row_highlighted(
         self, event: DataTable.RowHighlighted,
     ) -> None:
-        """↑/↓ 또는 click 으로 cursor row 가 바뀌면 marker 도 따라 이동."""
+        """↑/↓ 또는 click 으로 cursor row 가 바뀌면 marker 도 따라 이동.
+
+        `_column_active=False` 이면 _update_active_cell_marker 가 알아서
+        early return — marker 없는 상태 보존.
+        """
         self._update_active_cell_marker()
 
     def _update_active_cell_marker(self) -> None:
-        """이전 active cell 을 plain 으로 복원 + 현재 (cursor_row, _active_col)
-        에 markup 적용. cell value 는 `_format_cell` 로 raw entry 에서 다시
-        format — markup string 이 누적/오염되지 않는다.
+        """marker 상태와 cell content 를 동기화.
+
+        - `_column_active=False`: 기존 marker 가 있으면 plain 복원, 없으면
+          noop. 이후 새 marker 적용 안 함.
+        - `_column_active=True`: 이전 marker cell 이 현재 (cursor_row,
+          _active_col) 와 다르면 복원, 새 위치에 markup 적용.
+
+        cell value 는 `_format_cell` 로 raw entry 에서 다시 format —
+        markup string 이 누적/오염되지 않는다.
         """
         table = self.query_one("#entries-table", DataTable)
-        if not self._entries:
-            self._marked_cell = None
-            return
 
-        cur_row = table.cursor_row
-        if cur_row is None or cur_row < 0 or cur_row >= len(self._entries):
-            return
-        cur_col = self._active_col
-        new_marker = (cur_row, cur_col)
-
-        # 1. 이전 marker 가 있고 새 위치와 다르면 복원
-        if self._marked_cell is not None and self._marked_cell != new_marker:
+        # 이전 marker cell 복원 (있으면). _column_active 와 무관하게 항상
+        # 먼저 처리 — 비활성화 진입 시 cleanup, row/col 변경 시 복원.
+        if self._marked_cell is not None:
             prev_row, prev_col = self._marked_cell
             if 0 <= prev_row < len(self._entries) and 0 <= prev_col < len(self._COLUMN_NAMES):
                 plain_prev = self._format_cell(self._entries[prev_row], prev_col)
@@ -343,11 +377,19 @@ class EntriesScreen(Screen):
                     )
                 except Exception:  # pragma: no cover — coordinate stale
                     pass
+            self._marked_cell = None
 
-        # 2. 현재 cell 에 markup 적용
+        # 비활성이거나 entries 비어있으면 marker 적용 X.
+        if not self._column_active or not self._entries:
+            return
+
+        cur_row = table.cursor_row
+        if cur_row is None or cur_row < 0 or cur_row >= len(self._entries):
+            return
+        cur_col = self._active_col
+
         plain_cur = self._format_cell(self._entries[cur_row], cur_col)
-        # 빈 cell 도 marker 가 보이도록 단일 공백 fallback (memo 가 비어있을 때 등).
-        marker_text = plain_cur if plain_cur else " "
+        marker_text = plain_cur if plain_cur else " "  # 빈 cell 도 보이게
         marked = f"[{self._ACTIVE_CELL_STYLE}]{marker_text}[/]"
         try:
             table.update_cell_at(
@@ -357,7 +399,7 @@ class EntriesScreen(Screen):
             )
         except Exception:  # pragma: no cover
             return
-        self._marked_cell = new_marker
+        self._marked_cell = (cur_row, cur_col)
 
     def _announce_active_column(self) -> None:
         """status bar 에 현재 컬럼 + Enter 시 동작 안내."""
@@ -371,20 +413,26 @@ class EntriesScreen(Screen):
         self.set_status(f"활성 컬럼: {col}    {hint}")
 
     def action_context_enter(self) -> None:
-        """Enter — 활성 컬럼에 따라 필터 또는 거래 수정.
+        """Enter — 컬럼 marker 의 활성 여부에 따라 분기 (CL #51064+).
 
-        - date / left / right / item: 같은 값으로 필터.
-        - money / memo: 기존 edit_entry (거래 수정) dialog.
+        - **비활성** (파란 row cursor 만): 거래 수정 dialog (EntryEditDialog).
+        - **활성** (파란 + 노란 cell marker):
+          * date / left / right / item: 같은 값으로 필터.
+          * money / memo: 거래 수정 dialog.
         """
         target = self._selected_entry()
         if target is None:
             self.set_status("선택된 거래가 없습니다.", error=True)
             return
+        # 컬럼 비활성 → 항상 edit (사용자 명시 동작).
+        if not self._column_active:
+            self.action_edit_entry()
+            return
         col = self._COLUMN_NAMES[self._active_col]
         if col in FILTERABLE_COLUMNS:
             self._apply_filter(col, target)
         else:
-            # money / memo 컬럼 → edit_entry 그대로.
+            # money / memo 컬럼 → edit_entry.
             self.action_edit_entry()
 
     def _apply_filter(self, column: str, target: dict[str, Any]) -> None:
