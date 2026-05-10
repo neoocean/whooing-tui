@@ -2,6 +2,51 @@
 
 각 항목은 Perforce CL 단위로 끊는다.
 
+## CL #51118 — 0.16.2 — p4_sync daemon thread submit 미완료 회귀 fix + 누적 로컬 db 변경분 수동 submit (사용자 보고) (2026-05-10)
+
+사용자 보고: "sqlite 데이터베이스는 퍼포스 서버에 올라가 있습니까"
+
+### 진단
+
+- DB 파일은 P4 에 등록 (`//.../db/whooing-data.sqlite#1`, CL #51114).
+- 로컬 SHA `43627e...` ≠ P4 SHA `238f8e...` — 그동안의 mutation 이 자동
+  submit 됐어야 했지만 변경분이 P4 에 반영 안 됨.
+- 수동 `p4 reconcile -e -a -d <path>` 는 정상 작동 — P4 환경 자체는 멀쩡.
+- 회귀 원인: `p4_sync.submit_db_to_p4` 가 `Thread(daemon=True)` 사용 →
+  사용자가 TUI 를 종료하는 순간 main thread 가 끝나면서 submit worker 도
+  같이 죽어 `p4 submit` 호출이 미완료.
+
+### 수정
+
+- `tui/src/whooing_tui/p4_sync.py`
+  - 활성 submit 스레드 추적 전역 (`_PENDING: list[threading.Thread]` +
+    `_PENDING_LOCK`).
+  - `Thread(daemon=False)` 로 변경 + `_runner` finally 에서 `_PENDING`
+    에서 자기 자신 제거.
+  - `wait_for_pending(timeout_per_thread=30.0)` 신설 — 모든 활성 스레드
+    join, timeout 안 끝나면 포기 (사용자 종료 흐름 무한 차단 방지).
+- `tui/src/whooing_tui/app.py`
+  - `WhooingTuiApp.on_unmount()` 추가 — `p4_sync.wait_for_pending()`
+    호출. App 종료 직전 마지막 mutation 의 submit 까지 기다림.
+- `tui/tests/test_p4_sync.py` — 2 신규:
+  - `test_submit_async_threads_are_tracked_and_joinable`
+  - `test_wait_for_pending_when_empty_is_noop`
+
+### 진단 중 발생한 데이터 손실 주의
+
+진단 도중 `p4 reconcile` 의 부작용을 확인하려고 실행 후 `p4 revert` 로 되
+돌렸으나, 그 시점에 로컬 db 의 변경분이 P4 rev1 로 덮어씌워졌다 — 사용자
+의 그동안 mutation 이 있었다면 같이 사라짐. (대부분은 `init_schema()` 의
+PRAGMA / `INSERT OR REPLACE schema_meta` noop 쓰기로 추정). 회고 차원의
+교훈: 진단 시에는 `p4 reconcile -n` (preview-only) 를 우선 사용.
+
+본 CL 은 *코드 수정만* — db 파일은 이미 P4 와 일치. 다음 mutation 부터
+새 자동 submit 흐름이 정상 동작.
+
+### 검증
+
+- 453 → **455 통과** (+2).
+
 ## CL #51117 — 0.16.1 — 보고서 API path 수정 (라이브 응답 unknown method 회귀 fix, 사용자 보고) (2026-05-10)
 
 사용자 보고: "모든 보고서 팝업을 열면 unknown method 메시지만 나옵니다."

@@ -113,6 +113,34 @@ def test_submit_silent_when_p4_where_fails(monkeypatch, tmp_path):
     p4_sync.submit_db_to_p4(db, "test", blocking=True)
 
 
+def test_submit_async_threads_are_tracked_and_joinable(monkeypatch, tmp_path):
+    """CL #51118+: daemon=False + _PENDING 추적 — `wait_for_pending` 으로
+    모두 join 됨."""
+    log_file = tmp_path / "p4-calls.txt"
+    fake_p4 = tmp_path / "p4"
+    fake_p4.write_text(
+        f"#!/bin/sh\nsleep 0.05\necho \"$@\" >> {log_file}\nexit 0\n",
+    )
+    fake_p4.chmod(0o755)
+    monkeypatch.setenv("WHOOING_P4_BIN", str(fake_p4))
+    db = tmp_path / "db.sqlite"
+    db.write_bytes(b"")
+    # 비동기 submit 2개 발사 — _PENDING 에 추적되고 wait_for_pending 으로
+    # 둘 다 끝까지 기다려야.
+    p4_sync.submit_db_to_p4(db, "test 1", blocking=False)
+    p4_sync.submit_db_to_p4(db, "test 2", blocking=False)
+    p4_sync.wait_for_pending(timeout_per_thread=5.0)
+    # 두 submit 의 호출이 모두 기록됐는지 확인.
+    log_lines = log_file.read_text().splitlines()
+    submit_calls = [l for l in log_lines if l.startswith("submit")]
+    assert len(submit_calls) == 2
+
+
+def test_wait_for_pending_when_empty_is_noop():
+    """진행 중인 thread 가 없어도 예외 없이 즉시 return."""
+    p4_sync.wait_for_pending()
+
+
 def test_submit_runs_reconcile_and_submit_when_mapped(monkeypatch, tmp_path):
     """매핑돼 있으면 reconcile + submit 까지 도달. 호출 명령을 captured 로 검증."""
     log_file = tmp_path / "p4-calls.txt"

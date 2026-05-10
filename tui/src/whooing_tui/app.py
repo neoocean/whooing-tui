@@ -82,6 +82,19 @@ class WhooingTuiApp(App):
         # / accounts / entries 를 chain 으로 부팅한다.
         self.push_screen(EntriesScreen(self._client))
 
+    def on_unmount(self) -> None:
+        """App 종료 직전 — 진행 중인 P4 sync submit 들을 끝까지 기다린다.
+
+        CL #51118+: 사용자 보고에 따르면 0.15.0~0.15.1 까지의 daemon thread
+        는 main thread 종료 시 같이 죽어 마지막 mutation 의 자동 submit 이
+        미완료로 끝남. `wait_for_pending` 으로 모든 활성 submit 을 join.
+        """
+        try:
+            from whooing_tui import p4_sync
+            p4_sync.wait_for_pending()
+        except Exception:  # pragma: no cover — 종료 흐름은 절대 막지 않음
+            log.debug("p4 sync wait failed at unmount", exc_info=True)
+
     def action_toggle_theme(self) -> None:
         try:
             current = getattr(self, "theme", "textual-dark")

@@ -176,6 +176,13 @@ def _do_submit(db_path: Path, description: str) -> None:
     log.info("p4 submit 완료: %s", description)
 
 
+# 활성/대기 중인 submit 스레드. App 종료 직전 `wait_for_pending()` 이
+# 모두 join — daemon=True 면 main thread 종료와 함께 죽어 submit 이 미완료로
+# 끝나는 회귀 (CL #51118 사용자 보고: 로컬 db 변경이 P4 에 반영 안 됨).
+_PENDING: list[threading.Thread] = []
+_PENDING_LOCK = threading.Lock()
+
+
 def submit_db_to_p4(
     db_path: Path,
     description: str,
@@ -188,6 +195,10 @@ def submit_db_to_p4(
     안 함 — 어떤 실패든 로그 (debug/warning) 까지만.
 
     `blocking=True` 는 테스트 전용 — worker 스레드 없이 즉시 실행.
+
+    CL #51118+: 스레드는 `daemon=False` + 전역 `_PENDING` 리스트에 추적.
+    App 종료 시 `wait_for_pending()` 으로 모두 join — 그래야 마지막 mutation
+    의 submit 이 main thread 종료 전에 완료.
     """
     if blocking:
         try:
@@ -201,10 +212,35 @@ def submit_db_to_p4(
             _do_submit(db_path, description)
         except Exception:  # pragma: no cover
             log.exception("p4 submit thread failed")
+        finally:
+            with _PENDING_LOCK:
+                try:
+                    _PENDING.remove(threading.current_thread())
+                except ValueError:  # pragma: no cover
+                    pass
 
-    threading.Thread(
-        target=_runner, name="whooing-p4-sync", daemon=True,
-    ).start()
+    t = threading.Thread(
+        target=_runner, name="whooing-p4-sync", daemon=False,
+    )
+    with _PENDING_LOCK:
+        _PENDING.append(t)
+    t.start()
+
+
+def wait_for_pending(timeout_per_thread: float = 30.0) -> None:
+    """모든 활성 submit 스레드를 join — App 종료 직전에 호출.
+
+    각 스레드 마다 `timeout_per_thread` 초 대기. 그 안에 안 끝나면 포기
+    (사용자 종료 흐름을 무한 차단하지 않게). 타임아웃은 `_do_submit`
+    내부의 `p4 submit -d ...` 의 30s 타임아웃과 동일.
+    """
+    with _PENDING_LOCK:
+        snapshot = list(_PENDING)
+    for t in snapshot:
+        try:
+            t.join(timeout=timeout_per_thread)
+        except Exception:  # pragma: no cover
+            log.exception("p4 sync join failed")
 
 
 # ---- mechanical description builder ----------------------------------
