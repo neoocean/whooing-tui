@@ -245,7 +245,11 @@ class EntryEditDialog(ModalScreen[EntryDraft | None]):
         align: center middle;
     }
     #dialog-frame {
-        width: 76;
+        /* CL #51120+: 좁은 터미널 (iPhone Blink 등) 대응 — 95% 기본,
+           max-width 76 으로 cap, min-width 30 으로 floor. */
+        width: 95%;
+        max-width: 76;
+        min-width: 30;
         height: auto;
         padding: 1 2;
         border: thick $accent;
@@ -539,7 +543,10 @@ class ConfirmModal(ModalScreen[bool]):
         align: center middle;
     }
     #confirm-frame {
-        width: 56;
+        /* CL #51120+: 좁은 터미널 대응. */
+        width: 95%;
+        max-width: 56;
+        min-width: 30;
         height: auto;
         padding: 1 2;
         border: thick $error;

@@ -197,6 +197,12 @@ class EntriesScreen(Screen):
     # 에 경고 띄움 (DESIGN §4.3 + MEMORY §7).
     _SERVER_PAGE_CAP = 100
 
+    # CL #51120+: 좁은 터미널 컴팩트 모드 임계값. 미만이면 left/right/memo
+    # 컬럼을 width=0 으로 시각상 숨김 (iPhone Blink 세로 ~40-50 셀 우선).
+    # 임계값 60 = "기본 6 컬럼이 모두 보이려면 최소 이 정도 폭" 의 보수
+    # 추정 (left=12 + 다른 5 컬럼 자동 + 테두리 = ~58+).
+    _NARROW_THRESHOLD = 60
+
     def __init__(self, client: WhooingClient) -> None:
         super().__init__()
         self._client = client
@@ -246,6 +252,11 @@ class EntriesScreen(Screen):
         # marker). row 가 ↑/↓ 로 바뀌면 None 으로 reset (각 row 의 태그
         # 개수가 달라 index 보존이 의미 없음).
         self._tag_index: int | None = None
+        # CL #51120+: 좁은 터미널 (iPhone Blink 등) 컴팩트 모드. on_resize
+        # 가 임계값 (`_NARROW_THRESHOLD`) 미만이면 True 로 토글, 컬럼 width
+        # 를 좁히거나 0 으로 (시각상 숨김) — left/right/memo 우선 축소.
+        # _COLUMN_NAMES 의 인덱스 정의는 유지 (네비 / marker 코드 안 깨지게).
+        self._compact: bool = False
 
     # ---- compose -------------------------------------------------------
 
@@ -278,9 +289,68 @@ class EntriesScreen(Screen):
         table.add_column("right")
         table.add_column("item")
         table.add_column("memo")
+        # CL #51120+: 초기 size 기준으로 컴팩트 여부 결정 + 컬럼 width 적용.
+        self._compact = self._is_narrow_size()
+        self._apply_column_widths_for_size()
         self.set_status("거래내역 로드 중…")
         self.refresh_entries()
         table.focus()
+
+    # ---- 좁은 터미널 (iPhone Blink 등) 적응 (CL #51120+) ----------------
+
+    def _is_narrow_size(self) -> bool:
+        """현재 터미널 너비가 컴팩트 임계값 미만인지."""
+        try:
+            return self.app.size.width < self._NARROW_THRESHOLD
+        except Exception:  # pragma: no cover — size 미정의 환경
+            return False
+
+    def _apply_column_widths_for_size(self) -> None:
+        """컴팩트 여부에 따라 left/right/memo 컬럼을 0 또는 정상 width 로.
+
+        DataTable.columns 의 width 를 직접 조정 — `add/remove_column` 보다
+        가벼움. 컬럼 인덱스 (`_COLUMN_NAMES`) 는 그대로라 네비/marker 코드
+        는 안 깨진다 (해당 컬럼이 width=0 이라 시각상 안 보일 뿐).
+        """
+        try:
+            table = self.query_one("#entries-table", DataTable)
+        except Exception:  # pragma: no cover
+            return
+        # DataTable.columns 는 OrderedDict[ColumnKey, Column]. 순서가 곧
+        # _COLUMN_NAMES 의 인덱스.
+        cols = list(table.columns.values())
+        if len(cols) < len(self._COLUMN_NAMES):
+            return
+        if self._compact:
+            # 컴팩트: date / money / item 만 보임. left=12→0, right→0, memo→0.
+            cols[2].width = 0  # left
+            cols[3].width = 0  # right
+            cols[5].width = 0  # memo
+        else:
+            cols[2].width = 12  # left (CL #51051 기본값 복원)
+            cols[3].width = 0   # 'auto' 는 width=0 + auto_width=True 가 default 처리
+            cols[5].width = 0
+            # 자동 width 컬럼은 명시적으로 0 으로 하면 콘텐츠 너비로 자라남
+            # (textual DataTable 의 internal logic). 즉 cols[3]/cols[5] 는
+            # 정상 모드에서도 0 으로 둬도 자동으로 넓어진다.
+        # 강제 refresh — DataTable 이 layout 을 다시 계산.
+        try:
+            table.refresh(layout=True)
+        except Exception:  # pragma: no cover
+            pass
+
+    def on_resize(self, event) -> None:
+        """터미널 resize → 컴팩트 토글 + 컬럼 width 재적용."""
+        new_compact = self._is_narrow_size()
+        if new_compact == self._compact:
+            return
+        self._compact = new_compact
+        self._apply_column_widths_for_size()
+        # 사용자에게 시각상 알림 (status bar).
+        if self._compact:
+            self.set_status("컴팩트 모드 — 좌/우 항목 + 메모 숨김 (좁은 터미널)")
+        else:
+            self.set_status("정상 모드 — 모든 컬럼 표시")
 
     # ---- actions -------------------------------------------------------
 

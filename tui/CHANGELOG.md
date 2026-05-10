@@ -2,6 +2,86 @@
 
 각 항목은 Perforce CL 단위로 끊는다.
 
+## CL #51120 — 0.17.0 — 좁은 터미널 (iPhone Blink 등) 대응 — 모달 반응형 width + DataTable 컴팩트 컬럼 (사용자 요청) (2026-05-10)
+
+사용자 질문: "tui 가 아이폰 blink 앱처럼 좁은 터미널 환경에 대응하고
+있습니까?" → 답: 아니요 (모든 모달이 고정 width 56-100). 사용자 답변에서
+선택: Phase 1 + 2 한꺼번에, iPhone 세로 (40-50 cells) 우선.
+
+### 동작 변경
+
+**Phase 1 — 모든 ModalScreen 의 frame 이 반응형**:
+- 패턴: `width: 95%; max-width: <기존 N>; min-width: 30`.
+  - 좁은 터미널: 95% 로 축소 (단 30 미만으로는 안 줄어듦).
+  - 넓은 터미널: max-width 로 cap (필요 이상 늘어나지 X).
+- 적용 대상 (12 모달): EntryEditDialog (76), ConfirmModal (56),
+  AccountPickerScreen (64), TagsPickerScreen (60), SectionPickerScreen
+  (56), ReportsMenuScreen (60), ReportResultScreen (100, height 도 반응형),
+  HelpModal (64), AccountEditDialog (70), AnnotatorScreen (70),
+  AttachmentBrowserScreen (80), StatementImportScreen (50).
+
+**Phase 2 — EntriesScreen DataTable 컴팩트 모드**:
+- 새 상수 `_NARROW_THRESHOLD = 60` (iPhone 세로 환경 가정).
+- `_compact: bool` 필드.
+- `on_resize(event)` 가 `_is_narrow_size()` 로 임계값 비교, 변경 시
+  `_compact` 토글 + `_apply_column_widths_for_size()`.
+- 컴팩트 (`width < 60`): `left` / `right` / `memo` 컬럼의 width=0 으로
+  시각상 숨김. `date` / `money` / `item` 만 보임. `_COLUMN_NAMES` 인덱스
+  정의는 유지 (네비 / marker 코드 안 깨짐).
+- 정상 (`width >= 60`): 기존 6 컬럼 그대로, `left=12` 고정 (CL #51051).
+- status 알림: 모드 전환 시 사용자에게 "컴팩트 모드 — 좌/우 항목 + 메모
+  숨김" 등 1줄 안내.
+
+### 수정
+
+- `tui/src/whooing_tui/screens/edit_entry.py` — EntryEditDialog (76),
+  ConfirmModal (56) frame.
+- `tui/src/whooing_tui/screens/account_picker.py` — picker frame (64).
+- `tui/src/whooing_tui/screens/tags_picker.py` — tagpick frame (60).
+- `tui/src/whooing_tui/screens/sections.py` — picker frame (56).
+- `tui/src/whooing_tui/screens/reports.py` — reports-menu (60), reports-result
+  (100; height 도 95% / max 36).
+- `tui/src/whooing_tui/screens/help.py` — help frame (64).
+- `tui/src/whooing_tui/screens/accounts.py` — acc-frame (70).
+- `tui/src/whooing_tui/screens/annotator.py` — annot_box (70).
+- `tui/src/whooing_tui/screens/attachment_browser.py` — addpath_box (80).
+- `tui/src/whooing_tui/screens/statement_import.py` — pw_box (50).
+- `tui/src/whooing_tui/screens/entries.py`
+  - `_NARROW_THRESHOLD = 60` 상수.
+  - `_compact: bool` 필드.
+  - `_is_narrow_size()`, `_apply_column_widths_for_size()`,
+    `on_resize(event)` 메서드.
+  - `on_mount` 에서 초기 size 기준으로 `_compact` 결정 + 적용.
+
+### 신규 테스트
+
+- `tui/tests/test_narrow_terminal.py` — 8 케이스:
+  - 모달 반응형 width 검증 (40-cell vs 120-cell):
+    EntryEditDialog / AccountPicker / TagsPicker / ReportsMenu.
+  - DataTable 컴팩트 모드: 40-cell 진입 시 left/right/memo width=0 /
+    120-cell 진입 시 left=12 / 임계값 boundary.
+- 459 → **467 통과** (+8).
+
+### 진단 시 백업 절차 준수 (CL #51119+ memory)
+
+본 CL 작업 시작 전 `db/whooing-data.sqlite` 를 `.bak` 으로 백업 →
+테스트 (DB 미변경 SHA 일치 + entry_annotations=8 / entry_hashtags=15
+보존 확인) → 백업 제거. 다음 CL 부터도 같은 절차.
+
+### iPhone 세로 (~40-50 셀) 흐름 다이어그램
+
+```mermaid
+graph LR
+    R[App resize<br/>or mount] --> N{width < 60?}
+    N -->|Yes| C[컴팩트 모드<br/>left/right/memo width=0]
+    N -->|No| F[정상 모드<br/>6 컬럼 모두]
+    C --> M[date / money / item<br/>만 visible]
+    F --> A[date / money / left=12<br/>/ right / item / memo]
+    M -->|→| MX[ModalScreen push]
+    A -->|→| MX
+    MX --> RW[width: 95%<br/>max-width: N<br/>min-width: 30]
+```
+
 ## CL #51119 — 0.16.3 — 시작 시 db sync (P4 환경 있을 때) + 종료 시 누락 변경 flush submit (사용자 요청) (2026-05-10)
 
 사용자 요청 3건:

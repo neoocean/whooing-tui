@@ -83,7 +83,10 @@ class AccountEditDialog(ModalScreen[AccountDraft | None]):
         align: center middle;
     }
     #acc-frame {
-        width: 70;
+        /* CL #51120+: 좁은 터미널 대응. */
+        width: 95%;
+        max-width: 70;
+        min-width: 30;
         height: auto;
         padding: 1 2;
         border: thick $accent;

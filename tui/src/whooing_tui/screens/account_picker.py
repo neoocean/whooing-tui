@@ -68,7 +68,10 @@ class AccountPickerScreen(ModalScreen[tuple[str, str, str] | None]):
         align: center middle;
     }
     #picker-frame {
-        width: 64;
+        /* CL #51120+: 좁은 터미널 대응. */
+        width: 95%;
+        max-width: 64;
+        min-width: 30;
         height: auto;
         padding: 1 2;
         border: thick $accent;

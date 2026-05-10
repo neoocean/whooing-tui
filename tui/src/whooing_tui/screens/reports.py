@@ -173,7 +173,10 @@ class ReportsMenuScreen(ModalScreen[tuple[str, str] | None]):
         align: center middle;
     }
     #reports-menu-frame {
-        width: 60;
+        /* CL #51120+: 좁은 터미널 대응. */
+        width: 95%;
+        max-width: 60;
+        min-width: 30;
         height: auto;
         padding: 1 2;
         border: thick $accent;
@@ -246,8 +249,13 @@ class ReportResultScreen(ModalScreen[None]):
         align: center middle;
     }
     #reports-result-frame {
-        width: 100;
-        height: 36;
+        /* CL #51120+: 좁은 터미널 대응. height 도 95% 로 (대부분 화면 채움). */
+        width: 95%;
+        max-width: 100;
+        min-width: 30;
+        height: 95%;
+        max-height: 36;
+        min-height: 12;
         padding: 1 2;
         border: thick $accent;
         background: $surface;

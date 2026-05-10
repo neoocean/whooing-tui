@@ -116,7 +116,10 @@ class TagsPickerScreen(ModalScreen[str | None]):
         align: center middle;
     }
     #tagpick-frame {
-        width: 60;
+        /* CL #51120+: 좁은 터미널 대응. */
+        width: 95%;
+        max-width: 60;
+        min-width: 30;
         height: auto;
         padding: 1 2;
         border: thick $accent;

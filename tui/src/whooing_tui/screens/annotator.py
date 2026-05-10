@@ -49,7 +49,10 @@ class AnnotatorModal(ModalScreen[dict | None]):
 
     DEFAULT_CSS = """
     #annot_box {
-        width: 70;
+        /* CL #51120+: 좁은 터미널 대응. */
+        width: 95%;
+        max-width: 70;
+        min-width: 30;
         height: auto;
         background: $panel;
         border: thick $primary;

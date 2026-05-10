@@ -39,7 +39,10 @@ class SectionPickerScreen(ModalScreen[tuple[str, str | None] | None]):
         align: center middle;
     }
     #picker-frame {
-        width: 56;
+        /* CL #51120+: 좁은 터미널 대응. */
+        width: 95%;
+        max-width: 56;
+        min-width: 30;
         height: auto;
         padding: 1 2;
         border: thick $accent;

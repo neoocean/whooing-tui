@@ -114,10 +114,13 @@ class _AddPathModal(ModalScreen[str | None]):
 
     DEFAULT_CSS = """
     #addpath_box {
+        /* CL #51120+: 좁은 터미널 대응. */
         background: $panel;
         border: thick $primary;
         padding: 1;
-        width: 80;
+        width: 95%;
+        max-width: 80;
+        min-width: 30;
         height: auto;
     }
     """

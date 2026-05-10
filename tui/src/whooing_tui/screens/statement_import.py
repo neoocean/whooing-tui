@@ -190,10 +190,13 @@ class StatementImportScreen(Screen):
         height: 1fr;
     }
     #pw_box {
+        /* CL #51120+: 좁은 터미널 대응. */
         background: $panel;
         border: thick $primary;
         padding: 2;
-        width: 50;
+        width: 95%;
+        max-width: 50;
+        min-width: 30;
         height: auto;
     }
     """
