@@ -3,6 +3,11 @@
 > 이 문서는 **현재 구조** 와 **다음 단계의 의도** 를 적어둔다. 코드와 문서가
 > 어긋나면 코드가 진실이고, 이 문서는 그 진실의 *왜* 를 보존한다.
 
+> **다이어그램 가이드라인**: 박스/화살표 구조의 다이어그램은 모두
+> [mermaid](https://mermaid.js.org/) 로 작성한다 (ASCII art 금지). 단,
+> 단순한 listing (디렉토리 트리, 파일 목록) 은 markdown 표로 — 머메이드
+> 변환이 가독성을 떨어트리는 경우.
+
 ## 1. 목적과 범위
 
 후잉 가계부를 터미널에서 다룬다. 같은 워크스페이스의
@@ -13,13 +18,12 @@
 
 ## 2. 다른 도구와의 관계
 
-```
-                  같은 후잉 REST API + 동일 토큰 규칙
-                              │
-        ┌─────────────────────┼─────────────────────┐
-        ▼                     ▼                     ▼
-  whooing-tui          whooing-mcp-server     whooing.com (공식 MCP)
-  (사람·터미널)         -wrapper (LLM·MCP)     (LLM·MCP, 외부)
+```mermaid
+flowchart TB
+    API[("같은 후잉 REST API<br/>+ 동일 토큰 규칙")]
+    API --> TUI["<b>whooing-tui</b><br/>(사람·터미널)"]
+    API --> WRAPPER["<b>whooing-mcp-server-wrapper</b><br/>(LLM·MCP, 보완)"]
+    API --> OFFICIAL["<b>whooing.com 공식 MCP</b><br/>(LLM·MCP, 외부)"]
 ```
 
 핵심 라이브러리(REST 클라이언트·인증·날짜·에러 매핑) 는 **의도적으로 코드
@@ -34,34 +38,41 @@
 같은 라이브러리 코드는 **표면이 작고 안정**하므로 (auth/dates/errors는 100
 줄 안팎) 중복 비용보다 분리 이득이 크다.
 
-## 3. 아키텍처 (Phase 1)
+## 3. 아키텍처
 
-```
-src/whooing_tui/
-├── __init__.py          버전
-├── __main__.py          엔트리: python -m whooing_tui
-├── cli.py               argparse + subcommand dispatch
-├── auth.py              WhooingAuth — 토큰 헤더 + 마스크
-├── client.py            httpx 기반 후잉 REST 클라이언트 (read-only)
-├── config.py            TOML config 로더
-├── dates.py             KST YYYYMMDD 유틸 + 1년 분할
-├── errors.py            HTTP → ToolError 매핑 + secret 마스크
-├── models.py            Pydantic Section / Account / Entry / ToolError
-├── state.py             SessionState (활성 섹션 + 계정 캐시 + 인덱스)
-├── app.py               Textual App 골격 (Phase 1: placeholder)
-└── theming.tcss         스타일
-```
+| 모듈 | 책무 |
+| --- | --- |
+| `__init__.py` | 버전 |
+| `__main__.py` | 엔트리: `python -m whooing_tui` |
+| `cli.py` | argparse + 헤드리스 서브커맨드 dispatch |
+| `auth.py` | `WhooingAuth` — 토큰 헤더 + 마스크 |
+| `client.py` | httpx 기반 후잉 REST 클라이언트 (read 위주) |
+| `config.py` | TOML config 로더 |
+| `dates.py` | KST YYYYMMDD/YYYYMM 유틸 + 1년 분할 |
+| `errors.py` | HTTP → `ToolError` 매핑 + secret 마스크 |
+| `models.py` | Pydantic `Section` / `Account` / `Entry` / `ToolError` |
+| `state.py` | `SessionState` (활성 섹션 + 계정 캐시 + 양방향 인덱스) |
+| `app.py` | Textual App — `WhooingTuiApp(client=…)` |
+| `screens/__init__.py` | Screen 패키지 |
+| `screens/home.py` | HomeScreen — 섹션 picker + 계정과목 트리 |
+| `screens/entries.py` | EntriesScreen — 거래내역 표 + 100-cap footer |
+| `theming.tcss` | 전역 스타일 (Header/Footer dock + 색) |
 
-### 3.1 호출 그래프 (Phase 1)
+### 3.1 호출 그래프
 
-```
-         CLI (cli.py)              TUI (app.py — Phase 2 에서 채움)
-              │                                │
-              ▼                                ▼
-        WhooingClient ──── load_auth_from_env ─┘
-              │
-              ▼
-       후잉 REST API (https://whooing.com/api)
+```mermaid
+flowchart TB
+    CLI["CLI<br/>(cli.py — argparse)"]
+    TUI["TUI<br/>(app.py + screens/*)"]
+    AUTH["load_auth_from_env<br/>(.env / 환경변수)"]
+    CLIENT["WhooingClient<br/>(httpx + throttle + retry)"]
+    API[("후잉 REST API<br/>https://whooing.com/api")]
+    CLI --> AUTH
+    TUI --> AUTH
+    AUTH --> CLIENT
+    CLI --> CLIENT
+    TUI --> CLIENT
+    CLIENT --> API
 ```
 
 CLI 와 TUI 는 같은 클라이언트와 같은 SessionState 를 쓰지만 별도 프로세스
