@@ -2,6 +2,39 @@
 
 각 항목은 Perforce CL 단위로 끊는다.
 
+## CL #51008 — 0.7.5 — `mcp_bridge.py` 제거 (UI 통합 미완성, unused 코드 정리) (2026-05-10)
+
+CL #50987 (scaffolding) → #51007 (archived 의존 제거 + 자체 클라이언트로
+재작성) 까지 두 단계를 거쳤지만 본 모듈을 호출하는 화면이 한 곳도 없다.
+unused 코드를 길게 유지하면 의도가 불분명해지므로 정리. 미래에 보고서 /
+예산 / 자주입력 매칭 같은 화면이 추가될 때 본 모듈을 새로 만들 수 있도록
+`mcp/` 디렉토리의 `OfficialMcpClient` (archived) 와 CL #51007 의 자체 구현
+은 git/Perforce history 에서 그대로 참조 가능.
+
+### 제거
+
+- `tui/src/whooing_tui/mcp_bridge.py` — `WhooingMcpBridge`.
+- `tui/tests/test_mcp_bridge.py` — 12 cases.
+
+### 수정
+
+- `tui/DESIGN.md` §6 의 6번 (MCP 직접 호출) — 진행 이력 (#50987 →
+  #51007 → 본 #51008) 명시 + 미래 reactivation 후보 표기.
+- `tui/CHANGELOG.md` / `tui/MEMORY.md` — 본 항목.
+- `tui/pyproject.toml` + `__init__.py` — 0.7.4 → 0.7.5.
+
+### 검증
+
+- `make test-tui` → 170 passed (이전 182 - 12 cases = 170).
+
+### 미래 reactivation 가이드
+
+후속 CL 에서 MCP 직접 호출이 필요해지면:
+
+1. **history 참조**: `p4 print -q //woojinkim/scripts/whooing-tui/tui/src/whooing_tui/mcp_bridge.py#3` 또는 `git show 53e6431:tui/src/whooing_tui/mcp_bridge.py`. 본 CL 직전의 자체 HTTP JSON-RPC 클라이언트가 그대로 살아 있다.
+2. **테스트도 history 에**: `p4 print -q .../tui/tests/test_mcp_bridge.py#2` 에 12 cases (respx 기반).
+3. **import 후보**: `mcp/src/whooing_mcp/official_mcp.py` (archived but functional).
+
 ## CL #51003 — 0.7.4 — `mcp_bridge` 자체 HTTP JSON-RPC 클라이언트로 재작성 (archived 의존 제거) (2026-05-10)
 
 archived `whooing-mcp-server-wrapper` 의 `OfficialMcpClient` 에 의존하던
