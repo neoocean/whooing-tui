@@ -1,27 +1,34 @@
-"""Textual App 골격 — Phase 1.
+"""Textual App — Phase 2a.
 
-현재는 자리만 잡아두고 (`run_app()` 호출 시 정보 메시지만 출력) Phase 2 의
-실제 화면 구현(sections / accounts / entries) 을 기다린다. CLI 헤드리스
-경로(`python -m whooing_tui sections list`) 는 이 모듈 없이도 동작한다.
+`run_app()` 이 진입점. 토큰을 .env / 환경변수에서 로드해 WhooingClient 를
+만들고 HomeScreen 을 push 한다. 토큰 누락 / placeholder 인 경우 GUI 를
+띄우지 않고 stderr 로 안내한 뒤 비-0 종료 — TUI 안에서의 에러 모달보다
+사용자가 즉시 고치기 쉽다.
 
-Phase 2 구현 예정:
-  - HomeScreen: 섹션 picker → entries 목록
-  - EntriesScreen: DataTable 로 거래내역, 검색·필터·페이지네이션
-  - 입력 dialog: 거래 추가/수정 (자주입력·매월입력 자동 매칭)
+Phase 2 후속:
+  - EntriesScreen (HomeScreen 에서 enter 두 번에 push)
+  - EntryEditDialog (거래 추가/수정)
+  - WhooingClient 에 POST/PUT/DELETE
+  - 로컬 sqlite 캐시
 """
 
 from __future__ import annotations
 
 import logging
+import sys
 from pathlib import Path
+from typing import Optional
 
 from textual.app import App, ComposeResult
 from textual.binding import Binding
-from textual.containers import Container
-from textual.widgets import Footer, Header, Static
+from textual.widgets import Footer, Header
 
 from whooing_tui import __version__
+from whooing_tui.auth import load_auth_from_env
+from whooing_tui.client import WhooingClient
 from whooing_tui.config import load_config
+from whooing_tui.screens.home import HomeScreen
+from whooing_tui.state import SessionState
 
 log = logging.getLogger(__name__)
 
@@ -29,26 +36,16 @@ log = logging.getLogger(__name__)
 _CSS_PATH = Path(__file__).resolve().parent / "theming.tcss"
 
 
-_PLACEHOLDER_BODY = """\
-[bold]whooing-tui[/bold] v{version}
-
-Phase 1 골격이 정상으로 켜졌습니다. Phase 2 에서 실제 화면이 들어갑니다.
-
-지금 가능한 헤드리스 명령:
-  • [cyan]whooing-tui sections list[/cyan]
-  • [cyan]whooing-tui accounts list[/cyan]
-  • [cyan]whooing-tui entries list --days 30[/cyan]
-
-종료: [yellow]q[/yellow] 또는 [yellow]Ctrl+C[/yellow]
-"""
-
-
 class WhooingTuiApp(App):
-    """Phase 1 자리표시자 앱. Phase 2 에서 HomeScreen 으로 대체."""
+    """Whooing TUI 메인 앱.
+
+    - 단일 SessionState (`self.session`) 가 활성 섹션과 계정 캐시를 보관.
+    - WhooingClient 는 생성자에서 주입 (테스트는 fake client 로 대체 가능).
+    """
 
     CSS_PATH = str(_CSS_PATH) if _CSS_PATH.exists() else None
     TITLE = "whooing-tui"
-    SUB_TITLE = "Whooing 가계부 — Textual TUI"
+    SUB_TITLE = f"Whooing 가계부 — v{__version__}"
 
     BINDINGS = [
         Binding("q", "quit", "Quit", show=True),
@@ -56,13 +53,16 @@ class WhooingTuiApp(App):
         Binding("t", "toggle_theme", "Theme", show=True),
     ]
 
+    def __init__(self, client: Optional[WhooingClient] = None) -> None:
+        super().__init__()
+        self._client = client
+        self.session = SessionState()
+
     def compose(self) -> ComposeResult:
-        yield Header(show_clock=True)
-        body = Static(
-            _PLACEHOLDER_BODY.format(version=__version__),
-            id="placeholder",
-        )
-        yield Container(body, id="main")
+        # HomeScreen 이 자체 Header/Footer 를 가지므로 root 는 비워둔다.
+        # 단, App.run_test() 환경 등에서 HomeScreen push 전에 잠시
+        # 보일 수 있어 minimal Header/Footer 를 제공.
+        yield Header(show_clock=False)
         yield Footer()
 
     def on_mount(self) -> None:
@@ -71,6 +71,13 @@ class WhooingTuiApp(App):
             self.theme = cfg.theme
         except Exception:
             log.debug("테마 적용 실패 (config.theme=%r) — 무시", cfg.theme)
+
+        if self._client is None:
+            # 정상 부팅 경로에서는 run_app() 이 client 를 주입한다.
+            # client 가 None 이면 테스트가 직접 만든 경우이므로 화면도
+            # 띄우지 않는다 (테스트는 fake client 를 넘긴다).
+            return
+        self.push_screen(HomeScreen(self._client))
 
     def action_toggle_theme(self) -> None:
         try:
@@ -83,7 +90,14 @@ class WhooingTuiApp(App):
 
 
 def run_app() -> int:
-    """TUI 실행 진입점. 정상 종료 시 0."""
-    app = WhooingTuiApp()
+    """TUI 실행 진입점. 정상 종료 시 0, 토큰 문제 시 3 (AUTH 와 동일)."""
+    try:
+        auth = load_auth_from_env()
+    except ValueError as e:
+        # GUI 띄우기 전에 stderr 로 안내 — 사용자가 즉시 .env 를 고치게.
+        print(f"error [USER_INPUT] {e}", file=sys.stderr)
+        return 3
+    client = WhooingClient(auth)
+    app = WhooingTuiApp(client=client)
     app.run()
     return 0

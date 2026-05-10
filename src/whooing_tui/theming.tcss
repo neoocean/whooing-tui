@@ -1,16 +1,23 @@
-/* whooing-tui — Phase 1 placeholder 스타일.
+/* whooing-tui — 전역 스타일.
  *
- * 본 파일은 단순 자리잡기용. Phase 2 에서 화면별 스타일이 추가된다.
+ * 화면별 디테일은 각 Screen 의 DEFAULT_CSS 에 둔다 (HomeScreen 등).
+ * 본 파일은 모든 화면에 공통 적용되는 최소한의 룰만.
  */
 
-#main {
-    align: center middle;
-    padding: 1 2;
+Header {
+    background: $accent-darken-1;
 }
 
-#placeholder {
-    width: auto;
-    height: auto;
-    padding: 1 2;
-    border: round $accent;
+Footer {
+    background: $boost;
+}
+
+/* 빈 root (App.compose 직후, HomeScreen push 전 잠깐 보일 수 있음) 의
+ * Header/Footer 가 화면을 잡아먹지 않도록 가운데 정렬. */
+Screen > Header {
+    dock: top;
+}
+
+Screen > Footer {
+    dock: bottom;
 }

@@ -2,6 +2,62 @@
 
 각 항목은 Perforce CL 단위로 끊는다.
 
+## CL #50935 — 0.2.0 — Phase 2a: HomeScreen (2026-05-10)
+
+### 추가
+
+- `src/whooing_tui/screens/__init__.py` — Textual Screen 패키지.
+- `src/whooing_tui/screens/home.py` — HomeScreen.
+  - 좌: 섹션 picker (`OptionList`, 키보드 navigation + enter 선택).
+  - 우: 활성 섹션의 계정과목 트리 (`Tree`, type 별 그룹: 자산/부채/자본/
+    수입/지출/그룹).
+  - 첫 mount 시 `sections-list` 자동 호출 + 첫 섹션 자동 활성화 → 사용자
+    액션 없이도 화면이 의미있게 채워진다.
+  - `@work(exclusive=True)` 로 sections / accounts 호출을 그룹별 직렬화 —
+    빠른 섹션 전환 시 마지막 1개만 결과 적용.
+  - `r` (refresh): 활성 섹션의 accounts 재로드, 섹션 미선택이면 sections
+    재로드.
+  - 후잉 ToolError 발생 시 화면 하단 status bar 가 error 클래스로 표시
+    (모달 없음 — Phase 2a 는 화면 1개로 단순 유지).
+  - `HomeScreen.last_status` 가 마지막 메시지를 평문으로 보관 (테스트가
+    Static 의 사적 API 에 의존하지 않도록).
+- `tests/test_home_screen.py` — Textual `App.run_test()` 기반 통합
+  테스트 6 cases. `FakeClient` 로 실 후잉 호출 없이:
+  - 첫 mount 후 sections + accounts 자동 로드.
+  - 다른 섹션 선택 시 SessionState 갱신 + accounts 재호출 + 이전 섹션
+    캐시 무효화.
+  - sections / accounts 에러 시 status bar 의 error 클래스.
+  - 빈 sections 시 picker 가 disabled placeholder 1개만.
+  - `r` action 이 활성 섹션의 accounts 만 재로드 (sections 재호출 안 함).
+
+### 수정
+
+- `src/whooing_tui/app.py` — Phase 1 placeholder 제거.
+  - `WhooingTuiApp.__init__(client=...)` 로 의존성 주입 (테스트 친화).
+  - `self.session = SessionState()` — 단일 세션 상태가 모든 화면에 노출.
+  - `on_mount` 에서 `HomeScreen` push.
+  - `run_app()` 가 진입 시 `load_auth_from_env()` 검증 후 GUI 실행 — 토큰
+    문제 시 stderr 안내 + return 3 (TUI 에서 모달 띄우는 것보다 즉시
+    .env 를 고치게 만든다).
+- `src/whooing_tui/theming.tcss` — Header/Footer 의 dock + 색 미세조정
+  (HomeScreen DEFAULT_CSS 가 화면 디테일을 책임지므로 본 파일은 전역
+  최소만).
+- `tests/test_auth.py::test_load_auth_from_env_missing` — `monkeypatch.
+  setenv("WHOOING_AI_TOKEN", "")` 로 변경. dotenv 의 자동 로드가 monkeypatch.
+  delenv 직후 .env 의 토큰을 다시 채우는 문제를 회피 (load_dotenv 는
+  override=False 가 기본이라 빈 문자열은 유지된다).
+
+### 검증
+
+  make test           54 passed in 0.98s (Phase 1 48 + HomeScreen 6)
+  make run            HomeScreen 정상 mount + sections/accounts 로드 (육안 확인)
+
+### 의도적 누락 (다음 CL 로 이연)
+
+- EntriesScreen — HomeScreen 에서 enter 두 번에 push 되는 거래내역 표.
+- EntryEditDialog — 거래 추가/수정. WhooingClient 의 POST/PUT/DELETE 동시.
+- 로컬 sqlite 캐시.
+
 ## CL #1 — 0.1.0 — Phase 1 골격 (2026-05-10)
 
 ### 추가

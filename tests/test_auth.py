@@ -36,7 +36,9 @@ def test_str_equals_repr():
 
 
 def test_load_auth_from_env_missing(monkeypatch):
-    monkeypatch.delenv("WHOOING_AI_TOKEN", raising=False)
+    # 빈 문자열로 명시 — dotenv 가 .env 를 후로딩해도 이미 set 된 환경변수는
+    # override 하지 않으므로 (load_dotenv 의 기본) 미설정 동작 검증 가능.
+    monkeypatch.setenv("WHOOING_AI_TOKEN", "")
     with pytest.raises(ValueError, match="WHOOING_AI_TOKEN 미설정"):
         load_auth_from_env()
 
