@@ -2,6 +2,91 @@
 
 각 항목은 Perforce CL 단위로 끊는다.
 
+## CL #51107 — 0.15.0 — 로컬 sqlite 를 ~/.whooing 에서 <project>/db/ 로 이동 + 변경 시 P4 자동 submit (사용자 요청) (2026-05-10)
+
+사용자 요청:
+
+> 현재 whooing-tui 에서만 지원하는 기능의 정보를 저장하기 위해 sqlite
+> 데이터베이스를 사용합니다. 이 파일은 홈 디렉토리 하위에 있습니다. 이
+> 파일을 현재 프로젝트 디렉토리로 가져와 퍼포스 서브밋 대상이 되도록
+> 수정해주세요. 현재 프로젝트 디렉토리 하위에 db 서브디렉토리를 만들고
+> 여기로 데이터베이스 파일 위치를 옮기세요. 또한 whooing-tui 실행 중
+> 데이터베이스에 변경이 발생하는 이벤트가 일어나면 데이터베이스 파일을
+> 서브밋해주세요. 서브밋할 때 디스크립션에 무엇이 변경되었는지 기록.
+> 이 때는 LLM 을 통한 기록이 아니므로 어떤 이벤트에 의한 어떤 정보의
+> 변경이 일어났음을 기계적으로 작성. 퍼포스 환경이 갖춰져 있을 때만
+> 이 동작이 일어나야 하며 갖춰져있지 않다면 데이터베이스 파일에 기록
+> 하고 아무 에러메시지도 보여주지 않아야.
+
+### 위치 변경
+
+- `tui_data.data_dir()` 의 default 가 `~/.whooing/` → `<project_root>/db/`.
+  - 우선순위: `$WHOOING_DATA_DIR` (명시 override, 테스트 등) >
+    `<project_root>/db/` (monorepo 안에서 실행 시) > `~/.whooing/`
+    (pip install / monorepo 외 fallback).
+  - `_project_root()` 가 `__file__` 의 ancestor 중 `tui/` + `core/`
+    sibling 이 있는 디렉토리를 monorepo root 로 자동 식별.
+- `init_shared_schema()` 가 새 위치 진입 시 기존 home (`~/.whooing/whooing-
+  data.sqlite`) 의 db 가 있으면 *target 에 db 가 없을 때만* 1회 복사
+  (`_maybe_migrate_legacy_db`). WAL/SHM 보조 파일도 함께. 실패 silent.
+  단, `WHOOING_DATA_DIR` 가 set 이면 마이그레이션 skip — 테스트의 isolated
+  tmp 가 실 사용자 db 를 끌어가지 않게.
+- `db/whooing-data.sqlite` 가 P4 control 에 추가됨 (binary). `.gitignore`
+  의 `*.sqlite` 가 git mirror 푸시는 차단 — public GitHub 에 사용자 데이터
+  유출 X.
+
+### 신규 모듈: `whooing_tui.p4_sync`
+
+- `submit_db_to_p4(db_path, description, *, blocking=False)` — fire-and-
+  forget. 기본 `threading.Thread(daemon=True)` 로 백그라운드 실행, UI 차단 X.
+  `blocking=True` 는 테스트 전용.
+- `is_p4_available()` — `p4 info -s` returncode 검사 (5초 timeout).
+- `is_file_in_p4(path)` — `p4 where <path>` 매핑 검사.
+- 절차 (`_do_submit`):
+  1. `p4 where <db>` 로 매핑 확인 — 매핑 외면 silent return.
+  2. `p4 reconcile -e -a -d <db>` — edit/add/delete 자동.
+  3. `p4 submit -d <description> <db>` — default CL 변경 즉시 submit.
+  4. 모든 단계 실패 = `log.warning` / `log.debug` 만, 사용자 표면화 X.
+- `describe_annotation(*, entry_id, memo_changed, tags, deleted=False)` —
+  *기계적* description 생성 (LLM 미관여). 예:
+  - `[whooing-tui] entry e123 memo upsert`
+  - `[whooing-tui] entry e123 hashtags set [식비, 커피]`
+  - `[whooing-tui] entry e123 memo upsert; hashtags set [식비]`
+  - `[whooing-tui] entry e123 deleted`
+
+### 수정
+
+- `tui/src/whooing_tui/data.py`
+  - `_project_root()` / `_legacy_home_dir()` / `_maybe_migrate_legacy_db()`
+    helper.
+  - `data_dir()` 우선순위 확장.
+  - `init_shared_schema()` 에 마이그레이션 hook (env 미설정 시만).
+- `tui/src/whooing_tui/screens/entries.py`
+  - `_persist_local` / `_purge_local` 가 mutation 후
+    `p4_sync.submit_db_to_p4(db_path, describe_annotation(...))` 호출.
+- 신규: `tui/src/whooing_tui/p4_sync.py`
+- 신규: `tui/tests/test_p4_sync.py` — 11 케이스 (description 기계적 형식
+  + 환경 감지 + silent 실패 + 호출된 명령 검증).
+- `tui/tests/test_data.py` — 4 신규 (project root 자동 / migration skip
+  when env set / migration runs when env unset).
+- 신규: `db/whooing-data.sqlite` (binary, ~/.whooing 에서 옮겨옴, P4 control).
+
+### 검증
+
+- 기존 414 → **428 통과** (+14 신규 — p4_sync 11 + data 3).
+
+### 사용자 흐름
+
+```mermaid
+graph LR
+    A[user 거래 수정/삭제] --> B[upsert_annotation<br/>+ set_hashtags]
+    B --> C[describe_annotation<br/>mechanical]
+    C --> D{p4 환경?}
+    D -->|있음| E[Thread<br/>p4 reconcile + submit]
+    D -->|없음| F[silent — 로그만]
+    E -->|성공/실패| G[log only]
+```
+
 ## CL #51102 — 0.14.0 — 거래 목록 item 컬럼에 해시태그 인라인 + 태그 단위 column 네비 + 태그 Enter 필터 (사용자 요청) (2026-05-10)
 
 사용자 요청 (한 묶음):

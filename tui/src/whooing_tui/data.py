@@ -6,16 +6,22 @@ wrapper (whooing-mcp-server-wrapper) 가 같은 db 를 read-only 로 SELECT
 경로의 외부 사용자는 없다. `open_ro()` API 는 안전성 / 명분 분리를 위해
 그대로 유지 (다른 도구가 미래에 합류할 가능성).
 
-Path 정책 (v0.1.0+, monorepo):
-  $WHOOING_DATA_DIR > ~/.whooing/   (default)
+Path 정책 (v0.15.0+, monorepo, CL #51107+):
+  $WHOOING_DATA_DIR > <project_root>/db/ > ~/.whooing/   (default)
    └─ whooing-data.sqlite            sqlite db (annotations / hashtags /
                                      entry_attachments / statement_import_log)
    └─ attachments/YYYY/YYYY-MM-DD/   sha256 dedup file storage
+
+CL #51107 부터 default 가 `<project>/db/` 로 변경 — db 파일이 P4 에 들어가
+변경 이벤트가 발생할 때마다 자동 submit (mutation 추적 / 원격 동기화 목적).
+기존 `~/.whooing/whooing-data.sqlite` 가 있으면 1회 마이그레이션.
 """
 
 from __future__ import annotations
 
+import logging
 import os
+import shutil
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Iterator
@@ -23,13 +29,69 @@ import sqlite3
 
 from whooing_core import db as core_db
 
+log = logging.getLogger(__name__)
+
+
+def _project_root() -> Path | None:
+    """본 모듈이 설치된 monorepo 의 project root 를 자동 탐색.
+
+    `whooing_tui/` 패키지의 `__file__` → `tui/src/whooing_tui/` → `tui/src/`
+    → `tui/` → 그 부모가 monorepo root (옆에 `core/` 가 있을 것).
+
+    `tui/` 와 `core/` 가 sibling 인 monorepo 만 매칭. 일반 pip install
+    (site-packages 안) 환경에서는 None — `~/.whooing` fallback.
+    """
+    here = Path(__file__).resolve()
+    # tui/src/whooing_tui/data.py → parents: [whooing_tui, src, tui, root]
+    for ancestor in here.parents:
+        if (ancestor / "tui").is_dir() and (ancestor / "core").is_dir():
+            return ancestor
+    return None
+
+
+def _legacy_home_dir() -> Path:
+    """0.14.0 까지의 default 위치 — `~/.whooing/`. 마이그레이션 source."""
+    return Path("~/.whooing").expanduser()
+
 
 def data_dir() -> Path:
-    """공유 데이터 root. WHOOING_DATA_DIR > ~/.whooing 기본."""
+    """공유 데이터 root.
+
+    우선순위 (CL #51107+):
+      1. `$WHOOING_DATA_DIR` (명시 override — 테스트도 이쪽).
+      2. `<project_root>/db/` (monorepo 안에서 실행 시).
+      3. `~/.whooing/` (pip install / monorepo 외 fallback).
+    """
     explicit = os.getenv("WHOOING_DATA_DIR")
     if explicit:
         return Path(explicit).expanduser()
-    return Path("~/.whooing").expanduser()
+    project = _project_root()
+    if project is not None:
+        return project / "db"
+    return _legacy_home_dir()
+
+
+def _maybe_migrate_legacy_db(target: Path) -> None:
+    """기존 `~/.whooing/whooing-data.sqlite` 가 있고 target 에 db 가 없으면
+    1회 복사. db 만 (attachments 는 별도). 이미 target 에 있으면 noop.
+    """
+    target_db = target / "whooing-data.sqlite"
+    if target_db.exists():
+        return
+    legacy = _legacy_home_dir() / "whooing-data.sqlite"
+    if not legacy.exists() or legacy == target_db:
+        return
+    target.mkdir(parents=True, exist_ok=True)
+    try:
+        shutil.copy2(legacy, target_db)
+        # WAL/SHM 보조 파일도 같이 (있다면) — 안전.
+        for suffix in ("-wal", "-shm"):
+            src = legacy.with_name(legacy.name + suffix)
+            if src.exists():
+                shutil.copy2(src, target_db.with_name(target_db.name + suffix))
+        log.info("legacy db 마이그레이션: %s → %s", legacy, target_db)
+    except Exception:  # pragma: no cover — 권한 등 — fatal 이 아니다.
+        log.exception("legacy db migration failed; using empty new db")
 
 
 def db_path() -> Path:
@@ -45,10 +107,19 @@ def attachments_root() -> Path:
 def init_shared_schema() -> Path:
     """앱 시작 시 1회. db / attachments dir 둘 다 보장 + 스키마 init.
 
+    CL #51107+: 새 위치 (`<project>/db/`) 진입 시 기존 home 위치
+    (`~/.whooing/whooing-data.sqlite`) 의 db 가 있으면 *target 에 db 가
+    없을 때만* 1회 복사 — 기존 사용자의 메모/해시태그 보존.
+
+    `WHOOING_DATA_DIR` 가 명시 set 되면 마이그레이션 skip — 테스트가
+    isolated tmp 에 실 사용자의 db 를 끌어오지 않게.
+
     Returns: db 의 절대 경로 (편의).
     """
     p = db_path()
     p.parent.mkdir(parents=True, exist_ok=True)
+    if os.getenv("WHOOING_DATA_DIR") is None:
+        _maybe_migrate_legacy_db(p.parent)
     attachments_root().mkdir(parents=True, exist_ok=True)
     core_db.init_schema(p)
     return p

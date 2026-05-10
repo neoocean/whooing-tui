@@ -1130,6 +1130,9 @@ class EntriesScreen(Screen):
         memo 는 후잉과 동일값을 그대로 mirror (검색·통계용 로컬 인덱스).
         tags 는 로컬 전용 (후잉에는 보내지 않는다). 둘 다 비었을 때도
         annotation row 는 만들어 둬 (set_hashtags 가 FK 위해 강제 생성).
+
+        CL #51107+: db 변경 직후 P4 자동 submit (P4 환경 있을 때만, 없으면
+        silent). description 은 LLM 미관여 mechanical.
         """
         if not entry_id:
             return
@@ -1144,10 +1147,24 @@ class EntriesScreen(Screen):
                 core_db.set_hashtags(conn, str(entry_id), list(tags or []))
         except Exception:  # pragma: no cover
             log.exception("persist_local annotation/hashtags failed")
+            return
+        # P4 자동 submit — 환경 없으면 silent. blocking=False (background).
+        from whooing_tui import p4_sync
+        p4_sync.submit_db_to_p4(
+            tui_data.db_path(),
+            p4_sync.describe_annotation(
+                entry_id=str(entry_id),
+                memo_changed=bool(memo),
+                tags=list(tags or []),
+            ),
+        )
 
     def _purge_local(self, entry_id: str) -> None:
         """삭제된 거래의 annotation / 해시태그 정리. CASCADE 가 처리하므로
-        upsert 의 역으로 `remove_annotation` 만 호출."""
+        upsert 의 역으로 `remove_annotation` 만 호출.
+
+        CL #51107+: db 변경 직후 P4 자동 submit.
+        """
         if not entry_id:
             return
         try:
@@ -1155,6 +1172,15 @@ class EntriesScreen(Screen):
                 core_db.remove_annotation(conn, str(entry_id))
         except Exception:  # pragma: no cover
             log.exception("purge_local annotation failed")
+            return
+        from whooing_tui import p4_sync
+        p4_sync.submit_db_to_p4(
+            tui_data.db_path(),
+            p4_sync.describe_annotation(
+                entry_id=str(entry_id), memo_changed=False, tags=None,
+                deleted=True,
+            ),
+        )
 
     @staticmethod
     def _extract_entry_id(response: Any) -> str | None:
