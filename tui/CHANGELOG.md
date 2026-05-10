@@ -2,6 +2,63 @@
 
 각 항목은 Perforce CL 단위로 끊는다.
 
+## CL #51122 — 0.17.2 — 누적 변경 (0.13.x ~ 0.17.x) 을 README / DESIGN 문서에 상세 반영 (사용자 요청) (2026-05-10)
+
+사용자 요청: "지금까지의 진행을 문서에 상세히 반영해주세요." 이어
+"이 세션을 종료하려고 합니다. 다음 세션에 이어 작업할 수 있도록 필요한
+문서를 업데이트 해 주세요."
+
+### 수정
+
+- `tui/README.md` — 전면 갱신:
+  - 버전 표시 (0.13.0~0.17.1) 와 각 CL 의 핵심 한 줄 요약 인덱스.
+  - **데이터 위치 + P4 자동 동기화** 신설 섹션 (위치 우선순위, 흐름
+    diagram, mechanical description 정책).
+  - **EntriesScreen** 의 두 가지 상태 + 태그 모드 / 컬럼 컨텍스트
+    Enter 표.
+  - **인라인 해시태그** 섹션 (CL #51106).
+  - **EntryEditDialog** 의 입력 규칙 갱신 (date 자동 dash, money 우측
+    정렬, AccountPicker 트리 ←/→, TagsPicker 추천+자주, `#` 자연 처리).
+  - **ReportsMenuScreen** 의 11 항목 + endpoint 매핑 표.
+  - **좁은 터미널 (iPhone Blink) 대응** 섹션 (모달 반응형 패턴 + 컴팩트
+    모드 + 가로 스크롤).
+  - **한글 IME** 섹션 (두벌식 매핑 표 + priority 정책).
+  - 테스트 통계 (471 passed) + 격리 정책.
+
+- `tui/DESIGN.md` — 누락된 모듈 / 흐름 추가:
+  - §3.0 모듈 인벤토리 — `cache` / `data` / `filters` / `ime` /
+    `p4_sync` / 신규 screens (account_picker / tags_picker / reports
+    / annotator / attachment_browser / statement_import) 추가.
+  - §3.2 화면 흐름 mermaid — EntryEditDialog 안의 picker 분기 +
+    ReportsMenuScreen → ReportResultScreen + on_unmount 의 P4 flush.
+  - §3.3 EntriesScreen 인터랙션 모델 — 직교 상태 표 + 전환 규칙 +
+    가로 스크롤.
+  - §7 로컬 sqlite + P4 자동 동기화 — 위치 우선순위 / 흐름 / mechanical
+    description / silent 정책.
+  - §8 좁은 터미널 적응 — Phase 1 (모달 반응형) + Phase 2 (DataTable
+    컴팩트).
+  - §9 테스트 전략 갱신 — 좁은 터미널 회귀, p4_sync 모킹, 471 통계.
+  - §10 다음 세션 / Phase 7+ 후보.
+
+- `tui/MEMORY.md` — CL #51122 항목 (본 갱신).
+- `tui/pyproject.toml` — 0.17.1 → 0.17.2.
+
+- assistant memory (P4 외부): `session-handoff-2026-05-10.md` 신설 —
+  0.13.x~0.17.x 누적 변경 표 + 운영 규칙 + Phase 7+ 후보 + 키 디렉토리.
+
+### 검증
+
+- 코드 변경 없음 → 471 → **471 통과** (기존 보존).
+- DB 백업 절차 준수: 작업 전 `db.sqlite` → `.bak` 복사. SHA / 행 수 일치
+  확인 (`entry_annotations=8`, `entry_hashtags=15`, `statement_import_log
+  =68`) 후 `.bak` 제거.
+
+### 다음 세션 핸드오프
+
+- DESIGN.md §10 + assistant memory 의 `session-handoff-2026-05-10.md`
+  에서 다음 작업 후보 + 운영 규칙 복원 가능. 다음 작업 시 `MEMORY.md` 의
+  최신 항목 읽고 시작.
+
 ## CL #51121 — 0.17.1 — ←/→ 컬럼 네비 시 가로 스크롤 + 컴팩트 hidden 컬럼 자동 skip (사용자 요청) (2026-05-10)
 
 사용자 보고: "blink 터미널 환경에서 좌우 방향키로 커서를 옮기다가 화면
