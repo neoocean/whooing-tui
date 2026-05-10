@@ -119,17 +119,20 @@ async def test_entries_screen_is_initial_and_self_bootstraps():
 
         # account_id 가 title 로 변환되어야 함 (식비, 현금) +
         # entry_date 가 YYYY-MM-DD 형식으로 정규화 (CL #51043).
+        # row 0 의 active cell (col 0 = date) 은 marker markup 으로 감싸짐
+        # (CL #51058) — cell 안의 텍스트만 검증하기 위해 substring 매칭.
         table = app.screen.query_one("#entries-table", DataTable)
         col_count = len(table.columns)
         row0 = [
             str(table.get_cell_at((0, c))) for c in range(col_count)
         ]
-        assert "2026-05-10" in row0
-        assert "20260510" not in row0  # 정규화 후 raw 형식은 사라져야
-        assert "12,000" in row0
-        assert "식비" in row0
-        assert "현금" in row0
-        assert "스타벅스" in row0
+        row0_joined = " | ".join(row0)
+        assert "2026-05-10" in row0_joined
+        assert "20260510" not in row0_joined  # 정규화 후 raw 형식 사라져야
+        assert "12,000" in row0_joined
+        assert "식비" in row0_joined
+        assert "현금" in row0_joined
+        assert "스타벅스" in row0_joined
 
         # 100-cap 경고 없음
         assert app.screen.last_cap_warning is False
@@ -663,6 +666,75 @@ async def test_clear_filter_restores_all_entries():
         await pilot.pause()
         assert es._active_filter is None
         assert len(es._entries) == 4
+
+
+@pytest.mark.asyncio
+async def test_active_cell_marker_applied_to_cursor_row_active_col():
+    """좌우 방향키로 컬럼 이동 시 (cursor_row, _active_col) cell 에 markup
+    (CL #51058) 이 적용되고 다른 cell 은 plain 그대로."""
+    fake = FakeClient(entries_by_section={"s1": _entries_for_filter()})
+    app = WhooingTuiApp(client=fake)  # type: ignore[arg-type]
+    async with app.run_test() as pilot:
+        from whooing_tui.screens.entries import EntriesScreen
+        await _wait_for(
+            lambda: isinstance(app.screen, EntriesScreen)
+            and app.screen.last_entry_count == 4,
+            timeout=3.0,
+        )
+        es: EntriesScreen = app.screen  # type: ignore[assignment]
+        table = es.query_one("#entries-table", DataTable)
+
+        def _cell(row, col):
+            return str(table.get_cell_at((row, col)))
+
+        # 초기: row 0 의 col 0 (date) 에 marker.
+        assert "[black on yellow]" in _cell(0, 0)
+        # 다른 cell 은 plain
+        assert "[black on yellow]" not in _cell(0, 1)  # money
+        assert "[black on yellow]" not in _cell(1, 0)  # row 1 의 date
+
+        # → 한 칸: col 0 → 1 (money). col 0 marker 사라지고 col 1 marker
+        es.action_next_column()
+        await pilot.pause()
+        assert "[black on yellow]" not in _cell(0, 0)  # 복원
+        assert "[black on yellow]" in _cell(0, 1)
+        assert "[black on yellow]" not in _cell(1, 0)
+
+        # → 두 칸 더: col 1 → 2 → 3 (right)
+        es.action_next_column()
+        es.action_next_column()
+        await pilot.pause()
+        assert "[black on yellow]" not in _cell(0, 1)
+        assert "[black on yellow]" in _cell(0, 3)
+
+
+@pytest.mark.asyncio
+async def test_active_cell_marker_follows_cursor_row():
+    """↓ 로 cursor row 가 바뀌면 marker 도 따라 이동 (이전 row 는 plain
+    복원)."""
+    fake = FakeClient(entries_by_section={"s1": _entries_for_filter()})
+    app = WhooingTuiApp(client=fake)  # type: ignore[arg-type]
+    async with app.run_test() as pilot:
+        from whooing_tui.screens.entries import EntriesScreen
+        await _wait_for(
+            lambda: isinstance(app.screen, EntriesScreen)
+            and app.screen.last_entry_count == 4,
+            timeout=3.0,
+        )
+        table = app.screen.query_one("#entries-table", DataTable)
+
+        def _cell(row, col):
+            return str(table.get_cell_at((row, col)))
+
+        # 초기 marker (0, 0)
+        assert "[black on yellow]" in _cell(0, 0)
+        # cursor 를 row 2 로 이동 (↓ 두 번)
+        await pilot.press("down")
+        await pilot.press("down")
+        await pilot.pause()
+        # row 0 marker 사라지고 row 2 에 marker
+        assert "[black on yellow]" not in _cell(0, 0)
+        assert "[black on yellow]" in _cell(2, 0)
 
 
 @pytest.mark.asyncio

@@ -2,6 +2,65 @@
 
 각 항목은 Perforce CL 단위로 끊는다.
 
+## CL #51058 — 0.10.1 — 활성 컬럼을 cell 단위 시각 마커로 (cursor row 의 파란색과 구분되는 노란색) (2026-05-10)
+
+사용자 요청 (2026-05-10): "지금은 거래 내역 하나를 활성화하면 파란색 배경
+하이라이트가 표시됩니다. 이 상태에서 좌우 방향키를 사용하면 이 파란색과
+구분되는 다른 색상으로 현재 선택된 칼럼을 표현해주세요."
+
+이전 (0.10.0) 은 status bar 텍스트 (`활성 컬럼: left`) 만으로 안내. 사용자가
+표 위에서 직접 시각적으로 어떤 컬럼이 활성인지 보이지 않는 문제.
+
+### 해결
+
+`(cursor_row, _active_col)` 교차점 cell 만 Rich markup 으로 색 변경
+(`[black on yellow]...[/]`). cursor row 자체는 textual 의 default 색 (파란색)
+유지 — 두 색이 겹치는 active cell 은 노란색이 우선이라 자연스럽게 구분.
+
+### 추가
+
+- `screens/entries.py::_format_cell(entry, col_index)` — entry 와 column
+  index 로부터 cell 의 plain text 생성. `_render_table` 의 row 추가 +
+  `_update_active_cell_marker` 의 cell 복원 양쪽이 같은 형식 사용.
+- `screens/entries.py::_update_active_cell_marker()` — 이전 marker cell
+  을 plain 으로 복원 + 현재 `(cursor_row, _active_col)` 에 markup 적용.
+  cell value 를 `_format_cell` 로 raw entry 에서 다시 format → markup
+  string 누적/오염 방지.
+- `screens/entries.py::on_data_table_row_highlighted(event)` — `↑` / `↓`
+  또는 click 으로 cursor row 가 바뀌면 marker 도 따라 이동.
+- `_marked_cell: tuple[int, int] | None` — 마지막 marker 좌표 추적.
+- `_ACTIVE_CELL_STYLE = "black on yellow"` — Rich markup style 상수.
+
+### 수정
+
+- `_render_table` 이 cell-by-cell 추가 후 `_update_active_cell_marker()`
+  호출 → 첫 mount 시점부터 `(0, _active_col)` 에 marker 보임.
+- `action_prev_column` / `action_next_column` 가 `_update_active_cell_marker()`
+  호출.
+- `tests/test_entries_screen.py` 의 기존 cell 검증 (row0 의 plain
+  matching) 을 substring (`row0_joined`) 으로 완화 — marker markup 이
+  들어와도 cell 안의 plain 텍스트가 보이는지만 확인.
+
+### 추가 통합 테스트
+
+- `test_active_cell_marker_applied_to_cursor_row_active_col` — 초기
+  marker (0, 0) 위치 + `→` 로 col 이동 시 marker 가 (0, 1) → (0, 3) 로
+  따라가고 이전 cell 은 plain 복원됨.
+- `test_active_cell_marker_follows_cursor_row` — `↓` 로 cursor row 가
+  바뀌면 marker 도 (0, 0) → (2, 0) 으로 이동.
+
+### 검증
+
+- `make test-tui` → **261 passed** (259 + 2 새 marker 통합).
+
+### 보존
+
+- status bar 의 `활성 컬럼: left    Enter = 같은 left 으로 필터` 안내는
+  그대로 — 시각 marker + 텍스트 둘 다 (사용자가 어떤 컬럼이 활성이고
+  Enter 시 무슨 동작인지 한눈에).
+- cursor_type="row" 유지 — 거래 단위 인식 보존, 파란색 row highlight
+  그대로.
+
 ## CL #51053 — 0.10.0 — EntriesScreen 좌우 방향키 column navigation + Enter 컬럼별 컨텍스트 액션 (2026-05-10)
 
 사용자 요청 (2026-05-10): "거래 화면에서 한 거래가 선택된 상태에서 좌우

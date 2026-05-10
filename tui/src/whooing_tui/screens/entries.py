@@ -40,6 +40,7 @@ from textual import work
 from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Vertical
+from textual.coordinate import Coordinate
 from textual.screen import Screen
 from textual.widgets import DataTable, Footer, Header, Static
 
@@ -148,6 +149,12 @@ class EntriesScreen(Screen):
         "date", "money", "left", "right", "item", "memo",
     )
 
+    # 활성 cell 시각 마커 — Rich markup 으로 cell 의 background 색을 변경.
+    # cursor_type="row" 의 default 색 (보통 파란/accent) 와 구분되도록 노란
+    # 배경 + 검정 글자. textual 의 색 변수 (`$warning` 등) 가 markup 안에서
+    # 변수 치환되지 않을 수 있어 안전하게 명시 색.
+    _ACTIVE_CELL_STYLE = "black on yellow"
+
     # 한 번에 fetch 할 거래는 후잉 server-side hard cap 100건. 단일 일자에
     # 100건 초과는 _list_entries_chunked 가 더 분할할 수 없으므로 footer
     # 에 경고 띄움 (DESIGN §4.3 + MEMORY §7).
@@ -179,6 +186,9 @@ class EntriesScreen(Screen):
         # cursor_type 이 "row" 라 textual 자체로는 column 추적이 안 된다 —
         # 화면이 직접 관리.
         self._active_col: int = 0
+        # 마지막으로 마커링한 cell 좌표 — row cursor 가 이동하거나 _active_col
+        # 이 변경될 때 이전 cell 을 plain 으로 복원하기 위해 보관 (CL #51058+).
+        self._marked_cell: tuple[int, int] | None = None
 
     # ---- compose -------------------------------------------------------
 
@@ -289,12 +299,65 @@ class EntriesScreen(Screen):
     def action_prev_column(self) -> None:
         if self._active_col > 0:
             self._active_col -= 1
+            self._update_active_cell_marker()
             self._announce_active_column()
 
     def action_next_column(self) -> None:
         if self._active_col < len(self._COLUMN_NAMES) - 1:
             self._active_col += 1
+            self._update_active_cell_marker()
             self._announce_active_column()
+
+    def on_data_table_row_highlighted(
+        self, event: DataTable.RowHighlighted,
+    ) -> None:
+        """↑/↓ 또는 click 으로 cursor row 가 바뀌면 marker 도 따라 이동."""
+        self._update_active_cell_marker()
+
+    def _update_active_cell_marker(self) -> None:
+        """이전 active cell 을 plain 으로 복원 + 현재 (cursor_row, _active_col)
+        에 markup 적용. cell value 는 `_format_cell` 로 raw entry 에서 다시
+        format — markup string 이 누적/오염되지 않는다.
+        """
+        table = self.query_one("#entries-table", DataTable)
+        if not self._entries:
+            self._marked_cell = None
+            return
+
+        cur_row = table.cursor_row
+        if cur_row is None or cur_row < 0 or cur_row >= len(self._entries):
+            return
+        cur_col = self._active_col
+        new_marker = (cur_row, cur_col)
+
+        # 1. 이전 marker 가 있고 새 위치와 다르면 복원
+        if self._marked_cell is not None and self._marked_cell != new_marker:
+            prev_row, prev_col = self._marked_cell
+            if 0 <= prev_row < len(self._entries) and 0 <= prev_col < len(self._COLUMN_NAMES):
+                plain_prev = self._format_cell(self._entries[prev_row], prev_col)
+                try:
+                    table.update_cell_at(
+                        Coordinate(prev_row, prev_col),
+                        plain_prev,
+                        update_width=False,
+                    )
+                except Exception:  # pragma: no cover — coordinate stale
+                    pass
+
+        # 2. 현재 cell 에 markup 적용
+        plain_cur = self._format_cell(self._entries[cur_row], cur_col)
+        # 빈 cell 도 marker 가 보이도록 단일 공백 fallback (memo 가 비어있을 때 등).
+        marker_text = plain_cur if plain_cur else " "
+        marked = f"[{self._ACTIVE_CELL_STYLE}]{marker_text}[/]"
+        try:
+            table.update_cell_at(
+                Coordinate(cur_row, cur_col),
+                marked,
+                update_width=False,
+            )
+        except Exception:  # pragma: no cover
+            return
+        self._marked_cell = new_marker
 
     def _announce_active_column(self) -> None:
         """status bar 에 현재 컬럼 + Enter 시 동작 안내."""
@@ -668,20 +731,41 @@ class EntriesScreen(Screen):
 
     # ---- render --------------------------------------------------------
 
-    def _render_table(self, entries: list[dict[str, Any]]) -> None:
+    def _format_cell(self, entry: dict[str, Any], col_index: int) -> str:
+        """entry 와 column index 로부터 cell 의 plain text 를 만든다.
+
+        `_render_table` 의 row 추가 + `_update_active_cell_marker` 의 cell
+        복원 양쪽에서 같은 형식으로 보이도록 단일 helper.
+        """
         session = self.app.session  # type: ignore[attr-defined]
+        col = self._COLUMN_NAMES[col_index]
+        if col == "date":
+            return _fmt_date(entry.get("entry_date"))
+        if col == "money":
+            return _fmt_money(entry.get("money"))
+        if col == "left":
+            l_id = entry.get("l_account_id") or ""
+            return session.title_of(l_id) if l_id else ""
+        if col == "right":
+            r_id = entry.get("r_account_id") or ""
+            return session.title_of(r_id) if r_id else ""
+        if col == "item":
+            return entry.get("item") or ""
+        if col == "memo":
+            return entry.get("memo") or ""
+        return ""
+
+    def _render_table(self, entries: list[dict[str, Any]]) -> None:
         table = self.query_one("#entries-table", DataTable)
         table.clear()
         for e in entries:
-            date_s = _fmt_date(e.get("entry_date"))
-            money_s = _fmt_money(e.get("money"))
-            l_id = e.get("l_account_id") or ""
-            r_id = e.get("r_account_id") or ""
-            l_name = session.title_of(l_id) if l_id else ""
-            r_name = session.title_of(r_id) if r_id else ""
-            item = e.get("item") or ""
-            memo = e.get("memo") or ""
-            table.add_row(date_s, money_s, l_name, r_name, item, memo)
+            cells = [self._format_cell(e, i) for i in range(len(self._COLUMN_NAMES))]
+            table.add_row(*cells)
+        # render 후 marker 가 stale 이라 reset + 재적용. cursor row 가 0
+        # 이 default 라 (0, _active_col) 에 marker.
+        self._marked_cell = None
+        if entries:
+            self._update_active_cell_marker()
 
     def _update_window_status(
         self,
