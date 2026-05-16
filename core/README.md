@@ -78,7 +78,7 @@ print(f"schema version: {current_version(conn)}")
 
 - [DESIGN.md](DESIGN.md) — schema, 어댑터 구조, 분리 정책
 - [CHANGELOG.md](CHANGELOG.md) — 버전별 변경
-- [whooing-mcp-server-wrapper](../whooing-mcp-server/) — read-only consumer
+- [mcp/](../mcp/) — read-only consumer (ex-whooing-mcp-server-wrapper, archived 2026-05-10 후 monorepo 로 흡수)
 - [whooing-tui](../whooing-tui/) — write owner
 
 ## License

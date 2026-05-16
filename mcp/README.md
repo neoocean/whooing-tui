@@ -740,33 +740,28 @@ sequenceDiagram
 
 v0.1.x 에서 v0.2.0 으로 올리는 절차:
 
-1. **whooing-core / whooing-tui 클론 + install** (sibling monorepo):
+1. **monorepo 클론 + install** (whooing-mcp-server-wrapper 는 2026-05-10
+   에 archive 되어 monorepo `whooing-tui/mcp/` 로 흡수됨. `make install`
+   하나로 core + tui + mcp 모두 editable install):
    ```bash
    cd ../  # scripts/ 로
    git clone https://github.com/neoocean/whooing-tui.git
    cd whooing-tui
-   make install   # core + tui 모두 editable
+   make install
    ```
 
-2. **wrapper 업데이트 + 재설치**:
-   ```bash
-   cd ../whooing-mcp-server
-   git pull
-   make install   # whooing-core 가 sibling 에서 자동 install
-   ```
-
-3. **데이터 path 마이그레이션** (옛 `<project>/whooing-data.sqlite` 사용 중이면):
+2. **데이터 path 마이그레이션** (옛 `<project>/whooing-data.sqlite` 사용 중이면):
    ```bash
    python tools/migrate-to-shared-data-dir.py            # dry-run
    python tools/migrate-to-shared-data-dir.py --confirm  # 실 mv
    ```
    결과: `~/.whooing/whooing-data.sqlite` + `~/.whooing/attachments/` 로 이동.
 
-4. **Claude Desktop / Code 재시작**: 도구 목록이 14 로 갱신됨. statement
+3. **Claude Desktop / Code 재시작**: 도구 목록이 14 로 갱신됨. statement
    import / 첨부 / 메모/태그 관련 명령은 더 이상 LLM 으로 호출 불가 — 대신
    `whooing-tui` 터미널에서 처리.
 
-5. **`.env` 수정 권장** (선택):
+4. **`.env` 수정 권장** (선택):
    ```diff
    + WHOOING_DATA_DIR=~/.whooing
    - WHOOING_QUEUE_PATH=...     # 옛 explicit override 가 있었으면 제거
