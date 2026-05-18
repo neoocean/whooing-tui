@@ -423,15 +423,361 @@ class ReportResultScreen(ModalScreen[None]):
 # ---- payload 포매터 ---------------------------------------------------
 
 
+def _fmt_money(v: Any) -> str:
+    """천단위 콤마 + 음수 빨강 + 0은 dim. Rich markup 포함."""
+    try:
+        n = int(float(v))
+    except (TypeError, ValueError):
+        return str(v)
+    s = f"{n:,}"
+    if n < 0:
+        return f"[red]{s}[/red]"
+    if n == 0:
+        return f"[dim]{s}[/dim]"
+    return s
+
+
+def _fmt_money_plain(v: Any) -> str:
+    """markup 없는 콤마 천 단위 — 정렬 시 cell 폭 계산 용."""
+    try:
+        n = int(float(v))
+    except (TypeError, ValueError):
+        return str(v)
+    return f"{n:,}"
+
+
+def _fmt_yyyymmdd(s: Any) -> str:
+    """후잉 entry_date (YYYYMMDD 또는 YYYYMMDD.NNNN) → YYYY-MM-DD."""
+    raw = str(s or "").split(".", 1)[0]
+    if len(raw) == 8 and raw.isdigit():
+        return f"{raw[:4]}-{raw[4:6]}-{raw[6:8]}"
+    return raw
+
+
+def _fmt_yyyymm(s: Any) -> str:
+    """YYYYMM → YYYY-MM."""
+    raw = str(s or "")
+    if len(raw) == 6 and raw.isdigit():
+        return f"{raw[:4]}-{raw[4:6]}"
+    return raw
+
+
+# 후잉 account 키 → 한글 라벨. 보고서 가독성 위해 통일.
+_ACCOUNT_KR: dict[str, str] = {
+    "assets": "자산",
+    "liabilities": "부채",
+    "capital": "자본",
+    "income": "수입",
+    "expenses": "지출",
+    "total": "합계",
+    "net_income": "순이익",
+    "etc": "기타",
+    "balance": "잔액",
+    "in": "수입",
+    "out": "지출",
+    "margin": "순증감",
+    "budget": "예산",
+    "money": "사용",
+    "remains": "잔여",
+}
+
+
+def _kr(key: str) -> str:
+    return _ACCOUNT_KR.get(key, key)
+
+
+def _table(
+    headers: list[str],
+    rows: list[list[str]],
+    *,
+    right_align: set[int] | None = None,
+) -> str:
+    """간단한 텍스트 표 — Rich markup 보존. right_align 으로 우측 정렬할
+    column index set."""
+    right_align = right_align or set()
+    # 각 column 폭: markup strip 한 plain 길이의 max.
+    import re as _re
+    strip = _re.compile(r"\[/?[^\]]+\]")
+    def plain_len(s: str) -> int:
+        return _wide_len(strip.sub("", s))
+    widths = [plain_len(h) for h in headers]
+    for r in rows:
+        for i, cell in enumerate(r):
+            if i >= len(widths):
+                widths.append(plain_len(cell))
+            else:
+                widths[i] = max(widths[i], plain_len(cell))
+
+    def pad(cell: str, w: int, right: bool) -> str:
+        gap = w - plain_len(cell)
+        return (" " * gap) + cell if right else cell + (" " * gap)
+
+    lines = []
+    header_line = "  ".join(
+        f"[bold]{pad(h, widths[i], i in right_align)}[/bold]"
+        for i, h in enumerate(headers)
+    )
+    lines.append(header_line)
+    sep = "  ".join("─" * widths[i] for i in range(len(headers)))
+    lines.append(f"[dim]{sep}[/dim]")
+    for r in rows:
+        row_cells = []
+        for i, cell in enumerate(r):
+            w = widths[i] if i < len(widths) else plain_len(cell)
+            row_cells.append(pad(cell, w, i in right_align))
+        lines.append("  ".join(row_cells))
+    return "\n".join(lines)
+
+
+def _wide_len(s: str) -> int:
+    """한글 등 wide char 는 2 cell. ASCII 1 cell."""
+    return sum(2 if ord(c) > 0x7F else 1 for c in s)
+
+
+# ---- 종류별 renderer (각각 dict / list 검증 후 string 반환, 실패시 None) -
+
+
+def _render_balance_or_pl(payload: Any) -> str | None:
+    """balance_sheet / pl_summary — flat dict {assets, liabilities, capital,
+    expenses, income, net_income, total} 형태. 캡처의 실 응답 shape.
+    """
+    if not isinstance(payload, dict):
+        return None
+    keys = ("assets", "liabilities", "capital", "income", "expenses",
+            "total", "net_income")
+    rows: list[list[str]] = []
+    for k in keys:
+        if k not in payload:
+            continue
+        v = payload[k]
+        if isinstance(v, dict):
+            v = v.get("total") or v.get("balance") or v.get("money") or v
+        rows.append([_kr(k), _fmt_money(v)])
+    if not rows:
+        return None
+    return _table(["항목", "금액 (KRW)"], rows, right_align={1})
+
+
+def _render_monthly_trend(payload: Any) -> str | None:
+    """monthly_trend — rows_type=month: `{rows_type, rows: {YYYYMM: {...}}}`.
+    각 월의 핵심 4개 (assets/liabilities/income/expenses) 만 추출 + 순이익.
+    """
+    if not isinstance(payload, dict):
+        return None
+    rows = payload.get("rows")
+    if not isinstance(rows, dict) or not rows:
+        return None
+    cols = ["월", "수입", "지출", "순이익"]
+    out_rows: list[list[str]] = []
+    for ym in sorted(rows.keys()):
+        m = rows[ym]
+        if not isinstance(m, dict):
+            continue
+        income = m.get("income") or 0
+        expenses = m.get("expenses") or 0
+        try:
+            net = int(float(income or 0)) - int(float(expenses or 0))
+        except (TypeError, ValueError):
+            net = 0
+        out_rows.append([
+            _fmt_yyyymm(ym), _fmt_money(income), _fmt_money(expenses),
+            _fmt_money(net),
+        ])
+    if not out_rows:
+        return None
+    return _table(cols, out_rows, right_align={1, 2, 3})
+
+
+def _render_in_out(payload: Any) -> str | None:
+    """in_out — `{<account>: {total: {in, out, margin, balance}}, ...}` 형태."""
+    if not isinstance(payload, dict):
+        return None
+    rows: list[list[str]] = []
+    for acc in ("assets", "liabilities", "capital", "income", "expenses"):
+        if acc not in payload:
+            continue
+        v = payload[acc]
+        if not isinstance(v, dict):
+            continue
+        total = v.get("total") if isinstance(v.get("total"), dict) else v
+        rows.append([
+            _kr(acc),
+            _fmt_money(total.get("in", 0)),
+            _fmt_money(total.get("out", 0)),
+            _fmt_money(total.get("margin", 0)),
+            _fmt_money(total.get("balance", 0)),
+        ])
+    if not rows:
+        return None
+    return _table(
+        ["계정", "수입", "지출", "순증감", "잔액"], rows,
+        right_align={1, 2, 3, 4},
+    )
+
+
+def _render_calendar(payload: Any) -> str | None:
+    """calendar — `{aggregate: {count, income, expenses, etc}, rows: {date: {...}}}`."""
+    if not isinstance(payload, dict):
+        return None
+    agg = payload.get("aggregate") or {}
+    rows = payload.get("rows") or {}
+    parts: list[str] = []
+    if isinstance(agg, dict) and agg:
+        parts.append("[bold]이번 달 합계[/bold]")
+        for k in ("income", "expenses", "etc", "count"):
+            if k not in agg:
+                continue
+            label = _kr(k) if k != "count" else "거래 건수"
+            v = agg[k]
+            if k == "count":
+                parts.append(f"  {label}: {v}")
+            else:
+                parts.append(f"  {label}: {_fmt_money(v)}")
+    if isinstance(rows, dict) and rows:
+        parts.append("")
+        out_rows: list[list[str]] = []
+        for d in sorted(rows.keys()):
+            r = rows[d] or {}
+            if not isinstance(r, dict):
+                continue
+            inc = r.get("income", 0)
+            exp = r.get("expenses", 0)
+            if (inc or 0) == 0 and (exp or 0) == 0:
+                continue
+            out_rows.append([
+                _fmt_yyyymmdd(d), _fmt_money(inc), _fmt_money(exp),
+            ])
+        if out_rows:
+            parts.append(_table(
+                ["일자", "수입", "지출"], out_rows, right_align={1, 2},
+            ))
+    return "\n".join(parts) if parts else None
+
+
+def _render_entries_latest(payload: Any) -> str | None:
+    """entries_latest — list of {entry_id, entry_date, l_account*, r_account*,
+    money, item, ...}.
+    """
+    if not isinstance(payload, list) or not payload:
+        return None
+    out_rows: list[list[str]] = []
+    for e in payload:
+        if not isinstance(e, dict):
+            continue
+        left = e.get("l_account_title") or e.get("l_account") or ""
+        right = e.get("r_account_title") or e.get("r_account") or ""
+        item = e.get("item") or ""
+        out_rows.append([
+            _fmt_yyyymmdd(e.get("entry_date")),
+            _fmt_money(e.get("money")),
+            str(left)[:14],
+            str(right)[:14],
+            str(item)[:24],
+        ])
+    if not out_rows:
+        return None
+    return _table(
+        ["일자", "금액", "차변", "대변", "적요"], out_rows,
+        right_align={1},
+    )
+
+
+def _render_budget(payload: Any) -> str | None:
+    """budget — `{aggregate: {total: {budget, money, remains}, ...}, ...}`."""
+    if not isinstance(payload, dict):
+        return None
+    agg = payload.get("aggregate")
+    if not isinstance(agg, dict):
+        return None
+    total = agg.get("total") if isinstance(agg.get("total"), dict) else agg
+    rows: list[list[str]] = []
+    for k in ("budget", "money", "remains"):
+        if k not in total:
+            continue
+        rows.append([_kr(k), _fmt_money(total[k])])
+    if not rows:
+        return None
+    return _table(["항목", "금액 (KRW)"], rows, right_align={1})
+
+
+def _render_budget_goal(payload: Any) -> str | None:
+    """budget_goal — `{set_id, base_ym, goal_ym, goal_money, base_money, ...}`."""
+    if not isinstance(payload, dict):
+        return None
+    set_id = payload.get("set_id")
+    if not set_id or set_id == 0:
+        return "[yellow](장기목표 미설정)[/yellow]\n\n[dim]후잉 웹에서 먼저 설정하세요.[/dim]"
+    rows: list[list[str]] = []
+    if "base_ym" in payload and "goal_ym" in payload:
+        rows.append([
+            "기간",
+            f"{_fmt_yyyymm(payload['base_ym'])} ~ {_fmt_yyyymm(payload['goal_ym'])}",
+        ])
+    for k_src, label in (
+        ("base_money", "시작 자산"),
+        ("goal_money", "목표 자산"),
+        ("base_income", "연간 수입 예산"),
+        ("base_expenses", "연간 지출 예산"),
+    ):
+        if k_src in payload and payload[k_src] is not None:
+            rows.append([label, _fmt_money(payload[k_src])])
+    if not rows:
+        return None
+    return _table(["항목", "값"], rows, right_align={1})
+
+
+def _render_report_customs(payload: Any) -> str | None:
+    """report_customs-list — `{rows: [...]}` or `[...]` 직접."""
+    if isinstance(payload, dict):
+        items = payload.get("rows")
+    else:
+        items = payload
+    if not isinstance(items, list):
+        return None
+    if not items:
+        # 빈 list — top-level "빈 결과" 안내 분기가 안 잡는 케이스
+        # (payload 가 `{rows: []}` 형태로 rows 키만 있음 — len(payload)=1).
+        return (
+            "[yellow](결과 없음)[/yellow]\n\n"
+            "[dim]사용자 정의 BS/PL 행이 정의 안 됨. 후잉 웹에서 먼저 "
+            "정의하세요.[/dim]"
+        )
+    out_rows: list[list[str]] = []
+    for r in items:
+        if not isinstance(r, dict):
+            continue
+        title = r.get("title") or r.get("name") or ""
+        money = r.get("money", 0)
+        out_rows.append([str(title)[:30], _fmt_money(money)])
+    if not out_rows:
+        return None
+    return _table(["행 제목", "금액 (KRW)"], out_rows, right_align={1})
+
+
+_RENDERERS: dict[str, Any] = {
+    "balance_sheet": _render_balance_or_pl,
+    "pl_summary": _render_balance_or_pl,
+    "monthly_trend": _render_monthly_trend,
+    "in_out": _render_in_out,
+    "calendar": _render_calendar,
+    "entries_latest": _render_entries_latest,
+    "custom_bs": _render_report_customs,
+    "custom_pl": _render_report_customs,
+    "budget_expenses": _render_budget,
+    "budget_income": _render_budget,
+    "budget_goal": _render_budget_goal,
+}
+
+
 def format_report_payload(item_id: str, payload: Any) -> str:
     """보고서 종류별 사람-친화 평문 (Rich markup OK).
 
-    Phase 1 은 raw JSON pretty dump 가 baseline — 종류별 전용 렌더는 후속
-    CL 에서 증분.
+    CL #52786+: item_id 별 전용 renderer (`_RENDERERS`) 가 표 형태로
+    포매팅. renderer 가 None 반환 (응답 shape mismatch) 면 raw JSON
+    fallback. raw JSON 보다 가독성 큰 폭 향상.
 
     CL #52753+: None / 빈 list / 빈 dict 의 경우 명확한 안내 메시지.
-    종전엔 `[]` / `{}` 만 표시돼 사용자가 "빈 화면" 으로 인식 (사용자 보고).
-    사용자 정의 BS/PL 보고서가 정의 안 된 환경에서 자주 발생.
+    종전엔 `[]` / `{}` 만 표시돼 사용자가 "빈 화면" 으로 인식.
     """
     if payload is None:
         return (
@@ -450,8 +796,17 @@ def format_report_payload(item_id: str, payload: Any) -> str:
             "[dim]후잉 API 가 빈 응답을 반환했습니다.[/dim]"
         )
 
-    # balance_sheet / pl_summary 등은 dict, customs / entries_latest 는 list.
-    # 양쪽 모두 indent JSON 으로 dump — UTF-8 보존.
+    # CL #52786+: item_id 별 전용 렌더 시도.
+    renderer = _RENDERERS.get(item_id)
+    if renderer is not None:
+        try:
+            rendered = renderer(payload)
+            if rendered:
+                return rendered
+        except Exception:
+            log.exception("renderer for %s failed", item_id)
+
+    # Fallback: raw JSON.
     try:
         return "```\n" + json.dumps(
             payload, ensure_ascii=False, indent=2, default=str,

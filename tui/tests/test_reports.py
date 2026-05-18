@@ -41,9 +41,10 @@ def test_build_menu_labels_are_korean_and_human_readable():
         assert any(ord(c) > 127 for c in label)
 
 
-def test_format_report_payload_dict_emits_indented_json():
+def test_format_report_payload_unknown_id_falls_back_to_json():
+    """CL #52786+ 부터 item_id 별 전용 렌더 — 등록 안 된 id 만 raw JSON."""
     out = format_report_payload(
-        "balance_sheet", {"total": 1000, "accounts": [{"id": "x1"}]},
+        "unknown_id", {"total": 1000, "accounts": [{"id": "x1"}]},
     )
     assert "```" in out
     assert "1000" in out
@@ -69,19 +70,22 @@ def test_format_report_payload_empty_dict_explains():
     assert "{}" not in out
 
 
-def test_format_report_payload_nonempty_list_uses_json_dump():
-    """비빈 list 는 종전 동작 — JSON pretty dump."""
-    out = format_report_payload("entries_latest", [{"x": 1}])
+def test_format_report_payload_unknown_id_with_list_falls_back():
+    """CL #52786+: 등록 안 된 item_id + list payload → raw JSON fallback."""
+    out = format_report_payload("unknown_id", [{"x": 1}])
     assert "```" in out
     assert '"x": 1' in out
 
 
-def test_format_report_payload_list_works():
+def test_format_report_payload_entries_latest_renders_money_with_commas():
+    """entries_latest renderer 가 천단위 콤마 포매팅 적용."""
     out = format_report_payload(
-        "entries_latest", [{"item": "스타벅스", "money": 5000}],
+        "entries_latest", [{"item": "스타벅스", "money": 5000,
+                            "entry_date": "20260518"}],
     )
     assert "스타벅스" in out
-    assert "5000" in out
+    # 콤마 형식 (5,000) — raw 5000 X.
+    assert "5,000" in out
 
 
 # ---- 통합: 't' 단축키 → ReportsMenuScreen → ReportResultScreen ---------
@@ -411,3 +415,130 @@ async def test_cached_client_call_official_tool_delegates_to_inner():
         "called": "report-get",
         "args": {"type": "report", "section_id": "s1"},
     }
+
+
+# ---- CL #52786+ : item_id 별 사람-친화 렌더 ---------------------------
+
+
+def test_pl_summary_renders_as_table_not_json():
+    """pl_summary 응답이 표 형태 + 한글 항목명 + 천단위 콤마.
+
+    사용자 캡처의 정확한 시나리오 — `{assets, liabilities, ...}` flat dict.
+    """
+    out = format_report_payload("pl_summary", {
+        "assets": -31598068, "liabilities": 164524712,
+        "expenses": 25957071, "income": 0,
+        "capital": -196122780, "net_income": -25957071,
+    })
+    # raw JSON 형식이 아님 — 한글 라벨 + 천단위 콤마.
+    assert "```" not in out
+    assert "자산" in out
+    assert "부채" in out
+    assert "순이익" in out
+    # 천단위 콤마 형식.
+    assert "-31,598,068" in out
+    assert "25,957,071" in out
+
+
+def test_balance_sheet_uses_same_renderer():
+    """balance_sheet 도 같은 flat-dict renderer 로 처리."""
+    out = format_report_payload("balance_sheet", {
+        "assets": 1_000_000, "liabilities": 500_000,
+        "capital": 500_000,
+    })
+    assert "자산" in out and "부채" in out and "자본" in out
+    assert "1,000,000" in out
+
+
+def test_monthly_trend_renders_as_month_table():
+    """월별 추이 — rows: {YYYYMM: ...} 를 표로."""
+    out = format_report_payload("monthly_trend", {
+        "rows_type": "month",
+        "rows": {
+            "202604": {"income": 8000000, "expenses": 5500000},
+            "202605": {"income": 0, "expenses": 25957071},
+        },
+    })
+    assert "2026-04" in out
+    assert "2026-05" in out
+    assert "8,000,000" in out
+    # 순이익 계산: 0 - 25957071 = -25957071
+    assert "-25,957,071" in out
+
+
+def test_entries_latest_renders_as_row_table():
+    """최근 거래 — list of dict → 일자/금액/차변/대변/적요 표."""
+    out = format_report_payload("entries_latest", [
+        {"entry_id": 1712609, "entry_date": "20260516.0000",
+         "l_account": "expenses", "r_account": "liabilities",
+         "money": 15191, "item": "도메인"},
+    ])
+    assert "2026-05-16" in out
+    assert "15,191" in out
+    assert "도메인" in out
+
+
+def test_in_out_renders_with_all_columns():
+    """in_out — 계정별 in/out/margin/balance 4 col 표."""
+    out = format_report_payload("in_out", {
+        "assets": {"total": {"in": 0, "out": 100, "margin": -100, "balance": -500}},
+    })
+    assert "자산" in out
+    assert "수입" in out and "지출" in out
+    assert "-100" in out
+
+
+def test_budget_renders_aggregate_total():
+    """budget_expenses / budget_income — aggregate.total 의 budget/money/remains."""
+    out = format_report_payload("budget_expenses", {
+        "aggregate": {"total": {"budget": 0, "money": 25957071, "remains": -25957071}},
+    })
+    assert "예산" in out and "사용" in out and "잔여" in out
+    assert "25,957,071" in out
+
+
+def test_budget_goal_renders_period_and_amounts():
+    """장기목표 — base_ym ~ goal_ym + goal_money."""
+    out = format_report_payload("budget_goal", {
+        "set_id": 4613, "base_ym": "201806", "goal_ym": "201906",
+        "base_money": 100_000_000, "goal_money": 200_000_000,
+    })
+    assert "기간" in out
+    assert "2018-06" in out and "2019-06" in out
+    assert "200,000,000" in out
+
+
+def test_budget_goal_unset_message():
+    """set_id=0 → 미설정 안내."""
+    out = format_report_payload("budget_goal", {"set_id": 0})
+    assert "미설정" in out
+
+
+def test_custom_bs_empty_rows_shows_guidance():
+    """custom_bs/pl 의 `{rows: []}` — '사용자 정의 행 정의 필요' 안내."""
+    out = format_report_payload("custom_bs", {"rows": []})
+    assert "결과 없음" in out
+    assert "정의" in out
+
+
+def test_custom_bs_with_rows_renders_table():
+    out = format_report_payload("custom_bs", {"rows": [
+        {"id": "12", "title": "현금성 자산", "money": 1500000},
+        {"id": "13", "title": "투자 자산", "money": 2000000},
+    ]})
+    assert "현금성 자산" in out
+    assert "1,500,000" in out
+    assert "투자 자산" in out
+
+
+def test_unknown_item_id_falls_back_to_json():
+    """등록 안 된 item_id — raw JSON fallback."""
+    out = format_report_payload("unknown_thing", {"x": 1})
+    assert "```" in out and '"x"' in out
+
+
+def test_renderer_failure_falls_back_to_json():
+    """renderer 가 예외 raise — fallback 으로 raw JSON."""
+    # in_out renderer 는 dict 만 받는데 list 면 None — fallback.
+    out = format_report_payload("in_out", [1, 2, 3])
+    assert "```" in out or "결과 없음" in out

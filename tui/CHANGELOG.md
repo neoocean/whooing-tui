@@ -5,6 +5,104 @@
 > **0.17.x 이전** (CL #51119 ~ #1) 항목은 분량 정리 차원에서
 > [`CHANGELOG-archive-0.17.md`](./CHANGELOG-archive-0.17.md) 로 분리 보존.
 
+## CL #52786 — 0.64.0 — 보고서 결과를 표/사람-친화 형태로 (2026-05-18)
+
+배경 (사용자 보고): 보고서 화면이 raw JSON dump 로 표시. 사용자가 캡처
+첨부 — `손익 요약 (이번 달)` 의 결과가:
+```
+{
+  "assets": -31598068,
+  "liabilities": 164524712.182,
+  ...
+}
+```
+같이 raw. "보고서 형태로 표시" 요청.
+
+### 동작 변경
+
+`format_report_payload(item_id, payload)` 가 item_id 별 전용 renderer 로
+분기. raw JSON 은 등록 안 된 item_id / renderer 가 응답 shape 매칭 실패
+시의 fallback 으로만 사용.
+
+| 메뉴 (item_id) | renderer | 표시 |
+|---|---|---|
+| balance_sheet / pl_summary | `_render_balance_or_pl` | 항목/금액 표 (자산/부채/자본/수입/지출/순이익) |
+| monthly_trend | `_render_monthly_trend` | 월별 수입/지출/순이익 표 |
+| in_out | `_render_in_out` | 계정별 수입/지출/순증감/잔액 표 |
+| calendar | `_render_calendar` | 이번 달 합계 + 일자별 수입/지출 표 |
+| entries_latest | `_render_entries_latest` | 일자/금액/차변/대변/적요 표 |
+| custom_bs / custom_pl | `_render_report_customs` | 행 제목/금액 표 (빈 list 시 정의 안내) |
+| budget_expenses / income | `_render_budget` | 예산/사용/잔여 |
+| budget_goal | `_render_budget_goal` | 기간 + 시작/목표 자산 |
+
+### 시각 요소
+
+- **`_fmt_money`** — 천단위 콤마, 음수는 `[red]`, 0 은 `[dim]`.
+- **`_fmt_yyyymmdd`** — `20260516.0000` → `2026-05-16`.
+- **`_fmt_yyyymm`** — `202605` → `2026-05`.
+- **`_kr`** — 후잉 account 키 (`assets`, `liabilities`, ...) → 한글 라벨.
+- **`_table(headers, rows, right_align)`** — Rich markup 포함 표.
+  CJK wide-char (한글) 폭 2 cell 고려해 column 폭 계산.
+
+### 캡처 비교 (pl_summary 예시)
+
+**종전 (raw JSON)**:
+```
+{
+  "assets": -31598068,
+  "liabilities": 164524712.182,
+  "expenses": 25957071,
+  "income": 0,
+  "capital": -196122780.182,
+  "net_income": -25957071
+}
+```
+
+**변경 후**:
+```
+항목     금액 (KRW)
+─────  ────────────
+자산   -31,598,068
+부채    164,524,712
+자본   -196,122,780
+수입              0
+지출     25,957,071
+순이익  -25,957,071
+```
+(음수는 빨강, 0 은 dim)
+
+### 수정 파일
+
+- `tui/src/whooing_tui/screens/reports.py`
+  - 새 helpers: `_fmt_money` / `_fmt_money_plain` / `_fmt_yyyymmdd` /
+    `_fmt_yyyymm` / `_kr` / `_table` / `_wide_len`.
+  - 새 renderers: 8 메뉴 + 사용자 정의 — `_render_balance_or_pl` /
+    `_render_monthly_trend` / `_render_in_out` / `_render_calendar` /
+    `_render_entries_latest` / `_render_report_customs` /
+    `_render_budget` / `_render_budget_goal`.
+  - `_RENDERERS` 사전 (11 item_id 매핑).
+  - `format_report_payload` 가 renderer 시도 후 실패 시 raw JSON fallback.
+- `tui/tests/test_reports.py` — 회귀 방지 +11:
+  - 각 renderer 의 출력 형태 (표 / 한글 / 콤마) 검증.
+  - unknown item_id 는 raw JSON fallback.
+  - budget_goal set_id=0 미설정 안내.
+  - custom_* `{rows: []}` 정의 안내.
+  - 기존 2 케이스는 renderer-pickup 후 의미 변경 — 갱신 (unknown_id 로
+    raw JSON 검증).
+- `tui/pyproject.toml` — 0.63.0 → 0.64.0.
+- `tui/src/whooing_tui/__init__.py` — `__version__` 동기화.
+
+### 검증
+
+- **935 passed** (923 + 12 신규). 회귀 0.
+
+### 사용자 후속 확인
+
+`t` → 어떤 메뉴를 선택해도 표 형태 + 한글 라벨 + 천단위 콤마. 음수/0
+의 시각 강조. raw JSON 은 사용자에게 안 보임 (등록 안 된 item_id 만).
+
+---
+
 ## CL #52785 — docs only — 0.60.1~0.63.0 누적 변경 모든 문서 반영 (2026-05-18)
 
 코드 / 버전 변경 없음. 0.60.0 다음의 5 CL (CL #52770~#52784) 누적 변경을
