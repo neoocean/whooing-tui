@@ -120,7 +120,12 @@ async def test_item_cell_inlines_tags_after_text():
 
 
 @pytest.mark.asyncio
-async def test_item_cell_truncates_many_tags():
+async def test_item_cell_truncates_many_tags(monkeypatch):
+    """CL #52777+: default cap 은 0 (무제한) — 사용자 요청 "모두 보여주세요".
+    이 테스트는 cap > 0 일 때만 `#…(N)` 축약이 동작함을 검증 — 환경변수
+    `WHOOING_ITEM_TAG_INLINE_LIMIT=2` 명시 시만 잘림.
+    """
+    monkeypatch.setenv("WHOOING_ITEM_TAG_INLINE_LIMIT", "2")
     _seed_local_tags({"e1": ["식비", "커피", "외식", "회의", "저녁"]})
     fake = FakeClient(_sample_entries())
     app = WhooingTuiApp(client=fake)  # type: ignore[arg-type]
@@ -141,6 +146,30 @@ async def test_item_cell_truncates_many_tags():
         # 가나다 순으로 3 번째 이후 (저녁 / 커피 / 회의) 는 축약에 들어감.
         assert "#저녁" not in item_cell
         assert "#…(3)" in item_cell
+
+
+@pytest.mark.asyncio
+async def test_item_cell_shows_all_tags_by_default():
+    """CL #52777+: default (env 미설정) 면 모든 태그 표시 — 사용자 요청."""
+    _seed_local_tags({"e1": ["식비", "커피", "외식", "회의", "저녁"]})
+    fake = FakeClient(_sample_entries())
+    app = WhooingTuiApp(client=fake)  # type: ignore[arg-type]
+    async with app.run_test() as pilot:
+        from whooing_tui.screens.entries import EntriesScreen
+        await _wait_for(
+            lambda: isinstance(app.screen, EntriesScreen)
+            and len(app.screen._entry_tags.get("e1", [])) == 5,
+            timeout=3.0,
+        )
+        es: EntriesScreen = app.screen  # type: ignore[assignment]
+        table = es.query_one("#entries-table", DataTable)
+        item_cell = str(table.get_cell_at((0, 4)))
+        # 모든 5 태그 모두 보여야 — 축약 토큰 없음.
+        for t in ("식비", "외식", "저녁", "커피", "회의"):
+            assert f"#{t}" in item_cell, (
+                f"#{t} 누락 — 기본값이 무제한이 아닌 듯"
+            )
+        assert "#…" not in item_cell
 
 
 @pytest.mark.asyncio

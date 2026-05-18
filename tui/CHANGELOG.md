@@ -5,6 +5,52 @@
 > **0.17.x 이전** (CL #51119 ~ #1) 항목은 분량 정리 차원에서
 > [`CHANGELOG-archive-0.17.md`](./CHANGELOG-archive-0.17.md) 로 분리 보존.
 
+## CL #52777 — 0.62.1 — item 태그 인라인 default 무제한 (모두 표시) (2026-05-18)
+
+배경 (사용자 보고, 캡처): 거래 row 의 item 셀에 태그가 3개인데
+`#Arq #백업 #…(1)` 으로 마지막 1개가 축약됨. "태그를 모두 보여주세요".
+
+### 원인
+
+`_ITEM_TAG_INLINE_LIMIT = 2` — 처음 2개 표시 + 나머지 `#…(N)` 축약. 좁은
+터미널에서 item 컬럼 폭 보호용 cap 이었으나 사용자 입장에서 모든 태그를
+보길 원함.
+
+### 동작 변경
+
+- **default `_ITEM_TAG_INLINE_LIMIT = 0`** — 0 = 무제한 sentinel.
+- `_item_tag_inline_limit()` 반환 0 이면 모든 태그 표시, `#…(N)` 축약 없음.
+- 환경변수 `WHOOING_ITEM_TAG_INLINE_LIMIT=N` (N>0) 으로 명시 cap 가능 —
+  좁은 터미널 사용자가 직접 설정.
+
+### 영향
+
+- 화면 캡처의 `Hetzner #Arq #백업 #...(1)` → `Hetzner #Arq #백업 #보안`
+  (모든 태그 표시).
+- 태그가 많은 거래 (5+) 의 경우 item 컬럼이 길어질 수 있음 — 좁은 터미널
+  사용자는 env 로 cap 설정 권장.
+
+### 수정 파일
+
+- `tui/src/whooing_tui/screens/entries.py`
+  - `_ITEM_TAG_INLINE_LIMIT = 2 → 0` + 주석에 sentinel 의미 명시.
+  - `_format_cell` 의 item 분기 — `limit > 0 and len(tags) > limit` 일
+    때만 잘림.
+  - `_render_item_cell_with_tag_marker` (태그 모드 marker) — 같은 분기.
+- `tui/tests/test_entries_tag_inline.py`
+  - `test_item_cell_truncates_many_tags` 갱신 — env `WHOOING_ITEM_TAG_
+    INLINE_LIMIT=2` 명시 시 축약 동작 검증.
+  - 새 `test_item_cell_shows_all_tags_by_default` — env 미설정이면 모두
+    표시 회귀 방지.
+- `tui/pyproject.toml` — 0.62.0 → 0.62.1.
+- `tui/src/whooing_tui/__init__.py` — `__version__` 동기화.
+
+### 검증
+
+- **899 passed** (898 → +1 신규). 회귀 0.
+
+---
+
 ## CL #52773 — 0.62.0 — MenuPopup backdrop 제거 + Ctrl/Shift multi-select (2026-05-18)
 
 배경 (사용자 요청 3건):

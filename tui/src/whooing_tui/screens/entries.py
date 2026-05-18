@@ -2258,8 +2258,14 @@ class EntriesScreen(MenuBarMixin, Screen):
         """
         item_text = entry.get("item") or ""
         tags = self._entry_tags.get(str(entry.get("entry_id") or "")) or []
-        shown = tags[: self._ITEM_TAG_INLINE_LIMIT]
-        extra = len(tags) - len(shown)
+        # CL #52777+: limit==0 면 모든 태그 표시 (사용자 요청).
+        limit = self._item_tag_inline_limit()
+        if limit > 0 and len(tags) > limit:
+            shown = tags[:limit]
+            extra = len(tags) - limit
+        else:
+            shown = tags
+            extra = 0
         parts: list[str] = []
         if item_text:
             parts.append(item_text)
@@ -2599,6 +2605,8 @@ class EntriesScreen(MenuBarMixin, Screen):
     # CL #51102+: item 셀 안에 인라인 태그가 너무 많아질 때 보여줄 최대 개수.
     # 그 이상은 마지막 옵션으로 `#…(N)` 한 토큰만 추가.
     # CL #51141+ (H9): 환경 변수 `WHOOING_ITEM_TAG_INLINE_LIMIT` 로 override.
+    # CL #52777+ (사용자 요청 "태그를 모두 보여주세요"): default 를 0
+    # (무제한, 전체 표시) 으로 변경. 좁은 터미널에서는 환경변수로 cap 가능.
     @classmethod
     def _item_tag_inline_limit(cls) -> int:
         import os
@@ -2610,7 +2618,8 @@ class EntriesScreen(MenuBarMixin, Screen):
                 pass
         return cls._ITEM_TAG_INLINE_LIMIT
 
-    _ITEM_TAG_INLINE_LIMIT = 2
+    # 0 = 무제한 (모든 태그 표시). >0 = 그 개수만 + `#…(N)`.
+    _ITEM_TAG_INLINE_LIMIT = 0
 
     def _format_cell(self, entry: dict[str, Any], col_index: int) -> Any:
         """entry 와 column index 로부터 cell 의 표시 값을 만든다.
@@ -2656,8 +2665,13 @@ class EntriesScreen(MenuBarMixin, Screen):
             if not tags:
                 return f"{attach_prefix}{item_text}"
             limit = self._item_tag_inline_limit()
-            shown = tags[: limit]
-            extra = len(tags) - len(shown)
+            # CL #52777+: limit==0 면 무제한 — 모든 태그 표시.
+            if limit > 0 and len(tags) > limit:
+                shown = tags[:limit]
+                extra = len(tags) - limit
+            else:
+                shown = tags
+                extra = 0
             # CL #51151+ (H11): 태그 색 적용 (Rich markup).
             tag_tokens: list[str] = []
             for t in shown:
