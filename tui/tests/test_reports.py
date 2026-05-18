@@ -168,7 +168,13 @@ async def test_t_key_pushes_reports_menu():
 
 @pytest.mark.asyncio
 async def test_menu_select_pushes_result_screen_and_fetches():
-    """메뉴에서 항목 선택 → ReportResultScreen + 클라이언트 호출."""
+    """메뉴에서 항목 선택 → ReportResultScreen + 클라이언트 호출.
+
+    CL #52790+: ReportsMenuScreen 이 자체적으로 push (dismiss 안 함) —
+    Esc 흐름이 menu → result → menu → entries 로 자연스럽게 동작.
+    """
+    from textual.widgets import OptionList
+
     fake = _Client()
     app = WhooingTuiApp(client=fake)  # type: ignore[arg-type]
     async with app.run_test() as pilot:
@@ -181,9 +187,11 @@ async def test_menu_select_pushes_result_screen_and_fetches():
         es.action_open_reports()
         await pilot.pause()
         assert isinstance(app.screen, ReportsMenuScreen)
-        # balance_sheet 선택 — dismiss 결과로 EntriesScreen._on_pick 가
-        # ReportResultScreen 을 push 한다.
-        app.screen.dismiss(("balance_sheet", "재무상태표"))
+        # balance_sheet 선택 — OptionList.OptionSelected 시뮬레이션.
+        menu = app.screen
+        opt_list = menu.query_one("#reports-menu-list", OptionList)
+        # OptionList 의 첫 옵션 (balance_sheet) 선택.
+        opt_list.action_select()
         await pilot.pause()
         assert isinstance(app.screen, ReportResultScreen)
         # fetch 가 worker 로 진행 — 잠시 기다려 client 호출 + payload 도착.
@@ -542,3 +550,68 @@ def test_renderer_failure_falls_back_to_json():
     # in_out renderer 는 dict 만 받는데 list 면 None — fallback.
     out = format_report_payload("in_out", [1, 2, 3])
     assert "```" in out or "결과 없음" in out
+
+
+# ---- CL #52790+ : Esc 가 ReportResultScreen → ReportsMenuScreen 복귀 -
+
+
+@pytest.mark.asyncio
+async def test_esc_from_result_returns_to_menu_not_entries():
+    """ReportResultScreen 에서 Esc → ReportsMenuScreen 복귀 (사용자 요청).
+
+    종전엔 EntriesScreen 까지 한 번에 닫혀 사용자가 메뉴 재진입 부담.
+    """
+    from textual.widgets import OptionList
+
+    fake = _Client()
+    app = WhooingTuiApp(client=fake)  # type: ignore[arg-type]
+    async with app.run_test() as pilot:
+        await _wait_for(
+            lambda: isinstance(app.screen, EntriesScreen)
+            and app.session.section_id == "s1",
+            timeout=3.0,
+        )
+        es: EntriesScreen = app.screen  # type: ignore[assignment]
+        es.action_open_reports()
+        await pilot.pause()
+        assert isinstance(app.screen, ReportsMenuScreen)
+        # 메뉴에서 첫 항목 선택 → 결과 화면 push.
+        app.screen.query_one("#reports-menu-list", OptionList).action_select()
+        await pilot.pause()
+        assert isinstance(app.screen, ReportResultScreen)
+        # 결과 화면에서 Esc — pop → 메뉴 복귀.
+        app.screen.action_close()
+        await pilot.pause()
+        # 메뉴로 돌아옴 (EntriesScreen 이 아님).
+        assert isinstance(app.screen, ReportsMenuScreen), (
+            f"Esc 후 화면: {type(app.screen).__name__} (메뉴 복귀 회귀)"
+        )
+        # 한 번 더 Esc — 메뉴도 닫혀 EntriesScreen.
+        app.screen.action_cancel()
+        await pilot.pause()
+        assert isinstance(app.screen, EntriesScreen)
+
+
+def test_budget_renderer_handles_full_aggregate_shape():
+    """CL #52790+: 사용자 캡처의 복잡한 budget 응답 (total/total_steady/
+    total_floating/misc) 도 표 형태로 — raw JSON 으로 떨어지면 안 됨.
+    """
+    p = {
+        "aggregate": {
+            "total": {"budget": 0, "money": 0, "remains": 0},
+            "total_steady": {"budget": 0, "money": 0, "remains": 0},
+            "total_floating": {"budget": 0, "money": 0, "remains": 0},
+            "misc": {
+                "daily_remains": 0, "weekly_remains": 0,
+                "standard": 0, "possibility": 100,
+                "today": {"budget": 0, "money": 0, "remains": 0},
+            },
+        },
+    }
+    out = format_report_payload("budget_income", p)
+    assert "```" not in out  # raw JSON fallback 아님.
+    assert "전체" in out
+    assert "정기" in out
+    assert "유동" in out
+    assert "오늘" in out
+    assert "달성 가능성" in out and "100%" in out

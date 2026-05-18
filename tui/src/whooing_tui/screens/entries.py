@@ -819,28 +819,21 @@ class EntriesScreen(MenuBarMixin, Screen):
     def action_open_reports(self) -> None:
         """CL #51116+: 통계 / 보고서 드롭다운 메뉴 (`t` 또는 ㅌ).
 
-        ReportsMenuScreen 으로 종류 선택 → 결과 ReportResultScreen.
+        CL #52790+: ReportsMenuScreen 이 client/session 을 받아 결과 화면
+        을 자체 push. 결과 화면 Esc → 메뉴 화면 복귀 → 메뉴 Esc →
+        EntriesScreen. 종전엔 결과 Esc 가 한 번에 EntriesScreen 까지 닫혀
+        사용자가 메뉴 재진입 부담 (사용자 보고).
         """
-        from whooing_tui.screens.reports import (
-            ReportResultScreen, ReportsMenuScreen,
-        )
+        from whooing_tui.screens.reports import ReportsMenuScreen
 
         session = self.app.session  # type: ignore[attr-defined]
         if not session.section_id:
             self.set_status("활성 섹션이 없습니다 — `s` 로 먼저 선택하세요.", error=True)
             return
 
-        def _on_pick(result: tuple[str, str] | None) -> None:
-            if result is None:
-                return
-            item_id, label = result
-            self.app.push_screen(
-                ReportResultScreen(
-                    self._client, session, item_id=item_id, label=label,
-                ),
-            )
-
-        self.app.push_screen(ReportsMenuScreen(), _on_pick)
+        self.app.push_screen(
+            ReportsMenuScreen(client=self._client, session=session),
+        )
 
     # ---- CL #51145+ (H6) multi-select + batch tagging ------------------
 

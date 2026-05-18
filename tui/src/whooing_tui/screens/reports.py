@@ -202,11 +202,25 @@ def _build_menu() -> list[MenuItem]:
 class ReportsMenuScreen(ModalScreen[tuple[str, str] | None]):
     """보고서 종류 선택 모달.
 
-    dismiss((item_id, label)) — 호출자가 어떤 항목을 골랐는지 받아 별도
-    `ReportResultScreen` 을 push 한다. 두 모달을 분리한 이유는 fetch 가
-    오래 걸릴 수 있어 메뉴 모달은 빠르게 닫히고 결과 모달이 spinner /
-    로딩 status 를 띄우게 하기 위함.
+    CL #52790+ (사용자 요청): 메뉴 항목 선택 시 자체 `push_screen
+    (ReportResultScreen)` 호출 — 결과 모달이 Esc 로 닫히면 textual stack
+    의 이전 화면 (= 본 메뉴) 으로 자동 복귀. 사용자가 메뉴에서 다른 항목
+    선택 가능. 종전엔 dismiss((id, label)) 로 외부 callback 에 위임,
+    Esc 가 EntriesScreen 까지 한 번에 닫혀 사용자가 메뉴 재진입 부담.
+
+    dismiss 값: `None` 만 (Esc/취소). 항목 선택 결과는 dismiss 가 아닌
+    내부 push 로 처리.
     """
+
+    def __init__(self, client=None, session=None) -> None:
+        """`client` + `session` 을 받아 ReportResultScreen 직접 push.
+
+        backward compat: 둘 다 None 이면 종전 dismiss 흐름 (테스트 등에서
+        활용 가능).
+        """
+        super().__init__()
+        self._client = client
+        self._session = session
 
     DEFAULT_CSS = """
     ReportsMenuScreen {
@@ -271,7 +285,17 @@ class ReportsMenuScreen(ModalScreen[tuple[str, str] | None]):
         # label 도 함께 — 결과 화면 타이틀용.
         for item_id, label, _ in _build_menu():
             if item_id == oid:
-                self.dismiss((oid, label))
+                # CL #52790+: client/session 이 있으면 자체 push, 없으면
+                # 종전 dismiss 흐름 (backward compat).
+                if self._client is not None and self._session is not None:
+                    self.app.push_screen(
+                        ReportResultScreen(
+                            self._client, self._session,
+                            item_id=oid, label=label,
+                        ),
+                    )
+                else:
+                    self.dismiss((oid, label))
                 return
 
 
@@ -683,21 +707,71 @@ def _render_entries_latest(payload: Any) -> str | None:
 
 
 def _render_budget(payload: Any) -> str | None:
-    """budget — `{aggregate: {total: {budget, money, remains}, ...}, ...}`."""
+    """budget — `{aggregate: {total, total_steady, total_floating, misc: {today,
+    daily_remains, weekly_remains, standard, possibility}}}`.
+
+    CL #52790+: 사용자 캡처의 실 응답 (예산 대비 실적 — 수입) shape 반영.
+    표:
+      구분            예산      사용      잔여
+      ────────────  ──────  ──────  ──────
+      전체              ...
+      정기 (steady)    ...
+      유동 (floating)  ...
+      오늘              ...
+    + 하단 misc 요약 한 줄.
+    """
     if not isinstance(payload, dict):
         return None
     agg = payload.get("aggregate")
     if not isinstance(agg, dict):
         return None
-    total = agg.get("total") if isinstance(agg.get("total"), dict) else agg
+
+    # 메인 표 — 4 row (전체 / 정기 / 유동 / 오늘).
+    def _bucket(d: Any) -> tuple[Any, Any, Any]:
+        if not isinstance(d, dict):
+            return (None, None, None)
+        return d.get("budget"), d.get("money"), d.get("remains")
+
     rows: list[list[str]] = []
-    for k in ("budget", "money", "remains"):
-        if k not in total:
+    sources = [
+        ("전체", agg.get("total")),
+        ("정기", agg.get("total_steady")),
+        ("유동", agg.get("total_floating")),
+    ]
+    misc = agg.get("misc") if isinstance(agg.get("misc"), dict) else {}
+    if isinstance(misc.get("today"), dict):
+        sources.append(("오늘", misc["today"]))
+
+    for label, src in sources:
+        if src is None:
             continue
-        rows.append([_kr(k), _fmt_money(total[k])])
+        b, m, r = _bucket(src)
+        rows.append([label, _fmt_money(b), _fmt_money(m), _fmt_money(r)])
+
     if not rows:
         return None
-    return _table(["항목", "금액 (KRW)"], rows, right_align={1})
+    main = _table(
+        ["구분", "예산", "사용", "잔여"], rows,
+        right_align={1, 2, 3},
+    )
+
+    # 보조 정보: misc 의 daily/weekly/standard/possibility — 한 줄.
+    extras: list[str] = []
+    if "daily_remains" in misc:
+        extras.append(f"일별 잔여 {_fmt_money(misc['daily_remains'])}")
+    if "weekly_remains" in misc:
+        extras.append(f"주별 잔여 {_fmt_money(misc['weekly_remains'])}")
+    if "standard" in misc:
+        extras.append(f"기준 {_fmt_money(misc['standard'])}")
+    if "possibility" in misc:
+        try:
+            pct = int(misc["possibility"])
+            extras.append(f"달성 가능성 {pct}%")
+        except (TypeError, ValueError):
+            extras.append(f"달성 가능성 {misc['possibility']}")
+    if extras:
+        return main + "\n\n[dim]" + "  /  ".join(extras) + "[/dim]"
+    return main
 
 
 def _render_budget_goal(payload: Any) -> str | None:

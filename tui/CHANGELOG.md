@@ -5,6 +5,102 @@
 > **0.17.x 이전** (CL #51119 ~ #1) 항목은 분량 정리 차원에서
 > [`CHANGELOG-archive-0.17.md`](./CHANGELOG-archive-0.17.md) 로 분리 보존.
 
+## CL #52790 — 0.65.0 — 보고서 Esc 흐름 + budget renderer 강화 (2026-05-18)
+
+배경 (사용자 요청 2건, 캡처):
+
+1. 보고서 결과 화면에서 Esc 누르면 거래 목록으로 바로 가는 대신 **메뉴
+   화면 (`ReportsMenuScreen`) 으로 복귀** — 사용자가 다른 보고서 시도
+   가능.
+2. 예산 대비 실적 (수입/지출) 응답이 raw JSON 으로 보임 — `aggregate.
+   total` 만 처리하고 `total_steady` / `total_floating` / `misc.today` /
+   `misc.{daily_remains, weekly_remains, standard, possibility}` 는 처리
+   안 함.
+
+### A) Esc 흐름
+
+**종전**:
+```
+EntriesScreen ─push→ ReportsMenuScreen ─dismiss(id,label)→
+  → callback 이 ReportResultScreen push
+  → 결과 화면 Esc → EntriesScreen 까지 한 번에 pop
+```
+
+**변경**:
+```
+EntriesScreen ─push→ ReportsMenuScreen (client+session)
+                       ↓ Option 선택
+                     ReportResultScreen (자체 push, dismiss 안 함)
+                       ↑ Esc
+                     ReportsMenuScreen (자연 복귀)
+                       ↑ Esc
+                     EntriesScreen
+```
+
+`ReportsMenuScreen.__init__` 가 `client` + `session` 받음 (backward
+compat — None 이면 종전 dismiss 흐름).
+
+### B) Budget renderer 강화
+
+캡처의 실 응답 shape:
+```json
+{
+  "aggregate": {
+    "total":         { "budget": 0, "money": 0, "remains": 0 },
+    "total_steady":  { ... },
+    "total_floating":{ ... },
+    "misc": {
+      "daily_remains": 0, "weekly_remains": 0,
+      "standard": 0, "possibility": 100,
+      "today": { "budget": 0, "money": 0, "remains": 0 }
+    }
+  }
+}
+```
+
+새 표:
+```
+구분    예산  사용  잔여
+────  ────  ────  ────
+전체     0     0     0
+정기     0     0     0
+유동     0     0     0
+오늘     0     0     0
+
+일별 잔여 0  /  주별 잔여 0  /  기준 0  /  달성 가능성 100%
+```
+
+### 수정 파일
+
+- `tui/src/whooing_tui/screens/reports.py`
+  - `ReportsMenuScreen.__init__(client=None, session=None)` 추가.
+  - `on_option_list_option_selected` — client/session 있으면 자체 push,
+    없으면 dismiss (backward compat).
+  - `_render_budget` 강화 — 4 row (전체/정기/유동/오늘) + misc footer.
+- `tui/src/whooing_tui/screens/entries.py`
+  - `action_open_reports` — `ReportsMenuScreen(client, session)` 으로 호출,
+    callback 흐름 제거.
+- `tui/tests/test_reports.py` — 회귀 방지 +2 + 기존 1 갱신:
+  - `test_esc_from_result_returns_to_menu_not_entries` (사용자 보고
+    시나리오: 결과 Esc → 메뉴, 메뉴 Esc → entries).
+  - `test_budget_renderer_handles_full_aggregate_shape` (캡처 응답 shape).
+  - `test_menu_select_pushes_result_screen_and_fetches` — dismiss 대신
+    `OptionList.action_select()` 시뮬레이션으로 갱신.
+- `tui/pyproject.toml` — 0.64.0 → 0.65.0.
+- `tui/src/whooing_tui/__init__.py` — `__version__` 동기화.
+
+### 검증
+
+- **937 passed** (935 → +2 신규). 회귀 0.
+
+### 사용자 후속 확인
+
+- `t` → 메뉴 → 항목 선택 → 결과 → **Esc → 메뉴 복귀** (다른 보고서 선택
+  가능) → Esc → 거래 목록.
+- 예산 대비 실적 — `구분 / 예산 / 사용 / 잔여` 표 + 하단 misc 요약.
+
+---
+
 ## CL #52786 — 0.64.0 — 보고서 결과를 표/사람-친화 형태로 (2026-05-18)
 
 배경 (사용자 보고): 보고서 화면이 raw JSON dump 로 표시. 사용자가 캡처
