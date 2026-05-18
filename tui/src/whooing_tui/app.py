@@ -315,6 +315,10 @@ class _StartupCheckScreen(ModalScreen[bool]):
                 "로컬 변경 사항이 있어 먼저 P4 에 submit 합니다…\n"
                 "[dim]잠시만 기다려 주세요.[/dim]",
             )
+            # CL #52853+: pending 처리 path 는 flush_on_exit 의 새 short-
+            # circuit (세션 mutation 없으면 skip) 을 우회해야 한다. 본
+            # caller 가 *바로 지금* mutation 처리 의도가 있으므로 명시 mark.
+            p4_sync.mark_session_mutated()
             try:
                 await loop.run_in_executor(
                     None, p4_sync.flush_on_exit, db_path,

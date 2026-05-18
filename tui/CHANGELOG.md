@@ -5,6 +5,70 @@
 > **0.17.x 이전** (CL #51119 ~ #1) 항목은 분량 정리 차원에서
 > [`CHANGELOG-archive-0.17.md`](./CHANGELOG-archive-0.17.md) 로 분리 보존.
 
+## CL #52853 — 0.71.1 — 읽기 전용 세션은 종료 시 submit 생략 (2026-05-18)
+
+배경 (사용자 질문): "만약 앱을 실행한 다음 아무것도 편집하지 않았다면
+데이터베이스 파일을 서브밋 하지 않을 수 있습니까?"
+
+종전에는 매 종료 시 `flush_on_exit` 가 *안전망* 으로 `p4 reconcile -n`
+한 라운드트립을 발동 — 변경 없음을 확인하고 빈 CL 을 삭제. 네트워크
+비용 + p4 server 부담은 작지만 0 이 아님. 사용자 요청 최적화: 세션
+동안 한 번도 변경이 없었다면 그 라운드트립 자체를 생략.
+
+### 새 모듈 상태 — `_SESSION_MUTATED`
+
+`p4_sync` 의 새 module-level boolean 플래그.
+- `mark_session_mutated()` — set True.
+- `is_session_mutated()` — read.
+- `reset_session_mutated()` — 테스트 격리 (일반 코드 미사용).
+
+`submit_files_to_p4` (그리고 wrapper `submit_db_to_p4`) 가 호출 시점에
+자동으로 `mark_session_mutated()` — 모든 mutation 자동 catch.
+
+### `flush_on_exit` short-circuit
+
+```python
+def flush_on_exit(db_path, *, description=...) -> None:
+    wait_for_pending()
+    if not _SESSION_MUTATED:
+        log.debug("세션 mutation 없음 — 안전망 submit 생략")
+        return
+    _do_submit(db_path, description)
+```
+
+읽기 전용 세션은 이제 종료 시 *0 p4 호출*.
+
+### 시작 시 pending 처리 (예외 처리)
+
+`_StartupCheckScreen` 이 `has_pending_local_changes()` True 를 감지하면
+*직전* 에 `p4_sync.mark_session_mutated()` 를 호출해 직후 `flush_on_exit`
+가 short-circuit 우회 — 시작 시 pending 변경이 그대로 submit 되도록.
+
+### 테스트 (+3 신규)
+
+- `test_flush_on_exit_skips_when_no_session_mutation` — 세션 변경 없을 때
+  p4 호출 0건 검증.
+- `test_submit_files_to_p4_marks_session_mutated` — submit 호출이 플래그
+  set 함을 검증.
+- `test_mark_session_mutated_is_required_for_flush` — 명시 mark 후엔
+  flush 가 정상 submit (startup 시나리오).
+
+기존 `test_flush_on_exit_waits_then_submits` 는 `mark_session_mutated()`
+선행 호출 추가 (default 가 False 로 바뀐 결과).
+
+`conftest.py` 의 autouse 격리에 `reset_session_mutated()` 추가 — 테스트
+간 플래그 누수 방지.
+
+총 1004 → 1007 (+3, 0 regression).
+
+### 영향
+
+- 읽기 전용 세션 (사용자가 열어 거래 둘러보기만) 의 종료 시간 단축 +
+  p4 server 부담 감소.
+- mutation 이 있던 세션은 동작 동일 — `submit_*` 호출 시점에 자동 mark.
+- 시작 시 *외부에서* dirty 가 된 db (다른 머신에서 mutation 후 sync 없이
+  켠 경우 등) 는 explicit mark + flush 로 정상 처리.
+
 ## CL #52846 — 0.71.0 — `mcp/` 패키지 제거 (archived → 삭제) (2026-05-18)
 
 배경 (사용자 요청): "mcp 모듈이 필요없다면 제거해주세요." 직전 CL #52845

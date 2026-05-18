@@ -36,13 +36,16 @@ def _isolate_p4_pending():
     각 테스트 시작 전후로 join + clear 로 격리. 테스트 자체가 fake_p4 + env
     분리를 안 하면 실 p4 호출이 일어날 수 있어 join 의 timeout 도 짧게.
     """
-    # 시작 전 — 이전 테스트의 잔여 thread 정리.
+    # 시작 전 — 이전 테스트의 잔여 thread + dirty 플래그 정리.
     try:
         from whooing_tui import p4_sync
         # 빠르게 join (default 30s 는 너무 길어 명시 1s).
         p4_sync.wait_for_pending(timeout_per_thread=1.0)
         with p4_sync._PENDING_LOCK:
             p4_sync._PENDING.clear()
+        # CL #52853+: 세션 dirty 플래그 — 이전 테스트가 set 한 채로 다음
+        # 테스트의 `flush_on_exit skip` 검증을 오염시킬 수 있어 reset.
+        p4_sync.reset_session_mutated()
     except Exception:  # pragma: no cover
         pass
     yield
@@ -52,5 +55,6 @@ def _isolate_p4_pending():
         p4_sync.wait_for_pending(timeout_per_thread=1.0)
         with p4_sync._PENDING_LOCK:
             p4_sync._PENDING.clear()
+        p4_sync.reset_session_mutated()
     except Exception:  # pragma: no cover
         pass

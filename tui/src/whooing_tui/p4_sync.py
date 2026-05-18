@@ -329,6 +329,42 @@ _PENDING: list[threading.Thread] = []
 _PENDING_LOCK = threading.Lock()
 
 
+# CL #52853+: 세션 동안 한 번이라도 db 변경 submit 시도가 있었는지 추적.
+# `flush_on_exit` 가 *안전망* `_do_submit` 을 건너뛸지 결정 — 사용자 요청:
+# "아무것도 편집하지 않았다면 서브밋 하지 않을 수 있습니까?"
+#
+# 종전엔 종료 때마다 `p4 reconcile -n` 라운드트립이 발생해 변경 없음을
+# 확인하고 빈 CL 을 삭제 (no-op 이지만 네트워크 비용 + p4 server 부담).
+# 본 플래그가 False 면 그 라운드트립 자체를 생략.
+#
+# 플래그는 *프로세스 수명 동안* 유효 — `submit_files_to_p4` /
+# `submit_db_to_p4` 호출 시점에 True. 시작 시 `has_pending_local_changes`
+# 가 True 면 caller (`_StartupCheckScreen`) 가 `mark_session_mutated()` 를
+# 명시 호출해 startup-time flush 가 정상 동작하도록.
+_SESSION_MUTATED: bool = False
+
+
+def mark_session_mutated() -> None:
+    """본 프로세스가 db 변경을 만들었거나 처리해야 함을 표시.
+
+    `submit_files_to_p4` 자동 호출. caller 가 *기존* dirty 상태 (다른
+    프로세스가 남긴 변경 등) 를 처리하기 전에도 명시 호출 가능.
+    """
+    global _SESSION_MUTATED
+    _SESSION_MUTATED = True
+
+
+def is_session_mutated() -> bool:
+    """현 프로세스가 세션 시작 이후 db 변경 submit 을 시도한 적 있는지."""
+    return _SESSION_MUTATED
+
+
+def reset_session_mutated() -> None:
+    """테스트 격리용 — 일반 코드는 호출하지 않는다."""
+    global _SESSION_MUTATED
+    _SESSION_MUTATED = False
+
+
 def submit_files_to_p4(
     paths: list[Path],
     description: str,
@@ -355,6 +391,11 @@ def submit_files_to_p4(
       - "unmapped": workspace 매핑 외.
       - "error": 그 외 실패.
     """
+    # CL #52853+: 본 호출 시점에 세션 dirty 마크 — flush_on_exit 가 종료
+    # 시 안전망 submit 을 실행할 근거. 호출 자체가 "db 변경 의도가 있었다"
+    # 의 명확한 증거.
+    mark_session_mutated()
+
     if blocking:
         status = "error"
         try:
@@ -447,15 +488,26 @@ def flush_on_exit(
     """앱 종료 직전에 호출. 다음 두 가지를 순차 수행:
 
     1. `wait_for_pending()` — 진행 중이던 submit worker 들 join.
-    2. *추가 안전망*: 그 사이에도 미반영 로컬 변경이 있을 수 있으므로
-       blocking 으로 한 번 더 `_do_submit` (변경 없으면 `p4 submit` 의
-       'no files to submit' 으로 silent skip — `_do_submit` 가 처리).
+    2. *추가 안전망*: 미반영 로컬 변경이 있을 수 있으므로 blocking 으로 한
+       번 더 `_do_submit` (변경 없으면 `p4 submit` 의 'no files to submit'
+       으로 silent skip — `_do_submit` 가 처리).
 
     사용자 요청 (CL #51119+): "종료할 때, 데이터를 변경할 때마다 서브밋."
-    매 mutation 의 자동 submit 은 이미 `_persist_local`/`_purge_local`
-    경로에 있고, 본 함수는 *마지막 안전망* — race / 누락 케이스 보호.
+    매 mutation 의 자동 submit 은 `_persist_local`/`_purge_local` 경로에
+    있고, 본 함수는 *마지막 안전망* — race / 누락 케이스 보호.
+
+    CL #52853+ 최적화 (사용자 요청): 본 프로세스 동안 한 번도 mutation
+    submit 시도가 없었으면 (`is_session_mutated() == False`) 안전망
+    `_do_submit` 자체를 생략 — `p4 reconcile -n` 라운드트립 비용 0. 시작
+    시 `has_pending_local_changes` 가 True 였던 경우는 caller 가 명시적으로
+    `mark_session_mutated()` 를 부른 뒤 호출하므로 안전.
     """
     wait_for_pending()
+    if not _SESSION_MUTATED:
+        log.debug(
+            "flush_on_exit: 세션 동안 mutation 없음 — 안전망 submit 생략",
+        )
+        return
     try:
         _do_submit(db_path, description)
     except Exception:  # pragma: no cover

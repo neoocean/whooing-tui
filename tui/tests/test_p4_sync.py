@@ -268,13 +268,18 @@ def test_sync_runs_p4_sync_when_mapped(monkeypatch, tmp_path):
 
 
 def test_flush_on_exit_waits_then_submits(monkeypatch, tmp_path):
-    """flush_on_exit 가 wait_for_pending → blocking submit 순서로 호출."""
+    """flush_on_exit 가 wait_for_pending → blocking submit 순서로 호출.
+
+    CL #52853+: 본 테스트는 mutation 이 *있던* 세션을 시뮬레이트 — caller
+    가 명시 `mark_session_mutated()` 호출 후 flush 가 정상 동작해야.
+    """
     log_file = tmp_path / "p4-calls.txt"
     fake_p4 = tmp_path / "p4"
     _make_fake_p4(fake_p4, log_file)
     monkeypatch.setenv("WHOOING_P4_BIN", str(fake_p4))
     db = tmp_path / "db.sqlite"
     db.write_bytes(b"")
+    p4_sync.mark_session_mutated()
     p4_sync.flush_on_exit(db)
     log = log_file.read_text().splitlines()
     # where + reconcile + submit 모두 호출 (blocking submit 흐름).
@@ -282,6 +287,58 @@ def test_flush_on_exit_waits_then_submits(monkeypatch, tmp_path):
     assert any(l.startswith("where ") for l in log)
     assert any("reconcile" in l for l in log)
     assert any(l.startswith("submit -c ") for l in log)
+
+
+def test_flush_on_exit_skips_when_no_session_mutation(monkeypatch, tmp_path):
+    """CL #52853+ 사용자 요청 최적화: 세션 동안 mutation 0건이면 안전망
+    `_do_submit` 자체를 생략 — `p4 reconcile -n` 라운드트립이 발생하지 않아야.
+    """
+    log_file = tmp_path / "p4-calls.txt"
+    fake_p4 = tmp_path / "p4"
+    _make_fake_p4(fake_p4, log_file)
+    monkeypatch.setenv("WHOOING_P4_BIN", str(fake_p4))
+    db = tmp_path / "db.sqlite"
+    db.write_bytes(b"")
+    # _SESSION_MUTATED 는 false 라고 보장 — autouse fixture 가 리셋.
+    p4_sync.flush_on_exit(db)
+    log_path = log_file
+    log = log_path.read_text().splitlines() if log_path.exists() else []
+    # p4 명령이 *한 줄도* 호출되지 않아야.
+    assert not log, f"flush_on_exit 가 p4 호출함 (skip 안 됨): {log}"
+
+
+def test_submit_files_to_p4_marks_session_mutated(monkeypatch, tmp_path):
+    """submit_files_to_p4 호출 자체로 _SESSION_MUTATED True 가 돼야 — 다음
+    flush_on_exit 가 정상 submit.
+    """
+    log_file = tmp_path / "p4-calls.txt"
+    fake_p4 = tmp_path / "p4"
+    _make_fake_p4(fake_p4, log_file)
+    monkeypatch.setenv("WHOOING_P4_BIN", str(fake_p4))
+    db = tmp_path / "db.sqlite"
+    db.write_bytes(b"x")
+    assert p4_sync.is_session_mutated() is False
+    p4_sync.submit_files_to_p4([db], "test", blocking=True)
+    assert p4_sync.is_session_mutated() is True
+
+
+def test_mark_session_mutated_is_required_for_flush(monkeypatch, tmp_path):
+    """명시 `mark_session_mutated()` 후 flush_on_exit 가 정상 submit (시작
+    시 pending 처리 시나리오).
+    """
+    log_file = tmp_path / "p4-calls.txt"
+    fake_p4 = tmp_path / "p4"
+    _make_fake_p4(fake_p4, log_file)
+    monkeypatch.setenv("WHOOING_P4_BIN", str(fake_p4))
+    db = tmp_path / "db.sqlite"
+    db.write_bytes(b"")
+    # 명시 mark — 시작 시 has_pending=True 였던 시나리오를 모방.
+    p4_sync.mark_session_mutated()
+    p4_sync.flush_on_exit(db)
+    log = log_file.read_text().splitlines()
+    assert any("reconcile" in l for l in log), (
+        "mark 후엔 flush 가 정상 reconcile 호출해야 함"
+    )
 
 
 def test_submit_runs_reconcile_and_submit_when_mapped(monkeypatch, tmp_path):
