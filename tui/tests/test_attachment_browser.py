@@ -419,3 +419,122 @@ async def test_paste_relative_or_nonexistent_is_noop(isolated, p4_spy):
         ab.on_paste(Paste("/nonexistent/file.pdf"))
         await pilot.pause()
         assert list_for("e1") == []
+
+
+# ---- CL #52739+ : 빈 list 안내 + a/p 키 분리 ---------------------------
+
+
+def test_bindings_have_a_and_p_keys():
+    """`a` (FilePicker) + `p` (path 직접) 모두 등록 + IME 자모."""
+    from whooing_tui.screens.attachment_browser import AttachmentBrowserScreen
+
+    keys = [b.key for b in AttachmentBrowserScreen.BINDINGS]
+    assert "a" in keys and "ㅁ" in keys
+    assert "p" in keys and "ㅔ" in keys
+
+
+def _method_body_only(method) -> str:
+    """method source 에서 docstring 을 제거한 본문 — 키워드 검사용."""
+    import ast
+    import inspect
+    import textwrap
+    src = textwrap.dedent(inspect.getsource(method))
+    try:
+        mod = ast.parse(src)
+        fn = mod.body[0]
+        if (
+            fn.body and isinstance(fn.body[0], ast.Expr)
+            and isinstance(getattr(fn.body[0], "value", None), ast.Constant)
+            and isinstance(fn.body[0].value.value, str)
+        ):
+            fn.body = fn.body[1:]
+        return ast.unparse(fn)
+    except Exception:
+        return src
+
+
+def test_action_add_uses_filepicker_not_pathmodal():
+    """`a` 의 action_add 가 FilePickerScreen 을 push 하는지 — 종전 _AddPathModal
+    가 다시 들어가면 본 테스트가 fail.
+    """
+    from whooing_tui.screens.attachment_browser import AttachmentBrowserScreen
+
+    code = _method_body_only(AttachmentBrowserScreen.action_add)
+    assert "FilePickerScreen" in code, (
+        "action_add 가 FilePickerScreen 직접 진입해야 함 — 사용자 보고"
+    )
+    assert "_AddPathModal" not in code, (
+        "action_add 는 _AddPathModal 거치지 말아야 (그건 action_add_by_path)"
+    )
+
+
+def test_action_add_by_path_uses_pathmodal():
+    """`p` 의 action_add_by_path 가 _AddPathModal 을 push."""
+    from whooing_tui.screens.attachment_browser import AttachmentBrowserScreen
+
+    code = _method_body_only(AttachmentBrowserScreen.action_add_by_path)
+    assert "_AddPathModal" in code
+
+
+@pytest.mark.asyncio
+async def test_empty_list_status_shows_usage_hint(isolated):
+    """첨부 0개 상태에서 status Static 메시지에 추가 방법 안내가 보임."""
+    from textual.widgets import Static
+
+    from whooing_tui.app import WhooingTuiApp
+    from whooing_tui.screens.attachment_browser import AttachmentBrowserScreen
+
+    class _FakeClient:
+        async def list_sections(self):
+            return [{"section_id": "s1", "title": "main"}]
+        async def list_accounts(self, section_id):
+            return {}
+        async def list_entries(self, section_id, start_date, end_date):
+            return []
+
+    app = WhooingTuiApp(client=_FakeClient())  # type: ignore[arg-type]
+    async with app.run_test() as pilot:
+        from whooing_tui.screens.entries import EntriesScreen
+        # EntriesScreen 까지 부팅 대기
+        import asyncio as _asyncio
+        deadline = _asyncio.get_running_loop().time() + 3.0
+        while _asyncio.get_running_loop().time() < deadline:
+            if isinstance(app.screen, EntriesScreen) and app.session.section_id:
+                break
+            await _asyncio.sleep(0.02)
+        ab = AttachmentBrowserScreen(entry_id="e_empty", section_id="s1")
+        await app.push_screen(ab)
+        await pilot.pause()
+        status = ab.query_one("#ab_status", Static)
+        rendered = str(status.render())
+        # 빈 list 시 안내 문구가 보여야 한다 (사용자 보고: 어떻게 첨부?).
+        assert "a" in rendered and "p" in rendered, (
+            f"status 메시지에 a / p 키 안내 누락: {rendered!r}"
+        )
+        assert "추가 방법" in rendered or "탐색기" in rendered, (
+            f"안내 hint 누락: {rendered!r}"
+        )
+
+
+def test_version_matches_pyproject():
+    """캡처에서 발견 — 종전 __init__.py 의 __version__ 이 0.11.1 으로 stale.
+    pyproject.toml 의 0.53.x 와 일치해야 사용자 신뢰 유지.
+    """
+    from pathlib import Path
+
+    from whooing_tui import __version__
+
+    pyproject = Path(__file__).resolve().parents[1] / "pyproject.toml"
+    text = pyproject.read_text()
+    # 정확히 비교하지는 않고 (major.minor 만) 자릿수 / prefix 일치
+    import re
+    m = re.search(r'^version = "([^"]+)"', text, re.MULTILINE)
+    assert m is not None, "pyproject.toml 에 version 라인 없음"
+    declared = m.group(1)
+    # major.minor 일치 — patch 는 dev 중 자주 변하니까 prefix 까지만.
+    runtime_mm = ".".join(__version__.split(".")[:2])
+    declared_mm = ".".join(declared.split(".")[:2])
+    assert runtime_mm == declared_mm, (
+        f"__init__.py version={__version__} != pyproject {declared} "
+        f"(major.minor 불일치 — title bar 가 stale 하게 보임)"
+    )

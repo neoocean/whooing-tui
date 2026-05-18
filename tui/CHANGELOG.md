@@ -5,6 +5,71 @@
 > **0.17.x 이전** (CL #51119 ~ #1) 항목은 분량 정리 차원에서
 > [`CHANGELOG-archive-0.17.md`](./CHANGELOG-archive-0.17.md) 로 분리 보존.
 
+## CL #52739 — 0.53.2 — AttachmentBrowser UX + __version__ sync (2026-05-18)
+
+배경 (사용자 보고): 거래 수정의 attach 버튼은 정상 동작해 첨부 브라우저까지
+도달했으나, **빈 list 화면에서 "어떻게 첨부?" 라고 막혔다**. 캡처 보면
+footer 에 `a 추가` 가 있긴 하지만 사용자가 빈 화면에서 그걸 본 후에도
+`a` 누르면 path 직접 입력 모달 (절대 경로 텍스트) 이 뜨는 흐름이 부담.
+
+### 동작 변경
+
+| 키 | 종전 | 새 동작 |
+|---|---|---|
+| `a` | `_AddPathModal` (path 텍스트 입력) | **FilePickerScreen 직접** (디렉터리 탐색) |
+| `p` | 미사용 | **`_AddPathModal` 호출** (경로 직접 입력, 고급) |
+| `cmd+v` | paste auto-detect | 그대로 (변경 없음) |
+
+`_AddPathModal` 안의 `Browse…` 버튼도 그대로 — `p` 로 들어가도 거기서
+FilePicker 로 갈 수 있고, 반대로 `a` 에서 FilePicker 가 cancel 되면
+사용자가 다시 `p` 로 path 입력 가능. 양방향 진입.
+
+### 빈 list 안내
+
+`AttachmentBrowserScreen.action_refresh` 의 status 메시지가 0 첨부 시:
+
+```
+Entry 1712609 — 0 첨부
+💡 추가 방법:
+   • a 키 — 파일 탐색기로 선택
+   • p 키 — 절대 경로 직접 입력
+   • cmd+v — 파일 경로를 paste 하면 자동 첨부
+```
+
+비빈 list 면 종전 메시지 그대로 (`Entry X — N 첨부`).
+
+### __version__ stale 정정
+
+캡처의 title bar 가 `v0.11.1` 로 stale — `tui/src/whooing_tui/__init__.py`
+의 `__version__` 이 처음 작성 (0.7.x 무렵) 이후 갱신 안 됨. pyproject.toml
+의 0.53.x 와 일치하도록 0.53.2 로 맞춤.
+
+회귀 방지: `test_version_matches_pyproject` 가 major.minor 일치 검증 —
+다음 사람이 pyproject.toml 만 bump 하고 `__version__` 을 빠뜨리면 fail.
+
+### 수정
+
+- `tui/src/whooing_tui/__init__.py` — `__version__` `0.11.1` → `0.53.2`.
+- `tui/src/whooing_tui/screens/attachment_browser.py`
+  - BINDINGS 에 `p` (add_by_path) 추가 + bind_ko.
+  - `action_add` → FilePickerScreen 직접.
+  - `action_add_by_path` (새) → `_AddPathModal`.
+  - `_add_path` (helper) — 공통 add 로직 (action_add / action_add_by_path).
+  - `action_refresh` — 0 첨부 시 status 메시지에 3-라인 사용 안내.
+- `tui/tests/test_attachment_browser.py` — 회귀 방지 5 케이스:
+  - `test_bindings_have_a_and_p_keys` — IME 자모 포함.
+  - `test_action_add_uses_filepicker_not_pathmodal` — `a` 가 FilePicker.
+  - `test_action_add_by_path_uses_pathmodal` — `p` 가 _AddPathModal.
+  - `test_empty_list_status_shows_usage_hint` — 빈 list 안내 검증.
+  - `test_version_matches_pyproject` — __version__ stale 회귀 방지.
+- `tui/pyproject.toml` — 0.53.1 → 0.53.2.
+
+### 검증
+
+- 합계 — **618 passed** (613 → +5 신규). 회귀 0.
+
+---
+
 ## CL #52731 — 0.53.1 — attach row 가 화면에 안 그려진 회귀 fix (2026-05-18)
 
 배경 (사용자 보고): 0.52.0 에서 추가한 attach row 가 실 거래 수정 dialog

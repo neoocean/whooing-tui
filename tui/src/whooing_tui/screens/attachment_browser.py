@@ -450,6 +450,9 @@ class AttachmentBrowserScreen(Screen):
     BINDINGS = [
         Binding("escape", "back", "뒤로"),
         *bind_ko("a", "add", "추가"),
+        # CL #52739+: 경로 직접 입력 (고급) — `a` 가 FilePicker 를 띄우는 게
+        # 기본 흐름이라, 직접 path 타이핑은 `p` 키로 분리.
+        *bind_ko("p", "add_by_path", "경로 입력"),
         *bind_ko("d", "delete", "삭제"),
         *bind_ko("o", "open", "열기"),
         # CL #51143+ (A9): note 사후 편집 — 'e' (edit note).
@@ -500,14 +503,50 @@ class AttachmentBrowserScreen(Screen):
                 (r.get("note") or "")[:30],
                 key=str(r["id"]),
             )
-        self.query_one("#ab_status", Static).update(
-            f"Entry {self.entry_id} — {len(rows)} 첨부"
-        )
+        # CL #52739+: 빈 list 일 때 사용 안내 — 종전엔 "0 첨부" 만 보여 사용자가
+        # 다음 단계를 추측해야 했음 (사용자 보고).
+        msg = f"Entry {self.entry_id} — {len(rows)} 첨부"
+        if not rows:
+            msg += (
+                "\n💡 추가 방법:"
+                "\n   • [b]a[/b] 키 — 파일 탐색기로 선택"
+                "\n   • [b]p[/b] 키 — 절대 경로 직접 입력"
+                "\n   • [b]cmd+v[/b] — 파일 경로를 paste 하면 자동 첨부"
+            )
+        self.query_one("#ab_status", Static).update(msg)
 
     async def action_add(self) -> None:
+        """CL #52739+: 파일 탐색기 (FilePickerScreen) 직접 진입.
+
+        종전엔 `_AddPathModal` (path 직접 입력) 이 기본이었으나 사용자에게
+        부담스러운 UX 라는 보고 — 파일 탐색기가 더 직관적이라 그것을 default
+        로. 경로 직접 타이핑은 새 키 `p` (`action_add_by_path`).
+        """
+        from whooing_tui.screens.file_picker import FilePickerScreen
+
+        path = await self.app.push_screen_wait(FilePickerScreen(
+            title="첨부할 파일 선택",
+        ))
+        if not path:
+            return
+        self._add_path(path)
+
+    async def action_add_by_path(self) -> None:
+        """경로 직접 입력 — `p` 키 (CL #52739+ 분리).
+
+        고급 사용자 / 정확한 path 가 클립보드 등에 이미 있을 때 빠른 진입.
+        같은 `_AddPathModal` 안에서 Browse 버튼으로 FilePicker 로 갈 수도.
+        """
         path = await self.app.push_screen_wait(_AddPathModal())
         if not path:
             return
+        self._add_path(path)
+
+    def _add_path(self, path: str) -> None:
+        """공통 추가 로직 — action_add / action_add_by_path / paste 가 호출.
+
+        파일 복사 + db row + P4 자동 submit (background) + dedup 안내 + refresh.
+        """
         # CL #51136+ (A4): P4 결과 callback. background worker 가 끝나면 호출 —
         # call_from_thread 로 main thread 에서 안전하게 status update.
         def _on_p4(status: str) -> None:
