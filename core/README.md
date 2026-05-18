@@ -12,11 +12,13 @@ flowchart TB
         A["html_adapters/<br/>(하나/현대카드 보안메일 복호화 + 파싱)"]
         B["pdf_adapters/<br/>(신한/현대카드 PDF 명세서)"]
         C["csv_adapters/<br/>(신한/국민/현대/삼성카드 CSV)"]
-        D["attachments.py<br/>(sha256 dedup 파일 storage)"]
-        E["db/<br/>(SQLite schema + annotations / hashtags / entry_attachments)"]
+        D["attachments.py<br/>(sha256 dedup 파일 storage + trash + GC)"]
+        E["db.py<br/>(SQLite schema v8 + migrations<br/>annotations / hashtags / tag_meta /<br/>entry_attachments / audit_log / entries_cache)"]
+        F["entries_cache.py<br/>(거래 영구 캐시 — CL #52758+)"]
+        G["preview.py<br/>(첨부 미리보기 — text/PDF, CL #52750+)"]
+        H["receipt/extractor.py<br/>(PDF 영수증 regex 추출)"]
     end
 
-    Wrapper["whooing-mcp-server-wrapper<br/>(read-only on db/attachments)"] -->|import| core
     TUI["whooing-tui<br/>(write owner — db/attachments)"] -->|import| core
 ```
 
@@ -68,10 +70,30 @@ sha, rel_path, was_new = store_file(
 ```
 
 ```python
-# DB schema init (TUI 가 owner)
-from whooing_core.db import init_schema, current_version
-conn = init_schema("/Users/me/.whooing/data.sqlite")
-print(f"schema version: {current_version(conn)}")
+# DB schema init (TUI 가 owner). 현재 SCHEMA_VERSION = 8.
+from whooing_core.db import init_schema, current_version, SCHEMA_VERSION
+init_schema("/Users/me/.whooing/data.sqlite")
+print(f"schema version: {current_version(...)} / latest: {SCHEMA_VERSION}")
+```
+
+```python
+# entries 영구 캐시 (CL #52758+)
+from whooing_core.entries_cache import (
+    upsert_entries, list_cached, cached_oldest_date,
+)
+import sqlite3
+conn = sqlite3.connect("...sqlite")
+conn.row_factory = sqlite3.Row
+upsert_entries(conn, "s9046", [{"entry_id": "e1", ...}, ...])
+rows = list_cached(conn, "s9046", start_date="20250101", end_date="20251231")
+```
+
+```python
+# 첨부 미리보기 — text + PDF (CL #52750+)
+from whooing_core.preview import extract_preview_text
+text = extract_preview_text("/Users/me/invoice.pdf", mime="application/pdf")
+# PDF 면 페이지별 "━━━ Page N/total ━━━" 헤더 포함 추출.
+# binary 면 None — caller 가 "미리보기 불가" 안내.
 ```
 
 ## 문서

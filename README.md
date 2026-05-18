@@ -3,11 +3,11 @@
 후잉 가계부([whooing.com](https://whooing.com)) 의 사용자 도구를 모아 둔 monorepo.
 세 개의 독립 설치 가능 Python 패키지로 구성됩니다:
 
-| 디렉터리 | 패키지 | 역할 |
-|---|---|---|
-| [`core/`](core/) | `whooing-core` | 어댑터 / SQLite 스키마 / 첨부 storage — 라이브러리. TUI 가 import. |
-| [`tui/`](tui/) | `whooing-tui` | Textual 기반 터미널 UI. statement import wizard / entry annotator / attachment browser / dashboard. 사용자 가시 layer. |
-| [`mcp/`](mcp/) | `whooing-mcp-server-wrapper` | **archived 2026-05-10**. LLM 자동화용 MCP 서버 — 코드는 monorepo 안에 보존되고 `tui/src/whooing_tui/mcp_bridge.py` 가 그 `OfficialMcpClient` 를 한정적으로 사용 (deprecated). |
+| 디렉터리 | 패키지 | 버전 | 역할 |
+|---|---|---|---|
+| [`core/`](core/) | `whooing-core` | 0.1.0 | 어댑터 / SQLite 스키마 (v8) / 첨부 storage / 미리보기 / **entries 캐시** — 라이브러리. TUI 가 import. |
+| [`tui/`](tui/) | `whooing-tui` | **0.60.0** | Textual 기반 터미널 UI. statement import wizard / entry annotator / attachment browser / dashboard / 보고서 (공식 후잉 MCP 위임). 사용자 가시 layer. |
+| [`mcp/`](mcp/) | `whooing-mcp-server-wrapper` | 0.2.1 (archived) | **archived 2026-05-10**. LLM 자동화용 MCP 서버 — historical 참조용. 본 monorepo 의 다른 코드는 더 이상 import 안 함 (CL #51008 의 `mcp_bridge.py` 제거 + CL #52755 의 자체 `official_mcp.py` 도입). |
 
 ## 목적
 

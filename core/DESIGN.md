@@ -13,8 +13,11 @@ SQLite 에 보관하는 **공통 어댑터/스토리지 레이어**. 두 consume
 | `html_adapters/` | 카드 보안메일 .html → CSVRow list (Playwright 복호화 후 DOM 파싱) | playwright, beautifulsoup4 |
 | `pdf_adapters/` | 카드 PDF 명세서 → CSVRow list | pdfplumber |
 | `csv_adapters/` | 카드 CSV → CSVRow list | (stdlib csv) |
-| `attachments.py` | 파일 sha256 dedup storage | (stdlib hashlib, shutil) |
-| `db/` | SQLite 스키마 + 마이그레이션 + annotations/hashtags/entry_attachments CRUD | (stdlib sqlite3) |
+| `attachments.py` | 파일 sha256 dedup storage + trash + GC | (stdlib hashlib, shutil) |
+| `db.py` | SQLite 스키마 v8 + 마이그레이션 + annotations/hashtags/tag_meta/entry_attachments/audit_log/entries_cache CRUD | (stdlib sqlite3) |
+| **`entries_cache.py`** | **(CL #52758+, schema v8)** 후잉 거래내역 영구 캐시 layer — upsert / list / oldest_date / purge | (stdlib sqlite3, json) |
+| **`preview.py`** | **(CL #52750+)** 첨부 파일 미리보기 텍스트 추출 — text/* (UTF-8/cp949/latin-1 fallback) + application/pdf (per-page) | pdfplumber (재사용) |
+| `receipt/extractor.py` | PDF 영수증 regex 추출 (date / amount / merchant) | pdfplumber (재사용) |
 
 **core 가 수행하지 않는 것:**
 - HTTP / 후잉 API 호출 → consumer 책임
@@ -43,13 +46,18 @@ schema migration 책임도 TUI. wrapper 는 `PRAGMA user_version` 만 확인.
 WAL 모드 + `busy_timeout=5000` — TUI 가 init 시 설정. wrapper 가 동시 SELECT
 해도 락 충돌 없음.
 
-| 테이블 | 컬럼 (요약) | 소유 |
+현재 `SCHEMA_VERSION = 8` (CL #52758+).
+
+| 테이블 | 컬럼 (요약) | 도입 / 소유 |
 |---|---|---|
-| `entry_annotations` | entry_id PK, memo, created_at, updated_at | core (TUI write, wrapper read) |
-| `entry_hashtags` | entry_id, tag (composite PK), created_at | core (TUI write, wrapper read) |
-| `entry_attachments` | id PK, entry_id, sha256, file_path, mime, original_name, ... | core (TUI write, wrapper read) |
-| `statement_import_log` | id PK, source_file, source_kind, issuer, ... entry_date, merchant, amount, status | core (TUI write — import flow 동안) |
-| (`pending`) | wrapper 잔류 — core 에 없음 | wrapper |
+| `entry_annotations` | entry_id PK, memo, section_id, created/updated_at | v1 / core |
+| `entry_hashtags` | entry_id, tag (composite PK), section_id (v7), created_at | v1 + v7 (section) |
+| `entry_attachments` | id PK, entry_id, sha256, file_path, mime, original_filename, note, section_id (v6+), ... | v2+ |
+| `statement_import_log` | id PK, source_file, source_kind, issuer, ... entry_date, merchant, amount, status, section_id | v3+ |
+| `tag_meta` | tag, section_id (PK), color, updated_at | v7+ |
+| `attachment_audit_log` | id PK, attachment_id, entry_id, action, ts, details_json | v7+ |
+| **`entries_cache`** | (section_id, entry_id) PK, entry_date, l_account_id, r_account_id, money, item, memo, raw_json, fetched_at | **v8 (CL #52758+)** — 사용자 요청 (점진적 필터 확장 + 캐시) |
+| `schema_meta` | key/value (`version` 등) | v1 |
 
 ## §5. 어댑터 등록 패턴
 

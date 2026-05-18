@@ -5,6 +5,48 @@
 > **0.17.x 이전** (CL #51119 ~ #1) 항목은 분량 정리 차원에서
 > [`CHANGELOG-archive-0.17.md`](./CHANGELOG-archive-0.17.md) 로 분리 보존.
 
+## CL #52764 — docs only — 0.52.0~0.60.0 누적 변경 모든 문서 반영 (2026-05-18)
+
+코드 / 버전 변경 없음. 2026-05-18 단일 세션의 16 CL (CL #52716~#52763,
+0.52.0 → 0.60.0) 누적 변경을 다음 문서들에 상세 반영:
+
+- **`README.md`** (monorepo root) — 패키지 표에 버전 + 새 핵심 책임
+  (`entries 캐시`, `미리보기`, `보고서 공식 MCP 위임`) 명시. mcp 의 archived
+  설명을 historical 참조로 갱신 (`mcp_bridge.py` 는 CL #51008 제거됨,
+  CL #52755 의 자체 `official_mcp.py` 가 보고서 위임에 사용).
+- **`tui/README.md`** — 현재 버전 0.50.0 → 0.60.0. 0.52.0~0.60.0 핵심
+  변경 요약 추가 (16 CL). 키 바인딩 표에 `m` (context menu) / `Alt+M`
+  (메뉴 진입) / `f` (modal 첨부) 추가. EntryEditDialog 에 attach row
+  추가. ReportsMenuScreen 표를 자체 REST path → 공식 MCP tool 로 갱신.
+  AttachmentBrowserScreen 섹션 신규 (modal 형태 + Enter 미리보기).
+  필터 점진 확장 + memo substring 매칭 설명 추가. 통계 471 → 885 passed.
+- **`tui/DESIGN.md`** — §3.0 모듈 인벤토리 (0.50.0 → 0.60.0). `official_
+  mcp.py` / context menu / `_AttachmentButton` / `_apply_filter` 점진 확장
+  / `_ShutdownModal` 등 신규 모듈/책임 추가. §3.0a core 인벤토리에
+  `entries_cache.py` / `preview.py` 추가. §4 후잉 API 에 §4.7 (공식 MCP
+  위임 — 우리 가정 vs 실제 schema 비교 표) + §4.8 (entries 영구 캐시 정책)
+  신규 sub-섹션. §6 다음 단계에 Phase 4~8 (MCP / 캐시 / graceful quit /
+  메뉴바 확장 / context menu) 항목 추가.
+- **`tui/MEMORY.md`** — §4 후잉 API 사실에 §4.6 (공식 후잉 MCP server
+  schema — 48개 도구, account enum, budget YYYYMM 등) 신규 sub-섹션.
+  §7 알려진 미해결 갱신 (보고서 403 해소 표시 + 캐시 invalidation TODO
+  + mutating endpoint 추정 잔류). §8 변경 이력에 2026-05-18 의 16 CL
+  큰 묶음 entry 추가 (분류: 첨부 UX / IME / 보고서 / memo·tags / 캐시 /
+  메뉴바 / quit / context menu / 인프라).
+- **`core/README.md`** — mermaid 다이어그램에 `entries_cache.py` /
+  `preview.py` / `receipt/extractor.py` 추가, mcp wrapper 화살표 제거.
+  사용 예에 `extract_preview_text` 와 `entries_cache` upsert/list 추가.
+  schema 버전 명시 (`SCHEMA_VERSION` 8).
+- **`core/DESIGN.md`** — §2 모듈 경계 표에 `entries_cache.py` /
+  `preview.py` 추가. §4 SQLite 스키마 표 갱신 — `tag_meta` / `attachment_
+  audit_log` / **`entries_cache`** 도입 시점 (v7/v8) 명시.
+
+### 검증
+
+- **885 passed** (코드 변경 없음 — 회귀 0).
+
+---
+
 ## CL #52763 — 0.60.0 — 거래 row 의 m 키 context menu (2026-05-18)
 
 배경 (사용자 요청): 거래 항목에서 m 키를 눌러 컨텍스트 메뉴를 열어 그
