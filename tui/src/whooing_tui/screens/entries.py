@@ -189,6 +189,9 @@ class EntriesScreen(MenuBarMixin, Screen):
         # CL #51123+: 'f' (또는 ㄹ) — 선택 거래의 첨부파일 browser. sentinel
         # row 또는 entry_id 가 없으면 status 안내 후 noop.
         *bind_ko("f", "open_attachments", "Files", show=True, priority=True),
+        # CL #52763+: 'm' / 'ㅡ' — 선택 거래의 context menu (수정/삭제/첨부).
+        # 사용자 요청: m 으로 메뉴 열어서 삭제 가능하게.
+        *bind_ko("m", "show_context_menu", "Menu", show=True, priority=True),
         *bind_ko("r", "refresh", "Refresh", show=True, priority=True),
         *bind_ko("c", "clear_filter", "Clear", show=True, priority=True),
         Binding("left", "prev_column", "←", show=False, priority=True),
@@ -1814,6 +1817,58 @@ class EntriesScreen(MenuBarMixin, Screen):
         existing["_local_tags"] = local_tags
         existing["_all_tags_db"] = self._fetch_all_tags_db()
         self.app.push_screen(EntryEditDialog(session, existing=existing), _on_close)
+
+    def action_show_context_menu(self) -> None:
+        """CL #52763+: 'm' (또는 ㅡ) — 선택 거래의 context menu.
+
+        사용자 요청: m 키로 메뉴를 열어 그 안에서 삭제할 수 있도록.
+        메뉴 항목은 거래 row 에서 자주 쓰는 액션들 — 수정/삭제/첨부/새 거래
+        + multi-select 기반 일괄 작업 (선택돼 있을 때만).
+
+        sentinel row (새 거래 자리) / entry_id 없는 거래는 메뉴 항목이
+        의미가 없으므로 status 안내 후 noop.
+        """
+        from whooing_tui.widgets.menubar import MenuItem, MenuPopup, MenuSpec
+
+        if self._is_on_sentinel_row():
+            self.set_status(
+                "새 거래 자리 — Enter 또는 n 으로 거래 추가.", warn=True,
+            )
+            return
+        target = self._selected_entry()
+        if target is None:
+            self.set_status("선택된 거래가 없습니다.", error=True)
+            return
+        eid = str(target.get("entry_id") or "")
+        if not eid:
+            self.set_status("이 거래에는 entry_id 가 없습니다.", error=True)
+            return
+
+        items: list[MenuItem] = [
+            MenuItem(label="수정 (e)", action_id="edit_entry"),
+            MenuItem(label="삭제 (d)", action_id="delete_entry"),
+            MenuItem(label="첨부 (f)", action_id="open_attachments"),
+            MenuItem(label="새 거래 (n)", action_id="new_entry"),
+        ]
+        # multi-select 가 1+ 면 일괄 태그 항목 추가 (CL #51145+).
+        if self._selected_entry_ids:
+            items.append(MenuItem(
+                label=f"선택 {len(self._selected_entry_ids)}건 일괄 태그 (#)",
+                action_id="batch_tag",
+            ))
+        spec = MenuSpec(name="거래", items=tuple(items))
+
+        def _on_pick(result: Any) -> None:
+            # MenuPopup 의 nav (←/→) 결과는 context 에서 의미 없음 — 무시.
+            if result is None or isinstance(result, tuple):
+                return
+            method = getattr(self, f"action_{result}", None)
+            if callable(method):
+                method()
+            else:  # pragma: no cover — items 의 action_id 와 메서드 매칭 보장.
+                log.debug("context menu: action_%s 없음", result)
+
+        self.app.push_screen(MenuPopup(spec), _on_pick)
 
     def action_delete_entry(self) -> None:
         target = self._selected_entry()

@@ -733,3 +733,98 @@ def test_yesterday_of_helper():
     assert _yesterday_of(None) is None
     # 잘못된 입력 — 그대로 반환 (보수적).
     assert _yesterday_of("abc") == "abc"
+
+
+# ---- CL #52763+ : context menu (m 키 / ㅡ) ----------------------------
+
+
+def test_m_key_bound_to_show_context_menu():
+    """m / ㅡ 가 action_show_context_menu 로 등록 — IME 양쪽."""
+    keys = {b.key: b.action for b in EntriesScreen.BINDINGS}
+    assert keys.get("m") == "show_context_menu"
+    assert keys.get("ㅡ") == "show_context_menu"
+
+
+@pytest.mark.asyncio
+async def test_m_press_pushes_context_menu_popup():
+    """선택된 거래 위에서 m → MenuPopup push (수정/삭제/첨부/새 거래 항목)."""
+    from whooing_tui.widgets.menubar import MenuPopup
+
+    fake = FakeClient()
+    app = WhooingTuiApp(client=fake)  # type: ignore[arg-type]
+    async with app.run_test() as pilot:
+        es = await _open_entries(app, pilot)
+        es.action_show_context_menu()
+        await pilot.pause()
+        assert isinstance(app.screen, MenuPopup)
+        action_ids = [it.action_id for it in app.screen.spec.items]
+        assert "edit_entry" in action_ids
+        assert "delete_entry" in action_ids
+        assert "open_attachments" in action_ids
+        assert "new_entry" in action_ids
+
+
+@pytest.mark.asyncio
+async def test_context_menu_delete_dispatches_action_delete_entry():
+    """메뉴에서 '삭제' 선택 → action_delete_entry 호출 → ConfirmModal push.
+
+    사용자 보고의 정확한 흐름: m → 메뉴 → 삭제 선택 → 확인 모달.
+    """
+    from whooing_tui.screens.edit_entry import ConfirmModal
+    from whooing_tui.widgets.menubar import MenuPopup
+
+    fake = FakeClient()
+    app = WhooingTuiApp(client=fake)  # type: ignore[arg-type]
+    async with app.run_test() as pilot:
+        es = await _open_entries(app, pilot)
+        es.action_show_context_menu()
+        await pilot.pause()
+        assert isinstance(app.screen, MenuPopup)
+        # 메뉴에서 '삭제' 선택 — dismiss(action_id).
+        app.screen.dismiss("delete_entry")
+        await pilot.pause()
+        # action_delete_entry 가 ConfirmModal push.
+        assert isinstance(app.screen, ConfirmModal)
+
+
+@pytest.mark.asyncio
+async def test_context_menu_on_sentinel_row_is_noop():
+    """sentinel row (새 거래 자리) — 메뉴 띄우지 않음, 안내 status."""
+    from whooing_tui.widgets.menubar import MenuPopup
+
+    fake = FakeClient(entries=[])  # 빈 entries — sentinel 자동 노출
+    app = WhooingTuiApp(client=fake)  # type: ignore[arg-type]
+    async with app.run_test() as pilot:
+        from whooing_tui.screens.entries import EntriesScreen
+        await _wait_for(
+            lambda: isinstance(app.screen, EntriesScreen)
+            and app.session.section_id == "s1",
+            timeout=3.0,
+        )
+        es: EntriesScreen = app.screen  # type: ignore[assignment]
+        # sentinel 자동 노출 + cursor 가 sentinel.
+        await pilot.pause()
+        before_screen = app.screen
+        es.action_show_context_menu()
+        await pilot.pause()
+        # MenuPopup 안 떴음 — 같은 EntriesScreen.
+        assert app.screen is before_screen
+        assert "새 거래" in es.last_status or "sentinel" in es.last_status.lower()
+
+
+@pytest.mark.asyncio
+async def test_context_menu_includes_batch_tag_when_multiselect_active():
+    """multi-select 가 1+ 면 일괄 태그 항목 추가 — 사용자 흐름 통합."""
+    from whooing_tui.widgets.menubar import MenuPopup
+
+    fake = FakeClient()
+    app = WhooingTuiApp(client=fake)  # type: ignore[arg-type]
+    async with app.run_test() as pilot:
+        es = await _open_entries(app, pilot)
+        # 1건 선택.
+        es._selected_entry_ids = {"e1"}
+        es.action_show_context_menu()
+        await pilot.pause()
+        assert isinstance(app.screen, MenuPopup)
+        action_ids = [it.action_id for it in app.screen.spec.items]
+        assert "batch_tag" in action_ids

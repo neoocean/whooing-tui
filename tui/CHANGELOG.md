@@ -5,6 +5,62 @@
 > **0.17.x 이전** (CL #51119 ~ #1) 항목은 분량 정리 차원에서
 > [`CHANGELOG-archive-0.17.md`](./CHANGELOG-archive-0.17.md) 로 분리 보존.
 
+## CL #52763 — 0.60.0 — 거래 row 의 m 키 context menu (2026-05-18)
+
+배경 (사용자 요청): 거래 항목에서 m 키를 눌러 컨텍스트 메뉴를 열어 그
+안에서 삭제할 수 있게.
+
+### 동작
+
+**`m` (또는 두벌식 `ㅡ`) 키**:
+- 선택된 거래 row 의 context menu (popup) 띄움.
+- 항목:
+  - 수정 (e) → `action_edit_entry`
+  - 삭제 (d) → `action_delete_entry` (ConfirmModal 거쳐 삭제)
+  - 첨부 (f) → `action_open_attachments`
+  - 새 거래 (n) → `action_new_entry`
+  - **선택 N건 일괄 태그 (#)** → `action_batch_tag` (multi-select 활성 시만)
+- Esc 로 메뉴 취소. 메뉴 항목 선택 시 해당 화면-레벨 action 호출.
+
+**Sentinel row / entry_id 없는 거래** 위에서는 메뉴 띄우지 않고 status
+안내 — 의미 있는 동작 없음.
+
+### 구현 디테일
+
+- 기존 `widgets/menubar.MenuPopup` 위젯 그대로 재사용 — 같은 OptionList
+  기반 popup. ←/→ nav 결과 (메뉴바 흐름) 는 context 에서 무시.
+- 동적 항목 — multi-select 가 1+ 면 일괄 태그 항목 추가, 0이면 노출 X.
+- 두벌식 `m → ㅡ` 자동 처리 (`bind_ko`).
+
+### 수정 파일
+
+- `tui/src/whooing_tui/screens/entries.py`
+  - BINDINGS 에 `*bind_ko("m", "show_context_menu", "Menu", show=True,
+    priority=True)`.
+  - 새 `action_show_context_menu` — sentinel/entry_id 분기 + MenuPopup push.
+- `tui/tests/test_entries_mutate.py` — 회귀 방지 +5:
+  - `test_m_key_bound_to_show_context_menu` (IME 양쪽 매핑).
+  - `test_m_press_pushes_context_menu_popup` (4 항목 모두 포함).
+  - `test_context_menu_delete_dispatches_action_delete_entry` (사용자
+    요청의 정확한 흐름: m → 삭제 선택 → ConfirmModal).
+  - `test_context_menu_on_sentinel_row_is_noop`.
+  - `test_context_menu_includes_batch_tag_when_multiselect_active`.
+- `tui/pyproject.toml` — 0.59.0 → 0.60.0.
+- `tui/src/whooing_tui/__init__.py` — `__version__` 동기화.
+
+### 검증
+
+- **885 passed** (880 → +5 신규). 회귀 0.
+
+### 사용자 후속 확인
+
+거래 row 위에서 **m** (또는 IME 켠 채 **ㅡ**) 누름:
+1. 작은 popup 메뉴 등장
+2. ↑/↓ 이동 + Enter 로 항목 선택
+3. "삭제 (d)" 선택 시 기존 ConfirmModal 흐름 (yes/no 확인) → 삭제
+
+---
+
 ## CL #52761 — 0.59.0 — q 종료 시 진행 모달 + TUI 안에서 P4 flush 완료 (2026-05-18)
 
 배경 (사용자 보고): q 키 종료 시 즉시 cli 로 돌아가는데 그 시점에 cli
