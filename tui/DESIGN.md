@@ -43,7 +43,7 @@ wrapper 가 의도적으로 코드 중복** 으로 공유하기 위해 만들어
 
 ## 3. 아키텍처
 
-### 3.0 모듈 인벤토리 (0.60.0)
+### 3.0 모듈 인벤토리 (0.63.0)
 
 | 모듈 | 책무 |
 | --- | --- |
@@ -51,7 +51,7 @@ wrapper 가 의도적으로 코드 중복** 으로 공유하기 위해 만들어
 | `__main__.py` | 엔트리: `python -m whooing_tui` |
 | `cli.py` | argparse + 헤드리스 서브커맨드 dispatch (`sections` / `accounts` / `entries` / `gc-attachments` / `export-attachments`) |
 | `auth.py` | `WhooingAuth` — 토큰 헤더 + 마스크 |
-| `client.py` | httpx 기반 후잉 REST + `CachedWhooingClient` + `call_official_tool(name, args)` helper (CL #52755+, 공식 MCP 위임용) |
+| `client.py` | httpx 기반 후잉 REST + `CachedWhooingClient` + `call_official_tool(name, args)` helper (CL #52755+, 공식 MCP 위임용; CachedWhooingClient 도 wrap — CL #52770 회귀 fix) |
 | `config.py` | TOML config 로더 |
 | `dates.py` | KST YYYYMMDD/YYYYMM 유틸 + 1년 분할 |
 | `errors.py` | HTTP → `ToolError` 매핑 + secret 마스크 |
@@ -64,11 +64,12 @@ wrapper 가 의도적으로 코드 중복** 으로 공유하기 위해 만들어
 | `p4_sync.py` | P4 자동 동기화 — `_do_submit_multi` 는 **numbered CL 패턴** (CL #52748+, `submit -d <abs path>` syntax 오류 fix) — `_create_numbered_change` + `reconcile -c <CL>` + `submit -c <CL>` |
 | **`official_mcp.py`** | **신규 (CL #52755+)** 후잉 공식 MCP server (`https://whooing.com/mcp`) 의 minimal JSON-RPC client (SSE 응답도 지원) |
 | `app.py` | Textual App + `_ShutdownModal` (CL #52761+, q 종료 시 진행 모달 + thread executor 로 flush) + `on_unmount`(P4 flush 안전망) |
-| `widgets/menubar.py` | F10/Alt/Alt+M/Alt+F 풀다운 메뉴바 (MenuBar/MenuPopup/MenuBarMixin) + 마우스 클릭 진입 (CL #52759+, `MenuBar.MenuClicked` message + `menubar_index_at_offset`) |
+| `widgets/menubar.py` | F10/Alt/Alt+M/Alt+F 풀다운 메뉴바 (MenuBar/MenuPopup/MenuBarMixin) + 마우스 클릭 진입 (CL #52759+, `MenuBar.MenuClicked` message + `menubar_index_at_offset`). **CL #52776+ MenuPopup backdrop transparent** — 메뉴가 화면 가리지 않음. |
 | `widgets/input_modal.py` | 통합 입력 modal (CL #51156+, InputModal/TextAreaModal) |
 | `widgets/confirm.py` | 통합 yes/no modal — y/n + ㅛ/ㅜ IME 매칭 (CL #52724+) |
+| **`widgets/hangul_input.py`** | **신규 (CL #52784+)** `enable_hangul_composing()` — `textual.widgets.Input.watch_value` wrap. 자모 sequence → 음절 합성. iPhone Blink 같이 자모 단위로 들어오는 환경 fix. |
 | `screens/__init__.py` | Screen 패키지 |
-| `screens/entries.py` | EntriesScreen — 거래내역 표 + 메뉴바 + 컴팩트 + 첨부 indicator (📎N) + multi-select (▣) + **context menu (m 키, CL #52763+)** + **점진적 캐시 필터 확장** (CL #52758+, `_apply_filter` + `_expand_filter_in_past` worker + `_filter_epoch`) |
+| `screens/entries.py` | EntriesScreen — 거래내역 표 + 메뉴바 + 컴팩트 + 첨부 indicator (📎N) + multi-select (✅) + **context menu (m 키, CL #52763+)** + **점진적 캐시 필터 확장** (CL #52758+, `_apply_filter` + `_expand_filter_in_past` worker + `_filter_epoch`) + **Home/End/PgUp/PgDn navigation** (CL #52772+) + **Shift+arrow / Ctrl/Shift+click 범위 multi-select** (CL #52776+, `_selection_anchor`, `_extend_selection_to`, `on_click`) + **Esc 가 selection 도 함께 해제** (CL #52784+) + **선택 row cell `bold reverse` 시각 강조** (`_highlight_selected_cell`) |
 | `screens/entries_compact.py` | pure helpers: 약어 / 임계값 / 컬럼 visibility |
 | `screens/sections.py` | SectionPickerScreen (`s`) |
 | `screens/accounts.py` | AccountsScreen (`a`) + AccountEditDialog + 메뉴바 통합 |
@@ -95,6 +96,7 @@ wrapper 가 의도적으로 코드 중복** 으로 공유하기 위해 만들어
 | `core/db.py` | SQLite **schema v8** (CL #52758+, `entries_cache` 추가) + migrations + annotation/hashtag/tag_meta/import_log/audit_log CRUD |
 | **`core/entries_cache.py`** | **신규 (CL #52758+)** entries 영구 sqlite 캐시 layer — `upsert_entries` / `list_cached` / `cached_oldest_date` / `purge_section` |
 | **`core/preview.py`** | **신규 (CL #52750+)** 첨부 파일 미리보기 텍스트 추출 — text/* (UTF-8/cp949/latin-1 fallback) + application/pdf (pdfplumber per-page) |
+| **`core/hangul.py`** | **신규 (CL #52784+)** Hangul 자모 → 음절 합성 — `compose_hangul(text)` pure 함수. Compat Jamo (`ㅎㅏㄴ` U+3130~U+318F) → Hangul Jamo (U+1100~) 매핑 후 state machine 으로 (초성, 중성, 종성) 결합. 종성↔초성 split 처리. iPhone Blink 등 자모 단위로 들어오는 terminal 환경 fix. |
 | `core/attachments.py` | sha256 dedup storage + trash + GC + audit |
 | `core/dates.py` | KST helper |
 | `core/csv_adapters/*` / `core/html_adapters/*` / `core/pdf_adapters/*` | 카드 명세서 어댑터 (현대/하나/신한/국민/삼성) |
@@ -331,6 +333,33 @@ invalidation 정책 (현 phase):
     - `m` (또는 `ㅡ`) — 선택 거래의 popup 메뉴 (수정/삭제/첨부/새 거래,
       multi-select 활성 시 일괄 태그).
     - 기존 `MenuPopup` 재사용 — OptionList 기반.
+11. **거래 목록 navigation 확장** — Phase 9 (CL #52772+, 0.61.0).
+    - `Home`/`End`/`PgUp`/`PgDn` 명시 binding (priority=True up/down 이
+      textual default 가려서 발화 안 함).
+    - sentinel 자리는 건너뜀 — Home 이 첫 실거래 row 로.
+12. **multi-select UX 강화** — Phase 10 (CL #52776+~ #52784, 0.62.0~0.63.0).
+    - 마우스 `Ctrl+click` 토글 / `Shift+click` 범위 (`_extend_selection_to`).
+    - 키보드 `Shift+↑↓/Home/End/PgUp/PgDn` 범위 selection.
+    - `_selection_anchor` 로 anchor row 추적, `_render_table` 이 선택된
+      cells 를 `bold reverse` 로 강조 (`_highlight_selected_cell`).
+    - prefix `▣ → ✅`.
+    - `Esc` 가 selection 도 함께 해제 (column/filter 와 묶음).
+    - `space` 가 토글 후 즉시 `_render_table` 호출 (갱신 누락 fix).
+13. **iPhone Blink 한글 자모 조합 fix** — Phase 11 (CL #52784+, 0.63.0).
+    - 새 `core/hangul.py` (pure state machine) + `tui/widgets/hangul_input
+      .py` (`textual.widgets.Input.watch_value` wrap). App.on_mount 가
+      `enable_hangul_composing()` 한 번 호출 — 전역 적용.
+14. **MenuPopup backdrop fix** — Phase 12 (CL #52776, 0.62.0).
+    - textual ModalScreen 의 default 50% black overlay 가 화면 전체를
+      덮어 메뉴가 "화면 하단까지 길게 가린" 듯한 시각 → `background:
+      transparent` + `height: auto` 로 메뉴 영역만.
+15. **품질 / 회귀 fix**:
+    - `CachedWhooingClient.call_official_tool` wrap 누락 회귀 (CL #52770,
+      0.60.1) — 0.55.0 의 위임이 production 의 cached client 에 안 가서
+      `INTERNAL: ...` 에러.
+    - `_ITEM_TAG_INLINE_LIMIT` default `2 → 0` (무제한, 사용자 요청
+      "모두 보여주세요", CL #52780, 0.62.1). 좁은 터미널은
+      `WHOOING_ITEM_TAG_INLINE_LIMIT=N` env 로 명시 cap.
 
 ### 6.1 Phase 2a (HomeScreen) 메모 — 후속 화면 구현 시 재사용할 결정들
 

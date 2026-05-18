@@ -17,6 +17,7 @@ flowchart TB
         F["entries_cache.py<br/>(거래 영구 캐시 — CL #52758+)"]
         G["preview.py<br/>(첨부 미리보기 — text/PDF, CL #52750+)"]
         H["receipt/extractor.py<br/>(PDF 영수증 regex 추출)"]
+        I["hangul.py<br/>(자모 → 음절 합성 — CL #52784+)"]
     end
 
     TUI["whooing-tui<br/>(write owner — db/attachments)"] -->|import| core
@@ -94,6 +95,15 @@ from whooing_core.preview import extract_preview_text
 text = extract_preview_text("/Users/me/invoice.pdf", mime="application/pdf")
 # PDF 면 페이지별 "━━━ Page N/total ━━━" 헤더 포함 추출.
 # binary 면 None — caller 가 "미리보기 불가" 안내.
+```
+
+```python
+# 한글 자모 → 음절 합성 (CL #52784+, iPhone Blink fix)
+from whooing_core.hangul import compose_hangul
+assert compose_hangul("ㅎㅏㄴ") == "한"
+assert compose_hangul("ㅎㅏㄴㄱㅜㄱㅇㅓ") == "한국어"  # 종성↔초성 split
+assert compose_hangul("abc") == "abc"             # ASCII 통과
+assert compose_hangul("한국") == "한국"             # 이미 음절 통과
 ```
 
 ## 문서

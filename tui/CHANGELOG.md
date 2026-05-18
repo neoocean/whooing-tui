@@ -5,6 +5,36 @@
 > **0.17.x 이전** (CL #51119 ~ #1) 항목은 분량 정리 차원에서
 > [`CHANGELOG-archive-0.17.md`](./CHANGELOG-archive-0.17.md) 로 분리 보존.
 
+## CL #52785 — docs only — 0.60.1~0.63.0 누적 변경 모든 문서 반영 (2026-05-18)
+
+코드 / 버전 변경 없음. 0.60.0 다음의 5 CL (CL #52770~#52784) 누적 변경을
+문서들에 상세 반영:
+
+- **`README.md`** (monorepo root) — tui 패키지 버전 0.60.0 → 0.63.0,
+  책임에 "Ctrl/Shift multi-select + iPhone Blink 한글 자모 조합" 추가.
+- **`tui/README.md`** — 현재 0.60.0 → 0.63.0. 0.60.1~0.63.0 핵심 변경
+  요약 추가 (5 CL). 키 binding 표 갱신 — Home/End/PgUp/PgDn, Shift+nav,
+  Ctrl/Shift+click, space refresh, Esc 통합 해제. "한글 IME (두벌식)"
+  섹션에 §"텍스트박스 한글 자모 조합 (0.63.0+)" sub-섹션 추가 — iPhone
+  Blink 등 자모 단위 환경 fix 의 작동 원리와 지원 케이스. 통계 885 → 923.
+- **`tui/DESIGN.md`** — §3.0 모듈 인벤토리 0.60.0 → 0.63.0.
+  `widgets/hangul_input.py` 신규 줄 추가. screens/entries.py 의 책임에
+  Home/End/PgUp/PgDn, Shift+arrow, Ctrl/Shift+click, _highlight_selected_
+  cell, _selection_anchor 명시. §3.0a core 인벤토리에 `core/hangul.py`
+  신규 줄. §6 다음 단계에 Phase 9~12 + "품질/회귀 fix" 항목 (5 CL 분).
+- **`tui/MEMORY.md`** — §7 알려진 미해결: 한글 종성 겹받침 polish 후보
+  + IME 단축키 ↔ 텍스트박스 자모 입력의 상호작용 정책 명시. §8 변경
+  이력에 2026-05-18 "오후" 묶음 entry (5 CL).
+- **`core/README.md`** — mermaid 다이어그램에 `hangul.py` 박스 추가.
+  사용 예에 `compose_hangul` 추가.
+- **`core/DESIGN.md`** — §2 모듈 표에 `hangul.py` 한 줄 추가.
+
+### 검증
+
+- **923 passed** (코드 변경 없음 — 회귀 0).
+
+---
+
 ## CL #52781 — 0.63.0 — Blink 한글 조합 + Esc selection / 시각 강조 / space 갱신 (2026-05-18)
 
 배경 (사용자 요청 4건 한 묶음):

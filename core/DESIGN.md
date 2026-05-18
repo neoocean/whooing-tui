@@ -17,6 +17,7 @@ SQLite 에 보관하는 **공통 어댑터/스토리지 레이어**. 두 consume
 | `db.py` | SQLite 스키마 v8 + 마이그레이션 + annotations/hashtags/tag_meta/entry_attachments/audit_log/entries_cache CRUD | (stdlib sqlite3) |
 | **`entries_cache.py`** | **(CL #52758+, schema v8)** 후잉 거래내역 영구 캐시 layer — upsert / list / oldest_date / purge | (stdlib sqlite3, json) |
 | **`preview.py`** | **(CL #52750+)** 첨부 파일 미리보기 텍스트 추출 — text/* (UTF-8/cp949/latin-1 fallback) + application/pdf (per-page) | pdfplumber (재사용) |
+| **`hangul.py`** | **(CL #52784+)** 자모 → 음절 합성 (Compat Jamo / Hangul Jamo state machine). iPhone Blink 등 자모 단위로 들어오는 terminal 환경 fix. `compose_hangul(text)` pure 함수. | stdlib only |
 | `receipt/extractor.py` | PDF 영수증 regex 추출 (date / amount / merchant) | pdfplumber (재사용) |
 
 **core 가 수행하지 않는 것:**
