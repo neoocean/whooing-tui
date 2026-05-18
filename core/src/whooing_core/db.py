@@ -29,7 +29,7 @@ from typing import Any, Iterator
 from whooing_core.dates import KST
 from datetime import datetime
 
-SCHEMA_VERSION = 7
+SCHEMA_VERSION = 8
 
 
 # ---- 연결 + schema -----------------------------------------------------
@@ -120,6 +120,44 @@ def _apply_lightweight_migrations(conn: sqlite3.Connection) -> None:
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_attach_audit_entry "
             "ON attachment_audit_log(entry_id)"
+        )
+    except sqlite3.OperationalError:  # pragma: no cover
+        pass
+
+    # CL #52758+ (schema v8): entries_cache — 후잉 거래내역 영구 캐시.
+    # 사용자 요청: 과거 데이터는 잘 변경 안 되므로 sqlite 캐시 + 점진적
+    # 과거 윈도우 확장 + 컬럼 필터링이 캐시까지 검색하도록.
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS entries_cache (
+            section_id    TEXT NOT NULL,
+            entry_id      TEXT NOT NULL,
+            entry_date    TEXT NOT NULL,         -- YYYYMMDD or YYYYMMDD.NNNN
+            l_account     TEXT,
+            l_account_id  TEXT,
+            r_account     TEXT,
+            r_account_id  TEXT,
+            money         INTEGER,
+            item          TEXT,
+            memo          TEXT,
+            raw_json      TEXT,                  -- 원본 후잉 응답 (확장 필드 보존)
+            fetched_at    TEXT NOT NULL,         -- ISO8601 KST
+            PRIMARY KEY (section_id, entry_id)
+        )
+        """
+    )
+    try:
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_entries_cache_date "
+            "ON entries_cache(section_id, entry_date DESC)"
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_entries_cache_left "
+            "ON entries_cache(section_id, l_account_id)"
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_entries_cache_right "
+            "ON entries_cache(section_id, r_account_id)"
         )
     except sqlite3.OperationalError:  # pragma: no cover
         pass

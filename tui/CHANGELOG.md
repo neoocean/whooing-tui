@@ -5,6 +5,101 @@
 > **0.17.x 이전** (CL #51119 ~ #1) 항목은 분량 정리 차원에서
 > [`CHANGELOG-archive-0.17.md`](./CHANGELOG-archive-0.17.md) 로 분리 보존.
 
+## CL #52758 — 0.57.0 — 필터 점진 확장 + entries sqlite 캐시 (schema v8) (2026-05-18)
+
+배경 (사용자 요청 — 0.56.0 의 deferred 항목):
+
+> 거래목록에서 칼럼 기준으로 필터링하면 지난 1개월 동안의 결과만
+> 보여줍니다. 이를 우선 1개월 결과만 보여주고 점진적으로 그 이전 기록을
+> 검색해 이전 기록을 순차적으로 채워주세요. 또한 과거의 데이터는 잘
+> 변경되지 않기 때문에 이 데이터를 sqlite 파일에 캐시했다가 나중에
+> 유사한 요청을 하면 먼저 캐시를 보여주고 변경된 부분만 조회해 업데이트
+> 하고 다시 캐시하도록 수정해주세요.
+
+### 변경 요약
+
+1. **schema v8** — 새 테이블 `entries_cache` (section_id + entry_id PK,
+   인덱스 3개: date desc / l_account_id / r_account_id). 멱등 migration.
+2. **`core/entries_cache.py`** 신규 — pure sqlite layer:
+   `upsert_entries` / `list_cached` / `cached_oldest_date` /
+   `cached_count` / `purge_section` / `remove_entry`. raw_json 으로 후잉
+   응답 원형 보존 + 정규화 컬럼 (특히 money int) 우선 노출.
+3. **`refresh_entries` 가 fetch 결과를 캐시에 자동 upsert** — 사용자가
+   r 누를 때마다 누적 (1개월 단위로 점진적 축적).
+4. **`_apply_filter` 점진 확장**:
+   a. 현재 윈도우 (`_all_entries`) 매칭 → 즉시 표시.
+   b. **sqlite 캐시 lookup** — 윈도우 밖의 캐시된 entries 중 매칭 추가.
+      이전 사용 시 축적된 데이터가 그대로 활용됨.
+   c. **background worker** `_expand_filter_in_past`:
+      - step boundary 환경변수 `WHOOING_FILTER_EXPAND_MONTHS`
+        (default `3,6,12,24`).
+      - 각 step 마다 후잉 `list_entries(window)` → 캐시 upsert → 매칭만
+        `_filter_extra` 에 누적 → 화면/status 즉시 갱신.
+      - status: `필터: ... — N건 (과거 N개월 확인 — YYYYMMDD~YYYYMMDD).`
+   d. **race 방지** — `_filter_epoch` 카운터. 사용자가 필터 변경/해제
+      시 epoch bump → 진행 중 worker 가 자기 결과 폐기.
+
+### 동작 예시
+
+사용자가 `left` 컬럼 활성화 후 식비 row Enter:
+```
+필터: left=x20 — 5건 (현재 4 + 캐시 1). 과거 데이터 검색 중…
+   ↓ (3개월 fetch)
+필터: left=x20 — 12건 (과거 3개월 확인 — 20260218~20260417).
+   ↓ (6개월)
+필터: left=x20 — 18건 (과거 6개월 확인 — 20251118~20260217).
+   ↓ ...
+필터: left=x20 — 32건 (과거 24개월 까지 검색 완료).
+```
+
+### 캐시 정책 (현 phase)
+
+- **refresh 시 무조건 upsert** — 후잉 응답이 최신, 캐시 row 덮어쓰기.
+- **invalidation**: 없음. 사용자가 후잉 웹에서 entry 를 직접 삭제하면
+  캐시에 stale row 가 남을 수 있음 — 별도 CL 에서 다룰 invalidation 정책.
+- **TTL**: 없음. raw_json 의 `_cache_fetched_at` 에 ISO 시각이 있어
+  미래 cache hit 시 비교 가능 — 본 phase 는 안 씀.
+
+### 수정 파일
+
+- `core/src/whooing_core/db.py`
+  - `SCHEMA_VERSION` 7 → 8.
+  - `_apply_lightweight_migrations` 끝에 `entries_cache` 테이블 + 인덱스 3개.
+- `core/src/whooing_core/entries_cache.py` — **신규** (~190 줄).
+- `core/tests/test_entries_cache.py` — **신규** (18 단위 케이스).
+- `tui/src/whooing_tui/screens/entries.py`
+  - `_yesterday_of` helper (module-level).
+  - `__init__` 에 `_filter_extra` / `_filter_epoch`.
+  - `_apply_filter` 가 캐시 lookup + worker 호출.
+  - `_fetch_cache_extras` / `_window_oldest_yyyymmdd` /
+    `_combine_filter_results` helpers.
+  - `_expand_filter_in_past` (`@work(group="filter_expand")`).
+  - `action_clear_filter` 가 epoch bump + extras 비움.
+  - `refresh_entries` 가 캐시 upsert + epoch bump.
+- `tui/tests/test_entries_mutate.py` — 통합 테스트 +4 (캐시 lookup /
+  refresh upsert / clear filter epoch / _yesterday_of helper).
+- `tui/tests/test_dashboard.py` / `tui/tests/test_data.py` /
+  `core/tests/test_db.py` — schema 버전 hardcode 를 상수 비교로 갱신
+  (다음 schema bump 시 자동 추종).
+- `tui/pyproject.toml` — 0.56.0 → 0.57.0.
+- `tui/src/whooing_tui/__init__.py` — `__version__` 동기화.
+
+### 검증
+
+- **866 passed** (844 → +22 신규: 18 entries_cache 단위 + 4 통합).
+  회귀 0.
+
+### 의도적으로 안 한 것 (별도 CL 후보)
+
+- **cache invalidation 정책** — 사용자가 후잉 웹에서 entry 삭제 시
+  캐시 stale row 검출 / 정리. 현재는 refresh 시 새 entry_id 만 upsert,
+  사라진 row 는 남음.
+- **부팅 시 캐시 우선 표시** — 사용자가 `make run` 직후 화면이 그릴
+  때 캐시에서 즉시 1개월 표시 + background 로 후잉 update. 별도 CL.
+- **per-section 캐시 TTL** — `_cache_fetched_at` 활용한 invalidation.
+
+---
+
 ## CL #52757 — 0.56.0 — memo substring 필터 + tags hint 중복 제외 (2026-05-18)
 
 배경 (사용자 요청 2건):

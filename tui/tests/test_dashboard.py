@@ -50,7 +50,7 @@ def test_gather_stats_empty_db_path_includes_default(isolated):
 def test_gather_stats_after_init_returns_zeroes(isolated):
     tui_data.init_shared_schema()
     stats = gather_stats()
-    assert stats["schema_version"] == 7
+    assert stats["schema_version"] == core_db.SCHEMA_VERSION
     assert stats["import_total"] == 0
     assert stats["annotation_count"] == 0
     assert stats["attachment_count"] == 0
@@ -93,7 +93,7 @@ def test_gather_stats_with_data(isolated, tmp_path):
         )
 
     stats = gather_stats()
-    assert stats["schema_version"] == 7
+    assert stats["schema_version"] == core_db.SCHEMA_VERSION
     assert stats["import_total"] == 1
     assert stats["import_by_status"]["inserted"] == 1
     assert stats["annotation_count"] == 2
@@ -111,7 +111,7 @@ def test_render_dashboard_includes_path_and_version(isolated):
     tui_data.init_shared_schema()
     s = render_dashboard(gather_stats())
     assert "schema" in s
-    assert "v7" in s
+    assert f"v{core_db.SCHEMA_VERSION}" in s
     assert "whooing-data.sqlite" in s
 
 

@@ -6,6 +6,7 @@ import sqlite3
 
 import pytest
 
+from whooing_core import db as core_db
 from whooing_tui import data
 
 
@@ -42,13 +43,13 @@ def test_init_shared_schema_creates_db_and_dirs(isolated_data_dir):
     assert p == isolated_data_dir / "whooing-data.sqlite"
     assert p.exists()
     assert (isolated_data_dir / "attachments").exists()
-    assert data.schema_version() == 7
+    assert data.schema_version() == core_db.SCHEMA_VERSION
 
 
 def test_init_shared_schema_idempotent(isolated_data_dir):
     data.init_shared_schema()
     data.init_shared_schema()
-    assert data.schema_version() == 7
+    assert data.schema_version() == core_db.SCHEMA_VERSION
 
 
 def test_open_rw_yields_sqlite_connection(isolated_data_dir):

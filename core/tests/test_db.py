@@ -32,8 +32,13 @@ def test_current_version_none_when_db_missing(tmp_path):
     assert db.current_version(tmp_path / "nonexistent.sqlite") is None
 
 
-def test_current_version_returns_4(fresh_db):
-    assert db.current_version(fresh_db) == 7
+def test_current_version_matches_schema_constant(fresh_db):
+    """init_schema 직후 current_version 이 SCHEMA_VERSION 과 일치.
+
+    이름은 historical (`returns_4` — 초기에 4 였음); 매번 bump 시 hardcoded
+    숫자 갱신 부담을 없애기 위해 상수 비교로 변경.
+    """
+    assert db.current_version(fresh_db) == db.SCHEMA_VERSION
 
 
 def test_init_schema_enables_wal(tmp_path):

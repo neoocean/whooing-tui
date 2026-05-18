@@ -630,3 +630,106 @@ async def test_tags_input_typing_prefix_still_suggests_other_matches():
         assert "백업" in rendered, (
             f"prefix 매칭 후보가 사라짐: {rendered!r}"
         )
+
+
+# ---- CL #52758+ : 점진적 캐시 확장 필터 -------------------------------
+
+
+@pytest.mark.asyncio
+async def test_apply_filter_uses_sqlite_cache_for_extras(monkeypatch):
+    """필터 적용 시 sqlite 캐시에서 윈도우 밖의 매칭을 즉시 추가.
+
+    시나리오:
+      - 현재 _all_entries 에는 윈도우 안의 매칭 1건 (e1, l_account_id=x20)
+      - 캐시에는 더 오래된 매칭 2건 (e_old1, e_old2, 같은 x20)
+      - 필터 적용 → 화면에 3건 모두.
+    """
+    from whooing_core import entries_cache as core_cache
+    from whooing_tui import data as tui_data
+
+    fake = FakeClient()
+    # 사용자 캐시 시드 — 윈도우 보다 오래된 매칭.
+    app = WhooingTuiApp(client=fake)  # type: ignore[arg-type]
+    async with app.run_test() as pilot:
+        es = await _open_entries(app, pilot)
+        # 캐시에 동일 left=x20 인 과거 entries 시드.
+        with tui_data.open_rw() as conn:
+            core_cache.upsert_entries(conn, "s1", [
+                {"entry_id": "e_old1", "entry_date": "20251110",
+                 "money": 5000, "l_account_id": "x20", "r_account_id": "x11",
+                 "item": "ABC"},
+                {"entry_id": "e_old2", "entry_date": "20251020",
+                 "money": 3000, "l_account_id": "x20", "r_account_id": "x11",
+                 "item": "XYZ"},
+                {"entry_id": "e_other", "entry_date": "20251101",
+                 "money": 1000, "l_account_id": "x21", "r_account_id": "x11",
+                 "item": "교통"},  # 다른 left — 매칭 X
+            ])
+        # 필터 worker 는 실 후잉 호출 skip (FakeClient.list_entries 가 sample
+        # 1건만 반환 — 확장 단계도 그대로). epoch race 회피 위해 즉시 worker
+        # 진행 안 하도록 monkeypatch — 캐시 lookup 만 검증.
+        # 그러나 _apply_filter 가 자체적으로 cache lookup 동기 호출이므로
+        # worker 무관하게 즉시 결과 확인 가능.
+
+        # row 선택 후 left 컬럼 필터 (사용자 명시 e1 의 x20).
+        es._column_active = True
+        es._active_col = es._COLUMN_NAMES.index("left")
+        es._apply_filter("left", es._all_entries[0])  # e1 (l_account_id=x20)
+        await pilot.pause()
+        # 현재 entries 에 e1 + e_old1 + e_old2 (다른 l_account_id 제외).
+        ids = {str(e.get("entry_id") or "") for e in es._entries}
+        assert "e1" in ids
+        assert "e_old1" in ids
+        assert "e_old2" in ids
+        assert "e_other" not in ids
+
+
+@pytest.mark.asyncio
+async def test_apply_filter_caches_window_entries_on_refresh():
+    """refresh_entries 가 fetch 한 entries 를 캐시에 자동 upsert."""
+    from whooing_core import entries_cache as core_cache
+    from whooing_tui import data as tui_data
+
+    fake = FakeClient()
+    app = WhooingTuiApp(client=fake)  # type: ignore[arg-type]
+    async with app.run_test() as pilot:
+        es = await _open_entries(app, pilot)
+        # refresh 가 끝나면 캐시에 e1 이 들어가 있어야.
+        with tui_data.open_ro() as conn:
+            assert core_cache.cached_count(conn, "s1") >= 1
+            rows = core_cache.list_cached(conn, "s1")
+            assert any(r.get("entry_id") == "e1" for r in rows)
+
+
+@pytest.mark.asyncio
+async def test_clear_filter_bumps_epoch_and_clears_extras():
+    """필터 해제 시 _filter_extra 비움 + epoch 증가 (worker 결과 폐기)."""
+    fake = FakeClient()
+    app = WhooingTuiApp(client=fake)  # type: ignore[arg-type]
+    async with app.run_test() as pilot:
+        es = await _open_entries(app, pilot)
+        es._column_active = True
+        es._active_col = es._COLUMN_NAMES.index("left")
+        before_epoch = es._filter_epoch
+        es._apply_filter("left", es._all_entries[0])
+        # 필터 적용 후 epoch 증가
+        assert es._filter_epoch == before_epoch + 1
+        # 강제로 가짜 extra 주입 후 해제.
+        es._filter_extra.append({"entry_id": "fake"})
+        after_epoch = es._filter_epoch
+        es.action_clear_filter()
+        assert es._filter_epoch == after_epoch + 1
+        assert es._filter_extra == []
+        assert es._active_filter is None
+
+
+def test_yesterday_of_helper():
+    """_yesterday_of 의 가장자리 케이스."""
+    from whooing_tui.screens.entries import _yesterday_of
+    assert _yesterday_of("20260518") == "20260517"
+    assert _yesterday_of("20260301") == "20260228"
+    assert _yesterday_of("20260101") == "20251231"
+    assert _yesterday_of("") in ("", None)
+    assert _yesterday_of(None) is None
+    # 잘못된 입력 — 그대로 반환 (보수적).
+    assert _yesterday_of("abc") == "abc"
