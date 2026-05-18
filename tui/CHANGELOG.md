@@ -5,6 +5,46 @@
 > **0.17.x 이전** (CL #51119 ~ #1) 항목은 분량 정리 차원에서
 > [`CHANGELOG-archive-0.17.md`](./CHANGELOG-archive-0.17.md) 로 분리 보존.
 
+## CL #52816 — 0.67.1 — HelpModal Esc crash 회귀 수정 (2026-05-18)
+
+배경 (사용자 traceback 제보):
+```
+File textual/app.py:3983 in _check_bindings
+    key_bindings = bindings.key_to_bindings.get(key, ())
+AttributeError: 'list' object has no attribute 'key_to_bindings'
+```
+
+`?` 로 HelpModal 진입 후 `Esc` 누르면 즉시 죽음. 원인은 `HelpModal.__init__`
+가 `self._bindings = bindings` 로 Textual 의 *Screen* 내부 attribute
+`_bindings` (BindingsMap 인스턴스) 를 raw `list[Binding]` 으로 덮어쓴 것.
+
+Textual 의 `Screen._binding_chain` 이 `self._bindings.copy()` 를 호출하면
+list 의 `.copy()` 가 또 list 를 반환. 이후 `bindings.key_to_bindings.get(...)`
+에서 AttributeError. HelpModal 안에서 키를 누른 순간 터졌다.
+
+### 수정
+
+`screens/help.py`:
+- `self._bindings = bindings` → `self._help_bindings = bindings`. 의미는
+  동일 (도움말 표시에 쓰일 binding list 보관), 이름만 충돌 회피.
+- `body_text` 는 즉시 `_format_bindings(bindings)` 로 계산하므로 추후
+  `_help_bindings` 를 다시 읽는 곳도 없음 — 사실상 attribute 자체가
+  legacy. 다만 향후 도움말 동적 갱신 가능성을 위해 보관은 유지.
+
+### 회귀 테스트
+
+`tui/tests/test_help_modal.py::test_help_modal_escape_does_not_crash` —
+`pilot.press("escape")` 으로 실제 키 simulate. 기존 test 들은 `dismiss(None)`
+직접 호출이라 binding chain 을 안 거쳐 버그가 안 잡혔다.
+
+### 영향 범위
+
+- `HelpModal` 사용처는 EntriesScreen 의 `?` 키 (action_help) 만. 다른 모든
+  화면도 같은 modal 을 공유 — fix 한 군데로 모두 해소.
+- API 변경 없음 (생성자 시그니처 그대로). attribute 이름만 변경.
+
+총 테스트 960 → 961 (+1 회귀, 0 regression).
+
 ## CL #52815 — 0.67.0 — 중복 거래 평가 + 컨텍스트메뉴 폭 축소 (2026-05-18)
 
 배경 (사용자 요청 2건):

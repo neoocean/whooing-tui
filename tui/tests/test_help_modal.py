@@ -108,6 +108,35 @@ async def test_help_modal_pushes_from_initial_screen_and_dismiss_returns():
 
 
 @pytest.mark.asyncio
+async def test_help_modal_escape_does_not_crash():
+    """CL #52816+ regression: HelpModal 안에서 Esc 누르면 textual 의 binding
+    chain 이 list (BindingsMap 아님) 를 만나 AttributeError 던지던 버그.
+
+    원인은 HelpModal.__init__ 가 `self._bindings = bindings` 로 Screen 의
+    내부 attribute 를 raw list 로 덮어쓴 것. attribute 이름을 `_help_bindings`
+    로 바꿔 회피. 본 테스트는 회귀 방지를 위해 실제로 Esc 키를 simulate.
+    """
+    fake = _FakeClient()
+    app = WhooingTuiApp(client=fake)  # type: ignore[arg-type]
+    async with app.run_test() as pilot:
+        await _wait_for(
+            lambda: isinstance(app.screen, EntriesScreen)
+            and app.session.section_id == "s1",
+            timeout=3.0,
+        )
+        es: EntriesScreen = app.screen  # type: ignore[assignment]
+        es.action_help()
+        await pilot.pause()
+        assert isinstance(app.screen, HelpModal)
+        # 진짜 키 입력 시뮬 — 버그 재현 경로.
+        await pilot.press("escape")
+        ok = await _wait_for(
+            lambda: isinstance(app.screen, EntriesScreen), timeout=2.0,
+        )
+        assert ok, "HelpModal 이 Esc 로 닫혀 EntriesScreen 으로 복귀해야"
+
+
+@pytest.mark.asyncio
 async def test_help_modal_from_entries_shows_entries_bindings():
     """동일 화면이지만 entries 가 로드된 후 호출 — visible 키 동일."""
     fake = _FakeClient()

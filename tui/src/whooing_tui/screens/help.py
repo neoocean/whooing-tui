@@ -94,7 +94,11 @@ class HelpModal(ModalScreen[None]):
     def __init__(self, screen_title: str, bindings: list[Binding]) -> None:
         super().__init__()
         self._screen_title = screen_title
-        self._bindings = bindings
+        # CL #52816+: 인자 이름은 `bindings` 그대로지만 attribute 는
+        # `_help_bindings` 로 보관 — Textual 의 `Screen._bindings`
+        # (BindingsMap 인스턴스) 와 충돌 회피. 충돌 시 `Esc` 누르면
+        # `'list' object has no attribute 'key_to_bindings'` AttributeError.
+        self._help_bindings = bindings
         # 테스트가 Static 의 사적 API (`renderable`) 에 의존하지 않도록
         # 평문 본문을 attribute 로 보관 (HomeScreen.last_status 와 동일 컨벤션).
         self.body_text: str = _format_bindings(bindings)
