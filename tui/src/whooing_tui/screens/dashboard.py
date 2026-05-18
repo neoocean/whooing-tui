@@ -18,6 +18,7 @@ from textual.screen import Screen
 from textual.widgets import Footer, Header, Static
 
 from whooing_tui import data as tui_data
+from whooing_tui.ime import bind_ko
 
 log = logging.getLogger(__name__)
 
@@ -156,7 +157,7 @@ def render_dashboard(stats: dict[str, Any]) -> str:
 class DashboardScreen(Screen):
     BINDINGS = [
         Binding("escape", "back", "뒤로"),
-        Binding("r", "refresh", "새로고침"),
+        *bind_ko("r", "refresh", "새로고침"),
     ]
 
     DEFAULT_CSS = """

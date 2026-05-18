@@ -54,6 +54,7 @@ from textual.widgets import (
 
 from whooing_core import attachments as core_attach
 from whooing_tui import data as tui_data
+from whooing_tui.ime import bind_ko
 
 log = logging.getLogger(__name__)
 
@@ -448,12 +449,12 @@ class AttachmentBrowserScreen(Screen):
 
     BINDINGS = [
         Binding("escape", "back", "뒤로"),
-        Binding("a", "add", "추가"),
-        Binding("d", "delete", "삭제"),
-        Binding("o", "open", "열기"),
+        *bind_ko("a", "add", "추가"),
+        *bind_ko("d", "delete", "삭제"),
+        *bind_ko("o", "open", "열기"),
         # CL #51143+ (A9): note 사후 편집 — 'e' (edit note).
-        Binding("e", "edit_note", "Note 편집"),
-        Binding("r", "refresh", "새로고침"),
+        *bind_ko("e", "edit_note", "Note 편집"),
+        *bind_ko("r", "refresh", "새로고침"),
     ]
 
     DEFAULT_CSS = """

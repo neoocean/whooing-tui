@@ -5,6 +5,67 @@
 > **0.17.x 이전** (CL #51119 ~ #1) 항목은 분량 정리 차원에서
 > [`CHANGELOG-archive-0.17.md`](./CHANGELOG-archive-0.17.md) 로 분리 보존.
 
+## CL #52720 — 0.53.0 — IME 단축키 누락 4 곳 — q/ㅂ 종료 회귀 fix (2026-05-18)
+
+배경 (사용자 보고): `q` 로는 앱이 종료되는데 `ㅂ` (두벌식 IME) 로는 안 됨.
+원인 — `app.py::WhooingTuiApp.BINDINGS` 가 일반 `Binding("q", "quit", ...)`
+로 등록돼 `bind_ko` 헬퍼 미적용. 같은 패턴으로 누락된 곳을 전수 점검 →
+한 글자 alphabet 키 + 일반 Binding 인 케이스 4 파일 발견:
+
+- `app.py` — `q` (Quit), `t` (Theme) ← 사용자 보고 핵심
+- `screens/dashboard.py` — `r` (Refresh)
+- `screens/attachment_browser.py` — `a/d/o/e/r` (5개)
+- `widgets/confirm.py` — `y/n` (통합 ConfirmModal — `screens/edit_entry`
+  의 ConfirmModal 은 이미 적용돼 있었으나 widgets 쪽이 누락)
+
+### 동작 (이제 IME 켜진 상태에서도 동작)
+
+| 화면 | 영문 | 한글 자모 | 액션 |
+|---|---|---|---|
+| App 전역 | q | ㅂ | Quit |
+| App 전역 | t | ㅅ | Theme |
+| AttachmentBrowser | a | ㅁ | 추가 |
+| AttachmentBrowser | d | ㅇ | 삭제 |
+| AttachmentBrowser | o | ㅐ | 열기 |
+| AttachmentBrowser | e | ㄷ | Note 편집 |
+| AttachmentBrowser, Dashboard | r | ㄱ | 새로고침 |
+| ConfirmModal (widgets) | y | ㅛ | Yes |
+| ConfirmModal (widgets) | n | ㅜ | No |
+
+### 수정
+
+- `tui/src/whooing_tui/app.py` — `bind_ko` import + BINDINGS 의 q/t 를
+  `*bind_ko(...)` spread 로. ctrl+c 는 modifier 라 IME 영향 없음 → 그대로.
+- `tui/src/whooing_tui/screens/dashboard.py` — r 만 `bind_ko`.
+- `tui/src/whooing_tui/screens/attachment_browser.py` — a/d/o/e/r 5개 모두.
+- `tui/src/whooing_tui/widgets/confirm.py` — y/n. (CL #51156 의 widget
+  통합 시점에 IME 적용이 누락된 흔적 — `screens/edit_entry.ConfirmModal`
+  은 처음부터 `bind_ko` 였으나 widgets 쪽은 plain Binding 으로 시작.)
+- `tui/tests/test_ime.py` — 회귀 방지 5 케이스: 위 4 파일 각각의
+  BINDINGS 에 한글 자모 key 가 존재 + `pilot.press("ㅂ")` 가 실제로
+  app quit 을 발사하는지 통합 검증.
+- `tui/pyproject.toml` — 0.52.0 → 0.53.0.
+
+### 회귀 방지 검증 — 왜 이렇게 짧은 테스트?
+
+`BINDINGS` 가 `bind_ko` 호출이 아닌 plain `Binding("q", ...)` 으로 다시
+바뀌면 새 회귀 테스트가 즉시 fail — 다음 사람이 같은 실수를 반복하기
+어려움. 통합 테스트 (`pilot.press("ㅂ")` → `app.action_quit`) 는 textual
+binding dispatch 자체가 바뀌어도 잡아냄.
+
+### 검증
+
+- 합계 — **611 passed** (606 → +5 신규 IME 케이스). 회귀 0.
+
+### 범위 명시
+
+- textual built-in widget (DataTable type-to-search 등) 의 키 dispatch
+  는 우리 control 밖 — 본 변경은 *우리가 등록한 BINDINGS* 만 보장.
+- escape / ctrl+c / +/- / Tab / Enter 같은 modifier·기능 키는 IME 영향
+  없음 — 변경 X (그대로 일반 `Binding`).
+
+---
+
 ## CL #52718 — 0.52.0 — EntryEditDialog 에 attach row (2026-05-18)
 
 배경 (사용자 요청): 거래 수정 dialog 에서 바로 첨부 추가/관리가 가능했으면.

@@ -28,6 +28,7 @@ from whooing_tui.auth import load_auth_from_env
 from whooing_tui.cache import CacheStore, default_cache_path
 from whooing_tui.client import CachedWhooingClient, WhooingClient
 from whooing_tui.config import load_config
+from whooing_tui.ime import bind_ko
 from whooing_tui.screens.entries import EntriesScreen
 from whooing_tui.state import SessionState
 
@@ -48,10 +49,13 @@ class WhooingTuiApp(App):
     TITLE = "whooing-tui"
     SUB_TITLE = f"Whooing 가계부 — v{__version__}"
 
+    # CL #52720+: 단축키는 IME (한글 두벌식) 켜진 상태에서도 동작해야 한다.
+    # `bind_ko` 가 영문 + 한글 자모 (`q`/`ㅂ`, `t`/`ㅅ`) 양쪽 binding 을 생성.
+    # ctrl+c 는 modifier 조합이라 IME 영향 없음 → 그대로.
     BINDINGS = [
-        Binding("q", "quit", "Quit", show=True),
+        *bind_ko("q", "quit", "Quit", show=True),
         Binding("ctrl+c", "quit", "Quit", show=False),
-        Binding("t", "toggle_theme", "Theme", show=True),
+        *bind_ko("t", "toggle_theme", "Theme", show=True),
     ]
 
     def __init__(self, client: Optional[WhooingClient] = None) -> None:

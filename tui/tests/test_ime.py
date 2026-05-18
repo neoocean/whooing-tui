@@ -163,3 +163,68 @@ def test_to_choseong_string_mixed():
     assert to_choseong_string("한국T맵") == "ㅎㄱTㅁ"
     assert to_choseong_string("ABC") == "ABC"
     assert to_choseong_string("") == ""
+
+
+# ---- CL #52720+ : IME 적용 누락 회귀 방지 -----------------------------
+
+
+def _binding_keys(BINDINGS) -> list[str]:
+    """BINDINGS 의 key string 만 추출 — Binding | str 양쪽 케이스."""
+    out = []
+    for b in BINDINGS:
+        out.append(b.key if hasattr(b, "key") else b)
+    return out
+
+
+def test_app_q_t_have_korean_jamo_pair():
+    """App-level Quit (q/ㅂ) + Theme (t/ㅅ) 가 IME 양쪽 매칭."""
+    from whooing_tui.app import WhooingTuiApp
+    keys = _binding_keys(WhooingTuiApp.BINDINGS)
+    assert "q" in keys and "ㅂ" in keys, f"q/ㅂ missing in app: {keys}"
+    assert "t" in keys and "ㅅ" in keys, f"t/ㅅ missing in app: {keys}"
+
+
+def test_attachment_browser_letter_keys_have_korean_jamo_pair():
+    """AttachmentBrowser 의 a/d/o/e/r 모두 한글 자모와 짝."""
+    from whooing_tui.screens.attachment_browser import AttachmentBrowserScreen
+    keys = _binding_keys(AttachmentBrowserScreen.BINDINGS)
+    for en, ko in [("a", "ㅁ"), ("d", "ㅇ"), ("o", "ㅐ"),
+                   ("e", "ㄷ"), ("r", "ㄱ")]:
+        assert en in keys, f"{en} missing"
+        assert ko in keys, f"{ko} (for {en}) missing"
+
+
+def test_confirm_modal_yn_have_korean_jamo_pair():
+    """ConfirmModal (통합 widget) 의 y/n 도 IME 양쪽."""
+    from whooing_tui.widgets.confirm import ConfirmModal
+    keys = _binding_keys(ConfirmModal.BINDINGS)
+    assert "y" in keys and "ㅛ" in keys
+    assert "n" in keys and "ㅜ" in keys
+
+
+def test_dashboard_r_has_korean_jamo_pair():
+    """DashboardScreen 의 r (refresh) 도 IME 매칭."""
+    from whooing_tui.screens.dashboard import DashboardScreen
+    keys = _binding_keys(DashboardScreen.BINDINGS)
+    assert "r" in keys and "ㄱ" in keys
+
+
+@pytest.mark.asyncio
+async def test_app_quit_actually_fires_on_korean_jamo():
+    """`pilot.press('ㅂ')` 이 실제로 App.action_quit 을 발사 — 사용자 보고
+    회귀 (q 만 작동, ㅂ 안 됨) 가 다시 발생하지 않도록 통합 검증."""
+    from whooing_tui.app import WhooingTuiApp
+
+    app = WhooingTuiApp(client=None)
+    async with app.run_test() as pilot:
+        # WhooingTuiApp.on_mount 가 client=None 케이스에서는 화면 push 안
+        # 함 — 기본 Footer/Header 만 보이는 상태. 이 상태에서도 BINDINGS 의
+        # quit 가 매칭돼야 한다.
+        await pilot.press("ㅂ")
+        # quit action 이 발사되면 app 의 _exit flag 가 set — return_code 가
+        # 0 으로 설정됨. textual 8.x 의 정확한 종료 표면은 환경 의존이라
+        # exit 만 확인해도 회귀 방지에 충분.
+        await pilot.pause()
+        assert app._return_value is None and app._exit, (
+            "ㅂ key did not trigger app quit — IME regression"
+        )

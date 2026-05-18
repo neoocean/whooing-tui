@@ -16,14 +16,16 @@ from textual.containers import Container, Horizontal
 from textual.screen import ModalScreen
 from textual.widgets import Button, Static
 
+from whooing_tui.ime import bind_ko
+
 
 class ConfirmModal(ModalScreen[bool]):
     """기본 yes/no confirmation. 위험한 작업 (삭제 등) 에 사용."""
 
     BINDINGS = [
         Binding("escape", "no", "No"),
-        Binding("y", "yes", "Yes"),
-        Binding("n", "no", "No"),
+        *bind_ko("y", "yes", "Yes", priority=True),
+        *bind_ko("n", "no", "No", priority=True),
     ]
 
     DEFAULT_CSS = """
