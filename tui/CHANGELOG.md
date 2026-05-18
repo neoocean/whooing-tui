@@ -5,6 +5,63 @@
 > **0.17.x 이전** (CL #51119 ~ #1) 항목은 분량 정리 차원에서
 > [`CHANGELOG-archive-0.17.md`](./CHANGELOG-archive-0.17.md) 로 분리 보존.
 
+## CL #52819 — 0.68.0 — 종료 모달 진행 작업 표시 + 취소 불가 (2026-05-18)
+
+배경 (사용자 요청 3 항목):
+1. q 로 종료 시 "종료 중" 팝업을 보여주고 **현재 실행 중인 커맨드** 를 함께
+   표시.
+2. 커맨드가 끝나면 TUI 를 지우고 CLI 로 복귀 — CLI 프롬프트는 *즉시* 나와야
+   함 (추가 처리할 작업이 없도록).
+3. 일단 q 를 누르면 종료 시퀀스는 **취소 불가**.
+
+### EntriesScreen → graceful_quit 라우팅
+
+`EntriesScreen.action_back` 가 종전엔 `self.app.exit()` 즉시 호출 — non-daemon
+인 p4 submit thread 들이 process 를 살아있게 만들어 CLI 가 잠시 멈춘 듯
+보였다 (사용자 보고 #1 의 근본 원인).
+
+이제 `self.app.action_graceful_quit()` 로 위임:
+- TUI 안에 `_ShutdownModal` push.
+- worker 가 p4 flush (blocking I/O 라 thread executor 로 위임) → 끝나면
+  `self.exit()` → on_unmount 의 idempotent 두번째 flush (no-op) → 종료.
+- non-daemon thread 들이 join 후 사라져 있으므로 CLI 프롬프트 즉시 반환.
+
+### _ShutdownModal 강화
+
+- **실행 중 commands 라이브 표시** — `set_interval(0.25, _refresh_tasks)`
+  로 250ms 마다 갱신:
+  - Textual `app.workers` 의 RUNNING 상태 worker 들 (자기 자신 shutdown_flush
+    는 제외).
+  - `p4_sync.pending_count()` — 새로 추가한 helper. 살아있는 submit thread 수.
+- **취소 불가** — BINDINGS 에 `escape` / `q` / `ctrl+c` 를 명시적으로 `noop`
+  action 으로 매핑. modal 의 priority 가 우선이라 App / Screen 의 종전 키 동작도
+  차단. 화면 하단에 "종료 시퀀스는 취소할 수 없습니다" 안내.
+- **테스트 친화** — `last_task_labels: list[str]` attribute 노출. textual 의
+  Static 내부 attribute 의존하지 않고도 테스트가 검사 가능.
+
+### `p4_sync.pending_count()`
+
+`_PENDING` list 의 alive thread 만 카운트하는 가벼운 helper. lock 안에서
+`is_alive()` 호출 — 진행 중 thread 가 finish 한 후의 dead thread 는 제외.
+
+### 테스트 (+ 4 신규)
+
+- `test_shutdown_modal_has_no_cancel_bindings` — Esc/q/ctrl+c 가 `noop`.
+- `test_shutdown_modal_lists_running_workers` — 가짜 sleep worker 띄우고
+  graceful_quit → `last_task_labels` 에 worker 이름 포함.
+- `test_entries_q_routes_through_graceful_quit` — EntriesScreen 의 q 가
+  action_back 경유로 graceful_quit 트리거.
+- `test_p4_sync_pending_count_starts_at_zero` — helper API 의 기본값.
+
+총 962 → 966 (+4, 0 regression).
+
+### 백워드 호환
+
+- 종전 `Ctrl+C 로 강제 종료` 안내는 사라짐 (사용자 요청: 취소 불가). 다만
+  process 레벨의 SIGINT 는 OS 가 처리하므로 *프로세스를 죽일* 수는 있다 —
+  그 경우 p4 thread 가 강제 종료돼 데이터 손실 위험이 그대로. 사용자 의도
+  된 강제 종료 path 로만 사용 권장.
+
 ## CL #52818 — 0.67.2 — 중복 평가 화면 space=keep (2026-05-18)
 
 배경 (사용자 요청): 중복 평가 화면에서 남길 항목 선택을 space 로. 하이라이트

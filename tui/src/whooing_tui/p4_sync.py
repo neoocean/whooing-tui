@@ -400,6 +400,15 @@ def flush_on_exit(
         log.debug("flush_on_exit submit failed (silent)", exc_info=True)
 
 
+def pending_count() -> int:
+    """현재 진행 중인 p4 submit thread 의 개수.
+
+    CL #52819+ — 종료 모달이 "남은 P4 submit N건" 처럼 라이브 표시할 때 사용.
+    """
+    with _PENDING_LOCK:
+        return sum(1 for t in _PENDING if t.is_alive())
+
+
 def wait_for_pending(timeout_per_thread: float = 30.0) -> None:
     """모든 활성 submit 스레드를 join — App 종료 직전에 호출.
 

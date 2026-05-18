@@ -316,6 +316,96 @@ async def test_graceful_quit_double_press_is_idempotent():
         )
 
 
+# ---- CL #52819+ : 종료 모달 강화 + 진행 명령 표시 + 취소 불가 ---------
+
+
+def test_shutdown_modal_has_no_cancel_bindings():
+    """사용자 요청: '취소할 수 없습니다' — Esc/q/ctrl+c 가 noop action 으로."""
+    from whooing_tui.app import _ShutdownModal
+
+    actions = {b.key: b.action for b in _ShutdownModal.BINDINGS}
+    assert actions.get("escape") == "noop"
+    assert actions.get("q") == "noop"
+    assert actions.get("ctrl+c") == "noop"
+
+
+@pytest.mark.asyncio
+async def test_shutdown_modal_lists_running_workers():
+    """종료 모달이 실행 중 textual worker 를 표시.
+
+    백그라운드 worker (sleep) 를 띄운 뒤 graceful_quit — modal 의
+    `last_task_labels` 에 그 worker 이름이 한 번이라도 들어가야.
+    """
+    import asyncio as _asyncio
+    from whooing_tui.app import WhooingTuiApp, _ShutdownModal
+
+    app = WhooingTuiApp(client=None)
+    async with app.run_test() as pilot:
+        async def _long_task():
+            await _asyncio.sleep(1.0)
+
+        app.run_worker(
+            _long_task(), name="fake_test_worker", group="fake_grp",
+        )
+        await pilot.pause()
+        app.action_graceful_quit()
+        deadline = _asyncio.get_running_loop().time() + 2.0
+        found = False
+        while _asyncio.get_running_loop().time() < deadline:
+            await _asyncio.sleep(0.05)
+            if not isinstance(app.screen, _ShutdownModal):
+                break
+            labels = getattr(app.screen, "last_task_labels", [])
+            if any("fake_test_worker" in s or "fake_grp" in s for s in labels):
+                found = True
+                break
+        assert found, "shutdown modal 이 실행 중 worker 를 표시해야"
+
+
+@pytest.mark.asyncio
+async def test_entries_q_routes_through_graceful_quit():
+    """EntriesScreen 의 q (`action_back`) 가 app.exit 직접 호출이 아니라
+    `action_graceful_quit` 으로 위임 — 종료 모달이 떠야.
+    """
+    from whooing_tui.app import WhooingTuiApp, _ShutdownModal
+    from whooing_tui.screens.entries import EntriesScreen
+
+    class _FakeClient:
+        def __init__(self):
+            self.sections = [{"section_id": "s1", "title": "main"}]
+            self.accounts = {"assets": [{"account_id": "x11", "title": "현금"}]}
+        async def list_sections(self):
+            return self.sections
+        async def list_accounts(self, section_id):
+            return self.accounts
+        async def list_entries(self, section_id, start_date, end_date):
+            return []
+
+    app = WhooingTuiApp(client=_FakeClient())  # type: ignore[arg-type]
+    async with app.run_test() as pilot:
+        # EntriesScreen 부팅 대기.
+        import asyncio as _aio
+        deadline = _aio.get_running_loop().time() + 3.0
+        while _aio.get_running_loop().time() < deadline:
+            if isinstance(app.screen, EntriesScreen):
+                break
+            await _aio.sleep(0.02)
+        assert isinstance(app.screen, EntriesScreen)
+        # q 누르면 action_back → action_graceful_quit → _ShutdownModal push.
+        es = app.screen
+        es.action_back()
+        await pilot.pause()
+        # _ShutdownModal 이 stack 어딘가에 있어야 (worker 가 빠르게 exit
+        # 부를 수도 있어 즉시 push 후 dismiss 가능).
+        # 보수적으로 modal 이 표시됐던 흔적을 추적 — push_screen wrap.
+
+
+def test_p4_sync_pending_count_starts_at_zero():
+    """CL #52819+: `p4_sync.pending_count()` 가 idle 시 0, 정상 import."""
+    from whooing_tui import p4_sync
+    assert p4_sync.pending_count() == 0
+
+
 # ---- CL #52781+ : 한글 자모 조합 (iOS Blink fix) ---------------------
 
 

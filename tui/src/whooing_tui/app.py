@@ -42,13 +42,28 @@ _CSS_PATH = Path(__file__).resolve().parent / "theming.tcss"
 
 
 class _ShutdownModal(ModalScreen[None]):
-    """CL #52761+: 종료 중 진행 모달 — q 키 누른 직후, P4 flush + sync 작업
-    이 끝날 때까지 표시.
+    """CL #52761+ (CL #52819+ live commands list): 종료 중 진행 모달.
 
-    종전엔 q → 즉시 exit → unmount 단계의 `flush_on_exit` 동안 cli 가
-    응답 없음 상태로 보임 (사용자가 ctrl+c 로 중단 시도 → 작업 손실).
-    이제 TUI 안에서 모달로 진행 → 끝나면 자동 exit.
+    q 키 누른 직후 push — P4 flush + 진행 중 worker 들이 끝날 때까지 표시.
+    종전엔 q → 즉시 exit → unmount 단계의 `flush_on_exit` 동안 cli 가 응답
+    없음 상태. 이제 TUI 안에서 모달로 진행, 끝나면 자동 exit.
+
+    CL #52819+ 사용자 요청:
+    - 종료 중 *현재 실행 중인 커맨드* 를 함께 표시 (Textual worker + p4
+      submit thread). 250ms 마다 갱신.
+    - 종료 시퀀스는 **취소 불가** — Esc / q / ctrl+c 모두 무시. (사용자
+      의도된 ctrl+c 강제 종료 path 는 App 의 ctrl+c → action_quit 이 별도
+      처리하지만 본 모달 위에서는 모달의 binding 이 우선이라 silent.)
+    - 끝나면 즉시 exit → CLI 프롬프트 즉시 반환 (p4 thread 들이 join 되어
+      non-daemon 이 남아있지 않게).
     """
+
+    # 명시 BINDINGS — Esc / q / ctrl+c 모두 noop (사용자 요청: 취소 불가).
+    BINDINGS = [
+        Binding("escape", "noop", "", show=False, priority=True),
+        Binding("q", "noop", "", show=False, priority=True),
+        Binding("ctrl+c", "noop", "", show=False, priority=True),
+    ]
 
     DEFAULT_CSS = """
     _ShutdownModal {
@@ -56,9 +71,10 @@ class _ShutdownModal(ModalScreen[None]):
     }
     #shutdown_box {
         width: 95%;
-        max-width: 60;
-        min-width: 30;
+        max-width: 70;
+        min-width: 40;
         height: auto;
+        max-height: 80%;
         padding: 1 2;
         border: thick $primary;
         background: $surface;
@@ -68,9 +84,19 @@ class _ShutdownModal(ModalScreen[None]):
         content-align: center middle;
         color: $primary;
     }
-    #shutdown_status {
+    #shutdown_intro {
+        padding: 1 0 0 0;
+        height: auto;
+        color: $text-muted;
+    }
+    #shutdown_tasks {
         padding: 1 0;
         height: auto;
+    }
+    #shutdown_foot {
+        height: 1;
+        content-align: center middle;
+        color: $text-muted;
     }
     """
 
@@ -78,10 +104,66 @@ class _ShutdownModal(ModalScreen[None]):
         with Vertical(id="shutdown_box"):
             yield Static("[bold]종료 중…[/bold]", id="shutdown_title")
             yield Static(
-                "P4 sync 와 보류 작업 완료를 기다리는 중입니다.\n"
-                "(Ctrl+C 로 강제 종료 — 진행 중 작업이 누락될 수 있음)",
-                id="shutdown_status",
+                "남은 작업이 끝나면 자동으로 종료합니다.",
+                id="shutdown_intro",
             )
+            yield Static("(작업 목록 수집 중…)", id="shutdown_tasks")
+            yield Static(
+                "[dim]종료 시퀀스는 취소할 수 없습니다.[/dim]",
+                id="shutdown_foot",
+            )
+
+    def on_mount(self) -> None:
+        """250ms 마다 작업 목록 refresh — Textual worker + p4 thread."""
+        # 테스트가 검사할 수 있도록 마지막 라벨들을 attribute 로 노출.
+        self.last_task_labels: list[str] = []
+        self._refresh_tasks()
+        self.set_interval(0.25, self._refresh_tasks)
+
+    def action_noop(self) -> None:
+        """취소 시도 무시 — 사용자 요청: 종료 시퀀스 시작되면 취소 불가."""
+        return
+
+    def _refresh_tasks(self) -> None:
+        """현재 실행 중인 commands 를 모아 `#shutdown_tasks` 갱신."""
+        lines: list[str] = []
+
+        # 1) Textual workers — RUNNING 상태만. 본 모달의 shutdown_flush 는
+        #    제외 (자기 자신 표시는 사용자에게 무의미).
+        try:
+            from textual.worker import WorkerState
+            for w in list(self.app.workers):
+                if w.state != WorkerState.RUNNING:
+                    continue
+                if w.name == "shutdown_flush":
+                    continue
+                label = w.name or (w.group or "worker")
+                if w.group and w.group != w.name:
+                    label = f"{w.group}/{label}"
+                lines.append(f"  • {label}")
+        except Exception:  # pragma: no cover — worker API 변경 보호
+            log.debug("worker enumeration failed", exc_info=True)
+
+        # 2) P4 submit threads — pending_count.
+        try:
+            from whooing_tui import p4_sync
+            n_p4 = p4_sync.pending_count()
+            if n_p4 > 0:
+                lines.append(f"  • P4 submit {n_p4}건 대기 중")
+        except Exception:  # pragma: no cover
+            log.debug("p4 pending count failed", exc_info=True)
+
+        # 테스트 친화 — 마지막 라벨 list 노출.
+        self.last_task_labels = [s.strip("• ").strip() for s in lines]
+
+        try:
+            tasks = self.query_one("#shutdown_tasks", Static)
+            if lines:
+                tasks.update("실행 중:\n" + "\n".join(lines))
+            else:
+                tasks.update("[dim]마지막 정리 중…[/dim]")
+        except Exception:  # pragma: no cover
+            pass
 
 
 class WhooingTuiApp(App):

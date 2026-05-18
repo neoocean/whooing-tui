@@ -644,8 +644,14 @@ class EntriesScreen(MenuBarMixin, Screen):
     # ---- actions -------------------------------------------------------
 
     def action_back(self) -> None:
-        """초기 화면이라 pop 대신 앱 종료."""
-        self.app.exit()
+        """초기 화면이라 pop 대신 앱 종료.
+
+        CL #52819+: 즉시 `app.exit()` 대신 `action_graceful_quit` 로 위임 —
+        종료 모달 + 진행 중 commands 표시 + p4 flush 완료 보장. 종전엔 q
+        직후 TUI 가 사라지고 CLI 가 멈춘 듯 보였다 (non-daemon p4 thread
+        들이 process 를 살아있게 함).
+        """
+        self.app.action_graceful_quit()
 
     def action_help(self) -> None:
         """현재 화면의 BINDINGS 를 모달로 보여줌."""
