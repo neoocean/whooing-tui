@@ -5,6 +5,58 @@
 > **0.17.x 이전** (CL #51119 ~ #1) 항목은 분량 정리 차원에서
 > [`CHANGELOG-archive-0.17.md`](./CHANGELOG-archive-0.17.md) 로 분리 보존.
 
+## CL #52846 — 0.71.0 — `mcp/` 패키지 제거 (archived → 삭제) (2026-05-18)
+
+배경 (사용자 요청): "mcp 모듈이 필요없다면 제거해주세요." 직전 CL #52845
+의 답: 런타임 import 0건 → 안전하게 제거 가능. 본 CL 에서 실행.
+
+### 제거 범위
+
+- `mcp/` 디렉토리 전체 (89 파일) 를 `p4 delete`:
+  - `mcp/src/whooing_mcp/` (서버 + 14 도구 + parsers).
+  - `mcp/tests/` (회귀 검증 테스트들).
+  - `mcp/examples/`, `mcp/tools/`, `mcp/bin/`, `mcp/.github/`.
+  - 최상위 `mcp/{Makefile, CHANGELOG.md, README.md, DESIGN.md,
+    pyproject.toml, whooing-mcp.toml.example, .env.example}`.
+
+P4 history 의 #52845 이전으로 sync 하면 전체 복구 가능. GitHub 미러는
+정상 push (이전 commit 의 mcp/ 트리도 history 에 보존).
+
+### Makefile 변경
+
+- `install` 에서 `pip install -e 'mcp[dev]'` 제거. 추가로 *이전 환경
+  cleanup* — `pip uninstall -y -q whooing-mcp-server` 한 줄 (이미 없으면
+  silent). 신규 호스트는 no-op.
+- `test`, `test-fast`, `help` 의 `test-mcp` 의존 제거.
+- `tools` 타겟 (whooing_mcp.server.build_mcp 의 등록 도구 list) 제거 —
+  whooing_mcp 가 없으므로 의미 X.
+- 헤더 주석 + Usage 안내를 "두 패키지 (core/, tui/)" 로 갱신.
+
+### 문서 변경
+
+- `README.md` — 패키지 표를 3 → 2 줄, 디렉토리 트리에서 `mcp/` 제거,
+  "공식 후잉 MCP 서버 위임은 그대로" 안내 한 단락.
+- `CLAUDE.md` — 모듈 맵에서 `mcp/` 제거, 복구 경로 안내.
+
+### 유지되는 것
+
+- *공식 후잉 MCP 서버* (`https://whooing.com/mcp`) 위임 — `tui/src/
+  whooing_tui/official_mcp.py`. archived wrapper 와는 별개 코드 + 별개
+  server. 보고서·예산·목표 위임은 그대로 동작.
+- 본래 wrapper 와 코드 중복이었던 라이브러리들 (`auth.py`, `dates.py`,
+  `errors.py`, `client.py` 의 read-only 부분) — TUI 본문에 그대로 살아있음.
+
+### 테스트
+
+기존 1004 통과 — mcp 의존이 한 곳도 없었으므로 regression 0. 테스트
+숫자 변동 없음 (`make test-mcp` 호출 자체가 사라짐).
+
+### Backward compat
+
+- `whooing_mcp` import 는 이제 ModuleNotFoundError — 의도적. 본 코드베이스
+  내 import 0건 확인 후 진행. 외부 도구 (claude desktop 등) 가 wrapper
+  를 직접 띄우던 경우는 *이전부터 archived* — 본 CL 에 영향 없음.
+
 ## CL #52841 — 0.70.1 — Playwright 브라우저 자동 설치 + 명세서 import 팝업화 (2026-05-18)
 
 배경 (사용자 보고):

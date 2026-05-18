@@ -1,21 +1,24 @@
 ﻿# whooing-tui (monorepo)
 
 후잉 가계부([whooing.com](https://whooing.com)) 의 사용자 도구를 모아 둔 monorepo.
-세 개의 독립 설치 가능 Python 패키지로 구성됩니다:
+두 개의 독립 설치 가능 Python 패키지로 구성됩니다:
 
-| 디렉터리 | 패키지 | 버전 | 역할 |
-|---|---|---|---|
-| [`core/`](core/) | `whooing-core` | 0.1.0 | 어댑터 / SQLite 스키마 (v8) / 첨부 storage / 미리보기 / **entries 캐시** — 라이브러리. TUI 가 import. |
-| [`tui/`](tui/) | `whooing-tui` | **0.63.0** | Textual 기반 터미널 UI. statement import wizard / entry annotator / attachment browser / dashboard / 보고서 (공식 후잉 MCP 위임) / Ctrl/Shift multi-select / iPhone Blink 한글 자모 조합. 사용자 가시 layer. |
-| [`mcp/`](mcp/) | `whooing-mcp-server-wrapper` | 0.2.1 (archived) | **archived 2026-05-10**. LLM 자동화용 MCP 서버 — historical 참조용. 본 monorepo 의 다른 코드는 더 이상 import 안 함 (CL #51008 의 `mcp_bridge.py` 제거 + CL #52755 의 자체 `official_mcp.py` 도입). |
+| 디렉터리 | 패키지 | 역할 |
+|---|---|---|
+| [`core/`](core/) | `whooing-core` | 어댑터 / SQLite 스키마 (v8) / 첨부 storage / 미리보기 / entries 캐시 / 중복 평가 — 라이브러리. TUI 가 import. |
+| [`tui/`](tui/) | `whooing-tui` | Textual 기반 터미널 UI. statement import wizard / entry annotator / attachment browser / dashboard / 보고서 (공식 후잉 MCP 위임) / Ctrl/Shift multi-select / iPhone Blink 한글 자모 조합. 사용자 가시 layer. |
+
+> **mcp/ 패키지는 CL #52846 (0.71.0) 에서 제거.** archived 2026-05-10 이후
+> 본 코드베이스에서 한 번도 import 되지 않아 보존 가치가 사라짐. P4
+> history 의 #52845 이전으로 sync 하면 복구 가능. *공식 후잉 MCP 서버*
+> (`https://whooing.com/mcp`) 위임은 그대로 — `tui/src/whooing_tui/
+> official_mcp.py` 가 직접 JSON-RPC 호출.
 
 ## 목적
 
 후잉의 외부 입력 (카드사 명세서) 을 정형화 + 첨부 + 메모/태그를 SQLite 에
 보관하는 user-facing 도구. **whooing-tui** 가 db + attachments owner —
-사용자가 직접 입력/편집. wrapper 는 archived 라 더 이상 db 를 SELECT 하는
-외부 consumer 는 없으나, `open_ro()` API 와 read-only 분리 정책은
-미래 도구의 합류 가능성을 위해 유지.
+사용자가 직접 입력/편집.
 
 ## 빠른 시작
 
@@ -59,10 +62,7 @@ whooing-tui/                  ← 본 monorepo (이 README)
 │   ├── pyproject.toml        whooing-core 를 in-tree 의존성으로 명시
 │   ├── src/whooing_tui/
 │   └── tests/
-├── mcp/                      ← archived 2026-05-10 (whooing-mcp-server-wrapper)
-│   ├── pyproject.toml        MCP 서버 + 14 도구 (parsers/sms, tools/audit 등)
-│   ├── src/whooing_mcp/
-│   └── tests/
+├── docs/                     ← 시나리오 가이드 + 유지보수 백로그
 ├── whooing.py                ← `python whooing.py` 진입점 (sys.path 셋업
 │                                후 whooing_tui.cli.main 호출)
 ├── README.md                 이 파일
@@ -75,11 +75,10 @@ whooing-tui/                  ← 본 monorepo (이 README)
 ## 개발
 
 ```bash
-make install     # 모든 패키지 editable install
-make test        # core / tui / mcp 모두 pytest
+make install     # core + tui editable install + playwright chromium
+make test        # core + tui pytest
 make test-core   # core 만
 make test-tui    # tui 만 (가장 자주)
-make test-mcp    # mcp 만 (archived — 회귀 검증 용도)
 make coverage    # tui 의 라인 커버리지
 make smoke-cli   # whooing-tui 콘솔 진입점 검증
 make run         # TUI
@@ -88,13 +87,10 @@ make clean
 
 ## 관련 프로젝트
 
-- [`mcp/`](mcp/) — **archived 2026-05-10**. wrapper 패키지의 *코드* 는
-  monorepo 안에 보존되어 historical 참조 + 회귀 검증용. 신규 import 는
-  하지 않는다.
-- 단, *공식 후잉 MCP 서버* (`https://whooing.com/mcp`) 는 TUI 의
-  보고서·예산·목표 위임 경로에서 **현역으로 사용 중** — `tui/src/
-  whooing_tui/official_mcp.py` 가 JSON-RPC 클라이언트. 이는 위 wrapper
-  와는 별개의 코드 + 별개의 server.
+*공식 후잉 MCP 서버* (`https://whooing.com/mcp`) 는 TUI 의 보고서·예산·
+목표 위임 경로에서 사용 중 — `tui/src/whooing_tui/official_mcp.py` 가
+JSON-RPC 클라이언트. (CL #52846 에서 archived `mcp/` 패키지 제거 후에도
+해당 위임은 그대로.)
 
 `docs/` 디렉토리:
 - [`docs/README.md`](docs/README.md) — 시나리오 카탈로그.

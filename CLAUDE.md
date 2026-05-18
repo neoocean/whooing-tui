@@ -15,7 +15,8 @@ make run                         # 동등 (Makefile 단축)
 ```
 
 설치 / 환경:
-- `make install` — `.venv/` 생성 + `core/`, `tui/`, `mcp/` editable.
+- `make install` — `.venv/` 생성 + `core/`, `tui/` editable + playwright
+  chromium 자동. (CL #52846: archived `mcp/` 는 monorepo 에서 제거됨.)
 - `.env` 에 `WHOOING_AI_TOKEN` 필요. `~/.config/whooing/.env` 도 OK.
 - 시작 / 종료 동작 정책은 [`docs/scenarios/09-startup-shutdown.md`](docs/scenarios/09-startup-shutdown.md).
 
@@ -65,7 +66,9 @@ whooing-tui/                     # 본 monorepo 루트
     └── MAINTAINABILITY-REVIEW.md  # 백로그 (적용 진행 중)
 ```
 
-`mcp/` 는 archived 2026-05-10 — 작업 대상 X.
+CL #52846 (0.71.0) 부터 archived `mcp/` 패키지 제거됨 — 코드베이스에 두
+패키지 (core / tui) 만 남음. mcp wrapper 가 필요하면 P4 history #52845
+이전으로 sync.
 
 ## 핵심 클래스 / 화면
 
