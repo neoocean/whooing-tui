@@ -828,3 +828,132 @@ async def test_context_menu_includes_batch_tag_when_multiselect_active():
         assert isinstance(app.screen, MenuPopup)
         action_ids = [it.action_id for it in app.screen.spec.items]
         assert "batch_tag" in action_ids
+
+
+# ---- CL #52771+ : Home / End / PgUp / PgDn navigation -----------------
+
+
+def test_home_end_pageup_pagedown_bindings_registered():
+    """4개 키가 BINDINGS 에 등록 — priority=True 라 default DataTable
+    navigation 이 가려진 환경에서도 발화."""
+    keys = {b.key: b.action for b in EntriesScreen.BINDINGS}
+    assert keys["home"] == "row_home"
+    assert keys["end"] == "row_end"
+    assert keys["pageup"] == "row_pageup"
+    assert keys["pagedown"] == "row_pagedown"
+
+
+@pytest.mark.asyncio
+async def test_home_moves_to_first_entry_row():
+    """Home → 첫 실거래 row. sentinel 보이는 상태라면 sentinel(0) 가 아닌
+    첫 실거래 (1) 로."""
+    from textual.widgets import DataTable
+    # entries 3개로 — 마지막 row 0,1,2.
+    entries = [
+        {"entry_id": f"e{i}", "entry_date": f"2026050{i}",
+         "money": 1000 * i, "l_account_id": "x20", "r_account_id": "x11",
+         "item": f"item{i}"}
+        for i in range(1, 4)
+    ]
+    fake = FakeClient(entries=entries)
+    app = WhooingTuiApp(client=fake)  # type: ignore[arg-type]
+    async with app.run_test() as pilot:
+        es = await _open_entries(app, pilot)
+        table = es.query_one("#entries-table", DataTable)
+        # 사용자가 row 2 (가운데) 에 있을 때 Home 누름.
+        table.move_cursor(row=2, animate=False)
+        await pilot.pause()
+        es.action_row_home()
+        await pilot.pause()
+        # sentinel 숨김 상태 (default) — 첫 실거래는 row 0.
+        assert table.cursor_row == 0
+
+
+@pytest.mark.asyncio
+async def test_end_moves_to_last_entry_row():
+    """End → 마지막 실거래 row."""
+    from textual.widgets import DataTable
+    entries = [
+        {"entry_id": f"e{i}", "entry_date": f"2026050{i}",
+         "money": 1000 * i, "l_account_id": "x20", "r_account_id": "x11"}
+        for i in range(1, 6)  # 5건
+    ]
+    fake = FakeClient(entries=entries)
+    app = WhooingTuiApp(client=fake)  # type: ignore[arg-type]
+    async with app.run_test() as pilot:
+        es = await _open_entries(app, pilot)
+        table = es.query_one("#entries-table", DataTable)
+        table.move_cursor(row=0, animate=False)
+        await pilot.pause()
+        es.action_row_end()
+        await pilot.pause()
+        # 5건 → row index 0~4 → end = 4.
+        assert table.cursor_row == 4
+
+
+@pytest.mark.asyncio
+async def test_pageup_clamps_to_first_entry_row():
+    """PgUp 이 첫 실거래 row 보다 위로 못 감."""
+    from textual.widgets import DataTable
+    entries = [
+        {"entry_id": f"e{i}", "entry_date": "20260518",
+         "money": i, "l_account_id": "x20", "r_account_id": "x11"}
+        for i in range(1, 4)
+    ]
+    fake = FakeClient(entries=entries)
+    app = WhooingTuiApp(client=fake)  # type: ignore[arg-type]
+    async with app.run_test() as pilot:
+        es = await _open_entries(app, pilot)
+        table = es.query_one("#entries-table", DataTable)
+        table.move_cursor(row=1, animate=False)
+        await pilot.pause()
+        # _page_step 이 보통 화면 크기 (테스트 환경에서 작아도 1+)
+        es.action_row_pageup()
+        await pilot.pause()
+        # cursor 가 0 이하로 안 감.
+        assert table.cursor_row >= 0
+        assert table.cursor_row <= 1
+
+
+@pytest.mark.asyncio
+async def test_pagedown_clamps_to_last_entry_row():
+    """PgDn 이 마지막 실거래 row 를 넘지 않음."""
+    from textual.widgets import DataTable
+    entries = [
+        {"entry_id": f"e{i}", "entry_date": "20260518",
+         "money": i, "l_account_id": "x20", "r_account_id": "x11"}
+        for i in range(1, 4)
+    ]
+    fake = FakeClient(entries=entries)
+    app = WhooingTuiApp(client=fake)  # type: ignore[arg-type]
+    async with app.run_test() as pilot:
+        es = await _open_entries(app, pilot)
+        table = es.query_one("#entries-table", DataTable)
+        table.move_cursor(row=0, animate=False)
+        await pilot.pause()
+        # 두 번 PgDn — entries 가 3건이라도 max 2 에 clamp.
+        es.action_row_pagedown()
+        es.action_row_pagedown()
+        await pilot.pause()
+        assert table.cursor_row == 2  # 마지막 entry index
+
+
+def test_first_last_entry_row_with_sentinel():
+    """sentinel 보이면 첫 entry 는 row 1, 마지막은 row N. 숨김이면 0 / N-1."""
+    fake = FakeClient(entries=[
+        {"entry_id": "e1", "entry_date": "20260518", "money": 1,
+         "l_account_id": "x20", "r_account_id": "x11"},
+        {"entry_id": "e2", "entry_date": "20260517", "money": 2,
+         "l_account_id": "x20", "r_account_id": "x11"},
+    ])
+    es = EntriesScreen(fake)  # type: ignore[arg-type]
+    # 직접 entries 주입 (run_test 거치지 않고 helper 단위 검증).
+    es._entries = list(fake._entries)  # type: ignore[attr-defined]
+    # sentinel 숨김 (default) — first=0, last=N-1=1
+    es._show_sentinel = False
+    assert es._first_entry_row() == 0
+    assert es._last_entry_row() == 1
+    # sentinel 노출 — first=1, last=N
+    es._show_sentinel = True
+    assert es._first_entry_row() == 1
+    assert es._last_entry_row() == 2

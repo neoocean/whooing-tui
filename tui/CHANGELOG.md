@@ -5,6 +5,72 @@
 > **0.17.x 이전** (CL #51119 ~ #1) 항목은 분량 정리 차원에서
 > [`CHANGELOG-archive-0.17.md`](./CHANGELOG-archive-0.17.md) 로 분리 보존.
 
+## CL #52771 — 0.61.0 — 거래 목록 Home/End/PgUp/PgDn (2026-05-18)
+
+배경 (사용자 요청): EntriesScreen 의 거래 목록에서 Home / End / PgUp /
+PgDn 키가 동작 안 함.
+
+### 원인
+
+textual DataTable 이 default 로 Home/End/PgUp/PgDn 을 처리하지만,
+EntriesScreen 의 `up`/`down` binding 이 `priority=True` 라 textual 의
+priority 체인에서 default DataTable navigation 이 가려진 상태. Home/End/
+PgUp/PgDn 도 같은 priority 로 명시해야 발화.
+
+### 동작
+
+| 키 | 이동 |
+|---|---|
+| **Home** | 첫 실거래 row. sentinel 보이는 상태라면 sentinel(0) 이 아닌 첫 실거래 (1) 로 — Home = "데이터의 처음" 의도와 일치 |
+| **End** | 마지막 실거래 row |
+| **PgUp** | 한 페이지 (DataTable 가시 영역 height - 1) 위. 첫 실거래 row 에 clamp |
+| **PgDn** | 한 페이지 아래. 마지막 실거래 row 에 clamp |
+
+페이지 step 은 `table.size.height - 1` (header 1 row 빼기). 위젯 size 가
+계산 안 된 환경 (테스트 등) 에서는 fallback 10.
+
+### sentinel 처리
+
+- sentinel 숨김 (default): `_first_entry_row=0`, `_last_entry_row=N-1`
+- sentinel 표시: `_first_entry_row=1` (sentinel 은 row 0), `_last_entry_row=N`
+
+Home 이 sentinel 자리로 안 가게 — 사용자가 "데이터의 시작" 을 원할 때
+sentinel 은 의미적 잡음.
+
+### 수정 파일
+
+- `tui/src/whooing_tui/screens/entries.py`
+  - BINDINGS: `home` / `end` / `pageup` / `pagedown` 4 binding 추가
+    (priority=True, show=False).
+  - 새 helpers: `_first_entry_row` / `_last_entry_row` / `_page_step`.
+  - 새 actions: `action_row_home` / `action_row_end` /
+    `action_row_pageup` / `action_row_pagedown`. 모두 `table.move_cursor
+    (row=..., animate=False)` + boundary clamp.
+- `tui/tests/test_entries_mutate.py` — 회귀 방지 +6:
+  - `test_home_end_pageup_pagedown_bindings_registered`
+  - `test_home_moves_to_first_entry_row` (5건 중 가운데서 Home)
+  - `test_end_moves_to_last_entry_row` (5건 → row 4)
+  - `test_pageup_clamps_to_first_entry_row`
+  - `test_pagedown_clamps_to_last_entry_row`
+  - `test_first_last_entry_row_with_sentinel` (sentinel on/off 분기)
+- `tui/pyproject.toml` — 0.60.1 → 0.61.0.
+- `tui/src/whooing_tui/__init__.py` — `__version__` 동기화.
+
+### 검증
+
+- **893 passed** (887 → +6 신규). 회귀 0.
+
+### 사용자 후속 확인
+
+거래 목록 위에서:
+- **Home** — 첫 거래
+- **End** — 마지막 거래
+- **PgUp / PgDn** — 한 페이지씩 (가시 영역 만큼)
+
+기존 ↑/↓ 의 sentinel 토글 동작은 그대로 유지.
+
+---
+
 ## CL #52765 — 0.60.1 — CachedWhooingClient 가 call_official_tool wrap 누락 회귀 fix (2026-05-18)
 
 배경 (사용자 보고): 보고서 화면 → "손익 요약 (이번 달)" 선택 시 본문에

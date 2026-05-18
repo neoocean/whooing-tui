@@ -200,6 +200,13 @@ class EntriesScreen(MenuBarMixin, Screen):
         # 토글까지 처리한다 (CL #51074+).
         Binding("up", "row_up", "↑", show=False, priority=True),
         Binding("down", "row_down", "↓", show=False, priority=True),
+        # CL #52771+: Home/End/PgUp/PgDn — 큰 entries 목록에서 빠른 이동.
+        # priority=True 인 up/down 이 default DataTable navigation 을 가려
+        # 같은 우선순위 keys 도 명시해야 동작.
+        Binding("home", "row_home", "Home", show=False, priority=True),
+        Binding("end", "row_end", "End", show=False, priority=True),
+        Binding("pageup", "row_pageup", "PgUp", show=False, priority=True),
+        Binding("pagedown", "row_pagedown", "PgDn", show=False, priority=True),
         Binding("question_mark", "help", "Help", show=True, priority=True, key_display="?"),
         Binding("plus", "extend_window", "+7d", show=True),
         Binding("minus", "shrink_window", "-7d", show=True),
@@ -1051,6 +1058,76 @@ class EntriesScreen(MenuBarMixin, Screen):
             return
         try:
             table.action_cursor_down()
+        except Exception:  # pragma: no cover
+            pass
+
+    # ---- CL #52771+ Home / End / PgUp / PgDn — 빠른 이동 ----------------
+
+    def _first_entry_row(self) -> int:
+        """첫 실거래의 DataTable row index. sentinel 보이면 1, 아니면 0."""
+        return 1 if self._show_sentinel else 0
+
+    def _last_entry_row(self) -> int:
+        """마지막 실거래의 row index. entries 비면 0 (또는 sentinel 1자리)."""
+        if not self._entries:
+            return 0
+        if self._show_sentinel:
+            return len(self._entries)  # row 0 sentinel + row 1..N entries
+        return len(self._entries) - 1
+
+    def _page_step(self) -> int:
+        """PgUp/PgDn 한 번에 이동할 row 수 — DataTable 의 가시 영역 높이.
+
+        textual DataTable 의 정확한 표시 row 수가 위젯 size 와 header 처리에
+        달려있어 보수적으로 가시 size.height - 1 (header) 또는 fallback 10.
+        """
+        try:
+            table = self.query_one("#entries-table", DataTable)
+            h = getattr(table.size, "height", 0) or 0
+            return max(1, h - 1)
+        except Exception:  # pragma: no cover
+            return 10
+
+    def action_row_home(self) -> None:
+        """Home — 첫 실거래 row 로. sentinel 보이는 상태라면 sentinel(0) 이 아니라
+        실 거래 첫 항목 (1) 로 — 사용자 의도와 가까움 (Home = 데이터 처음).
+        """
+        table = self.query_one("#entries-table", DataTable)
+        target = self._first_entry_row()
+        if not self._entries:
+            # 빈 list — sentinel 자리 (0) 만 의미.
+            target = 0
+        try:
+            table.move_cursor(row=target, animate=False)
+        except Exception:  # pragma: no cover
+            pass
+
+    def action_row_end(self) -> None:
+        """End — 마지막 실거래 row 로."""
+        table = self.query_one("#entries-table", DataTable)
+        target = self._last_entry_row()
+        try:
+            table.move_cursor(row=target, animate=False)
+        except Exception:  # pragma: no cover
+            pass
+
+    def action_row_pageup(self) -> None:
+        """PgUp — 한 페이지 위. 페이지 step 은 가시 영역 height."""
+        table = self.query_one("#entries-table", DataTable)
+        cur = table.cursor_row
+        target = max(self._first_entry_row(), cur - self._page_step())
+        try:
+            table.move_cursor(row=target, animate=False)
+        except Exception:  # pragma: no cover
+            pass
+
+    def action_row_pagedown(self) -> None:
+        """PgDn — 한 페이지 아래. 마지막 entry 를 넘지 않음."""
+        table = self.query_one("#entries-table", DataTable)
+        cur = table.cursor_row
+        target = min(self._last_entry_row(), cur + self._page_step())
+        try:
+            table.move_cursor(row=target, animate=False)
         except Exception:  # pragma: no cover
             pass
 
