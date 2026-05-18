@@ -183,6 +183,57 @@ async def test_eval_screen_with_different_entries_shows_not_duplicate():
 
 
 @pytest.mark.asyncio
+async def test_eval_screen_space_picks_keep_and_replaces_previous():
+    """CL #52818+ 사용자 요청: 하이라이트 row 에서 space → 그 한 항목만 keep.
+
+    keep_suggestion 은 dupes 모듈의 정책 (oldest date / lex order) 이지만,
+    test 는 *space 가 cursor 가 가리키는 row 의 entry 로 keep 을 옮긴다*
+    는 동작만 검증한다. 실제 표시 순서는 EntriesScreen 의 정렬에 의존.
+    """
+    from textual.widgets import DataTable
+
+    fake = FakeClient()
+    app = WhooingTuiApp(client=fake)  # type: ignore[arg-type]
+    async with app.run_test() as pilot:
+        es = await _open_entries(app)
+        es._selected_entry_ids.add("e1")
+        es._selected_entry_ids.add("e2")
+        es.action_evaluate_duplicates()
+        await _wait_for(
+            lambda: isinstance(app.screen, DuplicateEvalScreen),
+            timeout=3.0,
+        )
+        await pilot.pause()
+        scr = app.screen
+        assert isinstance(scr, DuplicateEvalScreen)
+        # default keep = oldest entry (둘 다 같은 날이라 entry_id 사전순 e1).
+        assert scr._keep_id == "e1"
+        # cursor 가 default keep 과 다른 row 에 오도록 위치 조정 — DataTable
+        # 의 _entries 순서는 EntriesScreen 정렬에 따라 다르다. 두 row 중
+        # _keep_id 와 다른 row 를 찾아 cursor 이동.
+        t = scr.query_one("#dupe-table", DataTable)
+        target_row = next(
+            r for r, e in enumerate(scr._entries)
+            if str(e.get("entry_id")) != scr._keep_id
+        )
+        t.move_cursor(row=target_row)
+        await pilot.pause()
+        expected_keep = str(scr._entries[t.cursor_row].get("entry_id"))
+        assert expected_keep != scr._keep_id
+        await pilot.press("space")
+        await pilot.pause()
+        assert scr._keep_id == expected_keep
+        # dedup → 새 keep 이 아닌 다른 거래 삭제.
+        deleted_expected = "e1" if expected_keep == "e2" else "e2"
+        scr._dedup_kickoff()
+        ok = await _wait_for(
+            lambda: len(fake.delete_calls) == 1, timeout=3.0,
+        )
+        assert ok
+        assert fake.delete_calls[0]["entry_id"] == deleted_expected
+
+
+@pytest.mark.asyncio
 async def test_eval_action_aborts_when_less_than_two_selected():
     fake = FakeClient()
     app = WhooingTuiApp(client=fake)  # type: ignore[arg-type]

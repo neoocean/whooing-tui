@@ -155,7 +155,13 @@ class DuplicateEvalScreen(ModalScreen[bool | None]):
         Binding("up", "cursor_up", "↑", show=False),
         Binding("down", "cursor_down", "↓", show=False),
         Binding("enter", "confirm", "Keep selected", show=True),
-        *bind_ko("k", "set_keep", "Keep", show=True),
+        # CL #52818+: 사용자 요청 — 하이라이트한 행에서 space 누르면 그
+        # 한 항목만 keep (나머지 자동 해제). `_keep_id` 가 단일 string 이라
+        # set_keep 호출 자체가 곧 "오직 이것" 의미 — 별도 toggle 없음.
+        # priority=True 로 DataTable 의 기본 space 핸들러 (cursor_type="row"
+        # 에선 거의 noop 이지만 안전망) 보다 우선.
+        Binding("space", "set_keep", "Keep this", show=True, priority=True),
+        *bind_ko("k", "set_keep", "Keep", show=False),
     ]
 
     def __init__(
@@ -188,7 +194,7 @@ class DuplicateEvalScreen(ModalScreen[bool | None]):
             yield Static("", id="dupe-reasons")
             yield Static("", id="dupe-pairs")
             yield Static(
-                "↑/↓ 로 남길 거래 선택 · Enter 로 확정 (나머지 삭제)",
+                "↑/↓ 이동 · Space (또는 k) 로 남길 거래 선택 · Enter 로 확정 (나머지 삭제)",
                 id="dupe-list-label",
             )
             yield DataTable(id="dupe-table", cursor_type="row")

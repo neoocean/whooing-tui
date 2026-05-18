@@ -5,6 +5,32 @@
 > **0.17.x 이전** (CL #51119 ~ #1) 항목은 분량 정리 차원에서
 > [`CHANGELOG-archive-0.17.md`](./CHANGELOG-archive-0.17.md) 로 분리 보존.
 
+## CL #52818 — 0.67.2 — 중복 평가 화면 space=keep (2026-05-18)
+
+배경 (사용자 요청): 중복 평가 화면에서 남길 항목 선택을 space 로. 하이라이트
+한 row 에서 space 누르면 그 *한* 항목만 keep, 나머지는 자동 해제.
+
+### 변경
+
+`screens/dupe_eval.py` BINDINGS:
+- 새 `Binding("space", "set_keep", "Keep this", show=True, priority=True)` —
+  Footer 에 안내 노출. priority=True 로 binding chain 우선.
+- 기존 `k` (bind_ko 한글 ㅏ 포함) 는 `show=False` 로 숨김 — 주력 키는 space.
+- 의미상 "오직 이 row" — `_keep_id` 가 단일 string 이라 새 값 할당이 곧
+  "나머지 해제" 효과. 별도 toggle / multi-select 로직 없음.
+
+화면 안내 라벨도 함께 갱신:
+- 이전: `↑/↓ 로 남길 거래 선택 · Enter 로 확정`.
+- 이후: `↑/↓ 이동 · Space (또는 k) 로 남길 거래 선택 · Enter 로 확정`.
+
+### 회귀 테스트
+
+`test_eval_screen_space_picks_keep_and_replaces_previous` — DataTable 의
+실제 표시 순서에 의존하지 않도록 cursor 를 `_keep_id` 와 다른 row 로 명시
+이동 후 space 누름, `_keep_id` 가 그 row 의 entry_id 로 바뀌는지 검증.
+
+총 961 → 962 (+1, 0 regression).
+
 ## CL #52816 — 0.67.1 — HelpModal Esc crash 회귀 수정 (2026-05-18)
 
 배경 (사용자 traceback 제보):
