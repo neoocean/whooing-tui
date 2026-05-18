@@ -5,6 +5,67 @@
 > **0.17.x 이전** (CL #51119 ~ #1) 항목은 분량 정리 차원에서
 > [`CHANGELOG-archive-0.17.md`](./CHANGELOG-archive-0.17.md) 로 분리 보존.
 
+## CL #52761 — 0.59.0 — q 종료 시 진행 모달 + TUI 안에서 P4 flush 완료 (2026-05-18)
+
+배경 (사용자 보고): q 키 종료 시 즉시 cli 로 돌아가는데 그 시점에 cli
+가 잠시 응답 없는 상태 (P4 flush 진행 중). 사용자가 그것을 멈춤이라
+오인하고 ctrl+c 로 중단 시도 → 작업 누락.
+
+### 동작 변경
+
+종전:
+```
+q 누름 → action_quit → 즉시 exit → unmount → flush_on_exit (blocking)
+                                                ↑ cli 응답 없는 구간
+```
+
+신규:
+```
+q 누름 → action_graceful_quit → _ShutdownModal push (즉시 보임)
+        → _shutdown_worker (thread executor 로 flush_on_exit)
+        → 완료 시 self.exit() → unmount → flush_on_exit (idempotent no-op)
+```
+
+사용자에게 TUI 안에서 "종료 중 — P4 sync 와 보류 작업 완료를 기다리는
+중입니다. (Ctrl+C 로 강제 종료 — 진행 중 작업이 누락될 수 있음)" 모달 표시.
+flush 가 끝나면 자동으로 cli 로 복귀.
+
+`ctrl+c` 는 종전 `action_quit` 으로 그대로 — 사용자 의도된 강제 종료 path.
+
+### 수정 파일
+
+- `tui/src/whooing_tui/app.py`
+  - imports: `work`, `Vertical`, `ModalScreen`, `Static`.
+  - 새 `_ShutdownModal(ModalScreen[None])` — 종료 중 모달.
+  - BINDINGS: `q` / `ㅂ` 의 action `quit` → `graceful_quit`. ctrl+c 는 유지.
+  - 새 `action_graceful_quit` — modal push + worker 시작 + 중복 push 회피.
+  - 새 `_shutdown_worker` (`@work(exclusive=True, group="shutdown")`) —
+    `run_in_executor` 로 blocking flush 를 main loop 밖에서 실행 후 `self.exit()`.
+  - `on_unmount` 의 `flush_on_exit` 는 그대로 — graceful 경로의 두 번째
+    호출은 빈 `_PENDING` 이라 idempotent no-op, 강제 종료 path 의 안전망.
+- `tui/tests/test_ime.py` — 회귀 방지 +4:
+  - `test_q_binding_action_is_graceful_quit_not_quit`
+  - `test_shutdown_modal_class_exists`
+  - `test_graceful_quit_pushes_shutdown_modal`
+  - `test_graceful_quit_double_press_is_idempotent`
+- `tui/pyproject.toml` — 0.58.0 → 0.59.0.
+- `tui/src/whooing_tui/__init__.py` — `__version__` 동기화.
+
+### 검증
+
+- **880 passed** (876 → +4 신규). 회귀 0.
+
+### 사용자 후속 확인
+
+q (또는 ㅂ) 누르면:
+1. **TUI 안 모달** — "종료 중…" + 진행 안내 즉시 표시.
+2. 모달이 떠 있는 동안 P4 submit 작업 완료.
+3. 작업 끝나면 자동으로 cli 복귀 — "응답 없음" 구간 없음.
+
+강제 종료 원하면 **Ctrl+C** (cli 가 즉시 종료, 작업 일부 누락 가능).
+
+---
+
 ## CL #52759 — 0.58.0 — 메뉴바 Alt 키 진입 + 마우스 클릭 (2026-05-18)
 
 배경 (사용자 요청): 풀다운 메뉴를 F10 외에 Alt / Option 키로도 열고

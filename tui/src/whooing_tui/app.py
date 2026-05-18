@@ -19,9 +19,12 @@ import sys
 from pathlib import Path
 from typing import Optional
 
+from textual import work
 from textual.app import App, ComposeResult
 from textual.binding import Binding
-from textual.widgets import Footer, Header
+from textual.containers import Vertical
+from textual.screen import ModalScreen
+from textual.widgets import Footer, Header, Static
 
 from whooing_tui import __version__
 from whooing_tui.auth import load_auth_from_env
@@ -38,6 +41,49 @@ log = logging.getLogger(__name__)
 _CSS_PATH = Path(__file__).resolve().parent / "theming.tcss"
 
 
+class _ShutdownModal(ModalScreen[None]):
+    """CL #52761+: 종료 중 진행 모달 — q 키 누른 직후, P4 flush + sync 작업
+    이 끝날 때까지 표시.
+
+    종전엔 q → 즉시 exit → unmount 단계의 `flush_on_exit` 동안 cli 가
+    응답 없음 상태로 보임 (사용자가 ctrl+c 로 중단 시도 → 작업 손실).
+    이제 TUI 안에서 모달로 진행 → 끝나면 자동 exit.
+    """
+
+    DEFAULT_CSS = """
+    _ShutdownModal {
+        align: center middle;
+    }
+    #shutdown_box {
+        width: 95%;
+        max-width: 60;
+        min-width: 30;
+        height: auto;
+        padding: 1 2;
+        border: thick $primary;
+        background: $surface;
+    }
+    #shutdown_title {
+        height: 1;
+        content-align: center middle;
+        color: $primary;
+    }
+    #shutdown_status {
+        padding: 1 0;
+        height: auto;
+    }
+    """
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="shutdown_box"):
+            yield Static("[bold]종료 중…[/bold]", id="shutdown_title")
+            yield Static(
+                "P4 sync 와 보류 작업 완료를 기다리는 중입니다.\n"
+                "(Ctrl+C 로 강제 종료 — 진행 중 작업이 누락될 수 있음)",
+                id="shutdown_status",
+            )
+
+
 class WhooingTuiApp(App):
     """Whooing TUI 메인 앱.
 
@@ -51,9 +97,11 @@ class WhooingTuiApp(App):
 
     # CL #52720+: 단축키는 IME (한글 두벌식) 켜진 상태에서도 동작해야 한다.
     # `bind_ko` 가 영문 + 한글 자모 (`q`/`ㅂ`, `t`/`ㅅ`) 양쪽 binding 을 생성.
-    # ctrl+c 는 modifier 조합이라 IME 영향 없음 → 그대로.
+    # CL #52761+: q / ㅂ 의 action 을 `quit` 에서 `graceful_quit` 으로 —
+    # 종료 모달을 띄우고 P4 flush 작업이 끝난 뒤 자동 exit. ctrl+c 는 종전
+    # 그대로 즉시 exit (사용자가 강제 종료 의도).
     BINDINGS = [
-        *bind_ko("q", "quit", "Quit", show=True),
+        *bind_ko("q", "graceful_quit", "Quit", show=True),
         Binding("ctrl+c", "quit", "Quit", show=False),
         *bind_ko("t", "toggle_theme", "Theme", show=True),
     ]
@@ -109,6 +157,50 @@ class WhooingTuiApp(App):
             p4_sync.flush_on_exit(tui_data.db_path())
         except Exception:  # pragma: no cover — 종료 흐름은 절대 막지 않음
             log.debug("p4 sync flush failed at unmount", exc_info=True)
+
+    def action_graceful_quit(self) -> None:
+        """CL #52761+: q / ㅂ 종료 — 모달 표시 + flush 작업 → 자동 exit.
+
+        흐름:
+          1. `_ShutdownModal` push — 사용자에게 "종료 중" 안내 (즉시 보임).
+          2. `_shutdown_worker` 가 thread executor 에서 `flush_on_exit`
+             (blocking I/O 라 main loop 차단 방지).
+          3. worker 완료 시 `self.exit()` → unmount → on_unmount 의 flush
+             는 idempotent 두 번째 호출 (no-op).
+
+        ctrl+c 는 종전 `action_quit` 으로 즉시 종료 (graceful 아님) — 사용자
+        의도된 강제 종료 path.
+        """
+        # 이미 모달이 떠 있으면 (중복 q) noop.
+        if isinstance(self.screen, _ShutdownModal):
+            return
+        self.push_screen(_ShutdownModal())
+        self._shutdown_worker()
+
+    @work(exclusive=True, group="shutdown", name="shutdown_flush")
+    async def _shutdown_worker(self) -> None:
+        """blocking flush 를 thread 로 보내고, 끝나면 exit."""
+        import asyncio
+        import os
+
+        try:
+            if os.getenv("WHOOING_DATA_DIR") is not None:
+                # 테스트 격리 — wait_for_pending 만.
+                from whooing_tui import p4_sync
+                loop = asyncio.get_running_loop()
+                await loop.run_in_executor(None, p4_sync.wait_for_pending)
+            else:
+                from whooing_tui import data as tui_data
+                from whooing_tui import p4_sync
+                db_path = tui_data.db_path()
+                loop = asyncio.get_running_loop()
+                await loop.run_in_executor(
+                    None, p4_sync.flush_on_exit, db_path,
+                )
+        except Exception:  # pragma: no cover — 종료 흐름은 절대 막지 않음
+            log.debug("graceful shutdown flush failed", exc_info=True)
+        finally:
+            self.exit()
 
     def action_toggle_theme(self) -> None:
         try:

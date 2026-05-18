@@ -228,3 +228,89 @@ async def test_app_quit_actually_fires_on_korean_jamo():
         assert app._return_value is None and app._exit, (
             "ㅂ key did not trigger app quit — IME regression"
         )
+
+
+# ---- CL #52761+ : graceful quit modal --------------------------------
+
+
+def test_q_binding_action_is_graceful_quit_not_quit():
+    """q / ㅂ 의 action 이 `graceful_quit` 으로 변경 — `_ShutdownModal` 진입.
+
+    종전엔 `quit` (즉시 exit) — cli 가 응답 없는 상태로 잠깐 멈춰서 사용자
+    가 ctrl+c 로 중단 시도하면 작업 누락. 이제 TUI 안에서 모달 표시 →
+    완료 후 exit.
+    """
+    from whooing_tui.app import WhooingTuiApp
+    actions = {b.key: b.action for b in WhooingTuiApp.BINDINGS}
+    assert actions["q"] == "graceful_quit"
+    assert actions["ㅂ"] == "graceful_quit"
+    # ctrl+c 는 강제 종료 path 그대로.
+    assert actions["ctrl+c"] == "quit"
+
+
+def test_shutdown_modal_class_exists():
+    """`_ShutdownModal` 이 ModalScreen 으로 정의 — 화면 가운데 모달."""
+    from whooing_tui.app import _ShutdownModal
+    from textual.screen import ModalScreen
+    assert issubclass(_ShutdownModal, ModalScreen)
+
+
+@pytest.mark.asyncio
+async def test_graceful_quit_pushes_shutdown_modal():
+    """q 누르면 `_ShutdownModal` 이 먼저 push — 사용자에게 "종료 중" 표시.
+
+    worker 가 곧 self.exit() 를 호출해 결국 종료되지만, modal 이 한 번이
+    라도 보이는지 검증 (사용자 명시: "종료 중 팝업").
+    """
+    from whooing_tui.app import WhooingTuiApp, _ShutdownModal
+
+    app = WhooingTuiApp(client=None)
+    pushed: list[type] = []
+
+    async with app.run_test() as pilot:
+        # push_screen 을 monkey-style wrap 으로 추적.
+        original_push = app.push_screen
+
+        def _track_push(screen, *args, **kwargs):
+            pushed.append(type(screen))
+            return original_push(screen, *args, **kwargs)
+
+        app.push_screen = _track_push  # type: ignore[assignment]
+        # action_graceful_quit 직접 호출 (pilot.press 는 race 가능).
+        app.action_graceful_quit()
+        await pilot.pause()
+        assert _ShutdownModal in pushed, (
+            f"_ShutdownModal push 안 됨. pushed types: {pushed}"
+        )
+
+
+@pytest.mark.asyncio
+async def test_graceful_quit_double_press_is_idempotent():
+    """이미 _ShutdownModal 이 떠 있는 상태에서 q 다시 눌러도 중복 push X.
+
+    사용자가 종료 중 화면을 보고 q 를 또 눌러도 새 modal 안 쌓이고 worker
+    도 새로 안 띄움 (`@work(exclusive=True, group="shutdown")` 으로 보장).
+    """
+    from whooing_tui.app import WhooingTuiApp, _ShutdownModal
+
+    app = WhooingTuiApp(client=None)
+    pushed_modals: list[type] = []
+
+    async with app.run_test() as pilot:
+        original_push = app.push_screen
+
+        def _track_push(screen, *args, **kwargs):
+            pushed_modals.append(type(screen))
+            return original_push(screen, *args, **kwargs)
+
+        app.push_screen = _track_push  # type: ignore[assignment]
+        app.action_graceful_quit()
+        await pilot.pause()
+        # 두 번째 호출 — 이미 modal 떠 있어 noop.
+        before = pushed_modals.count(_ShutdownModal)
+        app.action_graceful_quit()
+        await pilot.pause()
+        after = pushed_modals.count(_ShutdownModal)
+        assert after == before, (
+            f"중복 push 발생: before={before} after={after}"
+        )
