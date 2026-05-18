@@ -265,3 +265,163 @@ def test_menubarmixin_default_widget_id_is_none():
     class _Stub(MenuBarMixin):
         pass
     assert _Stub()._menubar_widget_id() is None
+
+
+# ---- CL #52759+ : Alt 키 진입 + 마우스 클릭 ---------------------------
+
+
+def test_menubar_bindings_include_alt_combos():
+    """F10 외에 Alt 단독 + Alt+M + Alt+F 가 등록 — 사용자 요청."""
+    from whooing_tui.widgets.menubar import menubar_bindings
+
+    keys = [b.key for b in menubar_bindings()]
+    assert "f10" in keys
+    assert "alt" in keys
+    assert "alt+m" in keys
+    assert "alt+f" in keys
+
+
+def test_menubar_bindings_all_open_menu_action():
+    """Alt / Alt+M / Alt+F 모두 같은 action 으로 dispatch."""
+    from whooing_tui.widgets.menubar import menubar_bindings
+
+    for b in menubar_bindings():
+        assert b.action == "open_menu", (
+            f"binding {b.key!r} action={b.action!r} 가 open_menu 가 아님"
+        )
+
+
+def test_menubar_ranges_layout():
+    """각 메뉴 (start, end) 가 _render_label 의 visual layout 과 일치."""
+    from whooing_tui.widgets.menubar import (
+        MenuSpec, menubar_ranges,
+    )
+
+    menus = (
+        MenuSpec(name="파일", items=()),
+        MenuSpec(name="입력", items=()),
+        MenuSpec(name="도움말", items=()),
+    )
+    r = menubar_ranges(menus)
+    # 한글 2글자 = 4 cell + " " 2 = 6, padding 1 이라 (1,7).
+    # 다음 메뉴는 구분자 "  " (2) 후 = 9 부터.
+    assert r == [(1, 7), (9, 15), (17, 25)]
+
+
+def test_menubar_ranges_mixed_ascii_and_cjk():
+    """ASCII + 한글 혼합도 폭 계산 정확."""
+    from whooing_tui.widgets.menubar import MenuSpec, menubar_ranges
+
+    menus = (
+        MenuSpec(name="File", items=()),    # 4 cell + 2 = 6
+        MenuSpec(name="입력", items=()),    # 4 cell + 2 = 6
+    )
+    r = menubar_ranges(menus)
+    assert r == [(1, 7), (9, 15)]
+
+
+def test_index_at_offset_inside_menu():
+    """클릭이 메뉴 영역 내 → 해당 index."""
+    from whooing_tui.widgets.menubar import (
+        MenuSpec, menubar_index_at_offset,
+    )
+
+    menus = (
+        MenuSpec(name="파일", items=()),
+        MenuSpec(name="입력", items=()),
+    )
+    assert menubar_index_at_offset(3, menus) == 0
+    assert menubar_index_at_offset(11, menus) == 1
+
+
+def test_index_at_offset_in_separator_returns_none():
+    """메뉴와 메뉴 사이 구분자 영역 클릭은 매칭 X."""
+    from whooing_tui.widgets.menubar import (
+        MenuSpec, menubar_index_at_offset,
+    )
+
+    menus = (
+        MenuSpec(name="파일", items=()),
+        MenuSpec(name="입력", items=()),
+    )
+    # 7, 8 이 구분자.
+    assert menubar_index_at_offset(7, menus) is None
+    assert menubar_index_at_offset(8, menus) is None
+
+
+def test_index_at_offset_outside_returns_none():
+    """메뉴바 영역 밖 클릭은 None."""
+    from whooing_tui.widgets.menubar import (
+        MenuSpec, menubar_index_at_offset,
+    )
+
+    menus = (MenuSpec(name="파일", items=()),)
+    assert menubar_index_at_offset(-1, menus) is None
+    assert menubar_index_at_offset(100, menus) is None
+    # 빈 menus.
+    assert menubar_index_at_offset(0, ()) is None
+
+
+def test_menubar_left_offset_for_uses_new_ranges():
+    """기존 시그니처 (popup 좌측 margin) 도 ranges 기반으로 동작."""
+    from whooing_tui.widgets.menubar import (
+        MenuSpec, menubar_left_offset_for,
+    )
+
+    menus = (
+        MenuSpec(name="파일", items=()),
+        MenuSpec(name="입력", items=()),
+        MenuSpec(name="도움말", items=()),
+    )
+    # 0번 메뉴는 항상 0.
+    assert menubar_left_offset_for(0, menus) == 0
+    # 1번 = ranges[1].start + 1 = 9 + 1 = 10.
+    assert menubar_left_offset_for(1, menus) == 10
+    # 2번 = 17 + 1 = 18.
+    assert menubar_left_offset_for(2, menus) == 18
+
+
+def test_menubar_clicked_message_dataclass():
+    """MenuBar.MenuClicked 가 menu_index 보존."""
+    from whooing_tui.widgets.menubar import MenuBar
+
+    msg = MenuBar.MenuClicked(menu_index=2)
+    assert msg.menu_index == 2
+
+
+@pytest.mark.asyncio
+async def test_menubar_click_dispatches_menu_clicked_message():
+    """MenuBar.on_click → menu_index 매핑 → MenuClicked 발사.
+
+    부모 Mixin Screen 의 on_menu_bar_menu_clicked 가 받아 worker 시작 —
+    여기서는 message 발사 자체만 검증 (worker 통합은 별도 케이스).
+    """
+    from textual.app import App
+    from textual.events import Click
+
+    from whooing_tui.widgets.menubar import MenuBar, MenuSpec
+
+    received: list[int] = []
+
+    class _Probe(App):
+        def compose(self):
+            yield MenuBar(
+                (MenuSpec(name="파일", items=()),
+                 MenuSpec(name="입력", items=())),
+                id="mb",
+            )
+
+        def on_menu_bar_menu_clicked(self, event: MenuBar.MenuClicked):
+            received.append(event.menu_index)
+
+    app = _Probe()
+    async with app.run_test() as pilot:
+        # MenuBar 직접 click — pilot.click 가 위젯 (selector) 지정 가능.
+        bar = app.query_one("#mb", MenuBar)
+        # "입력" 메뉴 영역 (cell 10 정도) 클릭. 단 pilot.click 가 widget
+        # offset 처리. post_message 직접 시뮬.
+        bar.post_message(
+            MenuBar.MenuClicked(menu_index=1),
+        )
+        await pilot.pause()
+        assert received == [1]

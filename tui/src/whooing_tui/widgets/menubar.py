@@ -30,9 +30,11 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Iterable
 
+from textual import events
 from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Container
+from textual.message import Message
 from textual.screen import ModalScreen
 from textual.widgets import OptionList, Static
 from textual.widgets.option_list import Option
@@ -69,7 +71,17 @@ class MenuBar(Static):
     `menus` 는 `tuple[MenuSpec, ...]` 로 compose 시 주입. 활성 메뉴 인덱스
     `_active_index` 는 시각상 강조 (배경 강조) — F10 직후의 popup 대상.
     실제 popup 은 caller 가 `MenuPopup` 으로 push.
+
+    CL #52759+: 마우스 클릭으로도 메뉴 열기 — `MenuClicked` message 를
+    부모 (MenuBarMixin Screen) 가 listen.
     """
+
+    class MenuClicked(Message):
+        """마우스 클릭으로 메뉴 진입 요청. menu_index = 클릭된 메뉴 위치."""
+
+        def __init__(self, menu_index: int) -> None:
+            super().__init__()
+            self.menu_index = menu_index
 
     DEFAULT_CSS = """
     MenuBar {
@@ -91,6 +103,18 @@ class MenuBar(Static):
         super().__init__("", id=id)
         self.menus: tuple[MenuSpec, ...] = tuple(menus)
         self._active_index = active_index
+
+    def on_click(self, event: events.Click) -> None:
+        """CL #52759+: 마우스 클릭 — 클릭한 메뉴 영역 → MenuClicked 발사.
+
+        click 의 x 좌표 (위젯 안 cell offset) 를 `menubar_index_at_offset`
+        로 menu index 로 매핑. 영역 밖 클릭은 noop.
+        """
+        idx = menubar_index_at_offset(event.x, self.menus)
+        if idx is None:
+            return
+        self.post_message(self.MenuClicked(idx))
+        event.stop()
 
     def on_mount(self) -> None:
         self._render_label()
@@ -222,22 +246,56 @@ class MenuPopup(ModalScreen[tuple[int, str] | str | None]):
         self.dismiss(("nav", "right"))
 
 
+def _menu_display_width(name: str) -> int:
+    """메뉴 이름의 표시 폭 — 한글/CJK 는 2 cell, ASCII 는 1 cell, + " name " 의 좌우 공백 2."""
+    return sum(2 if ord(ch) > 0x7F else 1 for ch in name) + 2
+
+
+def menubar_ranges(menus: tuple[MenuSpec, ...]) -> list[tuple[int, int]]:
+    """각 메뉴의 (start_col, end_col) 범위 — end 는 exclusive.
+
+    `_render_label` 의 형식 `"  ".join(" name ")` 를 그대로 재현. 마우스
+    클릭 좌표 → menu index 매핑에 사용 (`menubar_index_at_offset`).
+    """
+    ranges: list[tuple[int, int]] = []
+    # `MenuBar` 의 padding: `0 1` — 좌측 1 셀.
+    cur = 1
+    for i, m in enumerate(menus):
+        w = _menu_display_width(m.name)
+        ranges.append((cur, cur + w))
+        cur += w + 2  # 구분자 "  " (공백 2).
+    return ranges
+
+
+def menubar_index_at_offset(
+    x: int, menus: tuple[MenuSpec, ...],
+) -> int | None:
+    """클릭한 x col → menu index. 메뉴 영역 밖이면 None.
+
+    CL #52759+: `MenuBar.on_click` 가 사용. event.x 는 위젯 좌상단 기준
+    cell offset.
+    """
+    if not menus or x < 0:
+        return None
+    for i, (start, end) in enumerate(menubar_ranges(menus)):
+        if start <= x < end:
+            return i
+    return None
+
+
 def menubar_left_offset_for(menu_index: int, menus: tuple[MenuSpec, ...]) -> int:
     """메뉴바에서 N번째 메뉴 이름의 시작 column 추정 — popup 의 좌측 margin.
 
-    `_render_label` 의 형식 "  ".join(" name ") 를 역산. 한글은 폭 2 로
-    근사. 정확하지 않아도 시각상 1~2 셀 오차는 허용.
+    내부적으로 `menubar_ranges` 의 첫 col +1 (box margin baseline 보정).
+    기존 호출자 (`_open_menu_loop_async`) 와의 후방 호환을 위해 시그니처
+    유지.
     """
     if menu_index <= 0 or not menus:
         return 0
-    offset = 0
-    for i in range(menu_index):
-        name = menus[i].name
-        # " name " 의 표시 폭 + 구분자 "  " (공백 2).
-        width = sum(2 if ord(ch) > 0x7F else 1 for ch in name) + 2
-        offset += width + 2  # 구분자 "  " 두 칸.
-    # 메뉴바 자체 padding (0 1) + box margin baseline 1 보정.
-    return offset + 1
+    ranges = menubar_ranges(menus)
+    if menu_index >= len(ranges):
+        return ranges[-1][0] + 1 if ranges else 0
+    return ranges[menu_index][0] + 1
 
 
 # ---- CL #51131+ MenuBarMixin — Screen 확장용 -----------------------------
@@ -256,10 +314,24 @@ def menubar_bindings() -> list[Binding]:
             # ... 화면별 키들 ...
         ]
 
-    F10 은 IME 영향 없는 기능키라 priority=True. show=True 로 Footer 노출.
+    진입 키 (CL #52759+):
+      - **F10** — 기본. Footer 에 노출. IME 영향 없는 기능키, priority.
+      - **Alt** 단독 — Windows 의 전통 메뉴 진입 키. terminal 이 modifier
+        단독 event 를 보내는 환경 (일부 X11 / Win Terminal) 에서 작동.
+      - **Alt+M** / **Alt+F** — 항상 작동하는 modifier combo. M = Menu,
+        F = File. macOS Option 키도 같은 escape sequence 라 동등.
+      - 마우스 클릭 — `MenuBar.on_click` 이 `MenuClicked` message 발사 →
+        `MenuBarMixin.on_menu_bar_menu_clicked` 핸들러가 popup 호출.
     """
     return [
         Binding("f10", "open_menu", "Menu", show=True, priority=True),
+        # CL #52759+: Alt 단독 — 사용자 요청. terminal 이 modifier 단독을
+        # 보낼 때만 발화. macOS Terminal/iTerm 의 Option 단독은 보통 무시
+        # 됨 — 그 환경은 Alt+M / Alt+F 또는 마우스 클릭 사용.
+        Binding("alt", "open_menu", "", show=False, priority=True),
+        # Alt+M (Menu) / Alt+F (File) — 모든 환경에서 작동하는 fallback.
+        Binding("alt+m", "open_menu", "", show=False, priority=True),
+        Binding("alt+f", "open_menu", "", show=False, priority=True),
     ]
 
 
@@ -311,11 +383,16 @@ class MenuBarMixin:
     # ---- F10 진입 + popup loop -------------------------------------------
 
     def action_open_menu(self) -> None:
-        """F10 — sync wrapper. 실제 popup loop 는 worker 안 (push_screen_wait
-        가 worker context 필요).
+        """F10 / Alt / Alt+M / Alt+F — sync wrapper. 실제 popup loop 는
+        worker 안 (push_screen_wait 가 worker context 필요).
         """
         # `@work` 데코된 메서드는 sync 호출이 worker 를 spawn — `self` binding 유지.
         self._menu_loop_worker(start_index=0)
+
+    def on_menu_bar_menu_clicked(self, event: "MenuBar.MenuClicked") -> None:
+        """CL #52759+: 마우스 클릭으로 메뉴 진입 — 클릭한 메뉴에서 popup 시작."""
+        self._menu_loop_worker(start_index=event.menu_index)
+        event.stop()
 
     # `@work` 는 textual.work.work — runtime import.
     def _menu_loop_worker(self, start_index: int = 0) -> None:

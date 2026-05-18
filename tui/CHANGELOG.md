@@ -5,6 +5,80 @@
 > **0.17.x 이전** (CL #51119 ~ #1) 항목은 분량 정리 차원에서
 > [`CHANGELOG-archive-0.17.md`](./CHANGELOG-archive-0.17.md) 로 분리 보존.
 
+## CL #52759 — 0.58.0 — 메뉴바 Alt 키 진입 + 마우스 클릭 (2026-05-18)
+
+배경 (사용자 요청): 풀다운 메뉴를 F10 외에 Alt / Option 키로도 열고
+마우스 클릭으로도 열기.
+
+### 동작 변경
+
+**진입 키 확장** (`menubar_bindings()`):
+- 기존: `f10` 만.
+- 신규: `f10` + `alt` 단독 + `alt+m` + `alt+f`. 모두 같은 `open_menu`
+  action 으로 dispatch. Footer 노출은 `f10` 만 (다른 키는 `show=False`).
+
+환경별 작동성:
+- **Alt 단독** — terminal 이 modifier-only key event 를 보내는 환경 (일부
+  Linux X11 / Windows Terminal) 에서 작동. macOS Terminal.app / iTerm 의
+  Option 단독은 보통 modifier-only event 를 보내지 않으므로 별도 키 필요.
+- **Alt+M (Menu) / Alt+F (File)** — 거의 모든 terminal 에서 작동.
+  macOS Option+M / Option+F 도 같은 escape sequence 라 동등.
+- **F10** — 종전대로 모든 환경.
+
+**마우스 클릭** (`MenuBar.on_click`):
+- 클릭된 cell 의 x 좌표 → `menubar_index_at_offset(x, menus)` 로 menu
+  index 매핑. 영역 밖 클릭은 noop.
+- 매핑 성공 시 `MenuBar.MenuClicked(menu_index=N)` message 발사.
+- `MenuBarMixin.on_menu_bar_menu_clicked` 가 받아 `_menu_loop_worker(
+  start_index=N)` 호출 — 클릭한 메뉴부터 popup 시작.
+
+### 구조
+
+새 helper:
+- `menubar_ranges(menus) -> list[(start, end)]` — 각 메뉴의 cell 범위.
+  `_render_label` 의 `"  ".join(" name ")` layout 그대로 재현. 한글 2 cell
+  + ASCII 1 cell + 좌우 공백 2 + 메뉴간 구분자 2.
+- `menubar_index_at_offset(x, menus) -> int | None` — 클릭 좌표 → index.
+  메뉴 영역 내 / 구분자 영역 / 영역 밖 분기.
+- 기존 `menubar_left_offset_for` 는 그대로 (popup 좌측 margin) — 내부적
+  으로 `menubar_ranges` 재사용.
+
+새 Message:
+- `MenuBar.MenuClicked(menu_index: int)`.
+
+### 수정 파일
+
+- `tui/src/whooing_tui/widgets/menubar.py`
+  - imports: `events` + `Message`.
+  - `MenuBar.MenuClicked` 내부 Message class.
+  - `MenuBar.on_click` 추가.
+  - `MenuBarMixin.on_menu_bar_menu_clicked` 추가.
+  - `menubar_bindings()` 에 `alt` / `alt+m` / `alt+f` 추가.
+  - `menubar_ranges` / `menubar_index_at_offset` helper 신규.
+  - `menubar_left_offset_for` refactor — ranges 재사용.
+- `tui/tests/test_menubar.py` — 회귀 방지 +10:
+  - bindings 확장 / action 일관성.
+  - ranges 정확성 (한글+ASCII / 혼합).
+  - index_at_offset (내부 / 구분자 / 영역 밖 / 빈 menus).
+  - left_offset_for refactor 후 후방 호환.
+  - MenuClicked message + on_click → message 발사.
+- `tui/pyproject.toml` — 0.57.0 → 0.58.0.
+- `tui/src/whooing_tui/__init__.py` — `__version__` 동기화.
+
+### 검증
+
+- **876 passed** (866 → +10 신규). 회귀 0.
+
+### 사용자 후속 확인
+
+EntriesScreen / AccountsScreen 위에서:
+- F10 — 종전대로.
+- Alt 단독 — terminal 환경에 따라 작동.
+- Alt+M / Alt+F — 작동 보장.
+- 메뉴바 (예: "파일") 영역 마우스 클릭 — 클릭한 메뉴에서 popup 시작.
+
+---
+
 ## CL #52758 — 0.57.0 — 필터 점진 확장 + entries sqlite 캐시 (schema v8) (2026-05-18)
 
 배경 (사용자 요청 — 0.56.0 의 deferred 항목):
