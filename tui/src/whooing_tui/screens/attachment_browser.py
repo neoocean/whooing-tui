@@ -39,13 +39,12 @@ from typing import Any
 from textual import work
 from textual.app import ComposeResult
 from textual.binding import Binding
-from textual.containers import Container, Horizontal
-from textual.screen import ModalScreen, Screen
+from textual.containers import Container, Horizontal, Vertical
+from textual.screen import ModalScreen
 from textual.widgets import (
     Button,
     DataTable,
     Footer,
-    Header,
     Input,
     Label,
     Static,
@@ -438,8 +437,92 @@ class _AddPathModal(ModalScreen[str | None]):
 # ---- Main screen ----------------------------------------------------
 
 
-class AttachmentBrowserScreen(Screen):
-    """Entry 별 첨부파일 list / 추가 / 삭제.
+class _AttachmentPreviewModal(ModalScreen[None]):
+    """CL #52750+: 첨부 파일 내용 미리보기 — text + PDF.
+
+    binary 파일 (이미지, 동영상, archive 등) 은 content=None 으로 들어와
+    "미리보기 불가" 안내. 외부 viewer (`o` 키) 로 우회 권장.
+
+    Esc / q / Enter 로 닫기.
+    """
+
+    BINDINGS = [
+        Binding("escape", "close", "닫기", priority=True),
+        Binding("enter", "close", "닫기", priority=True),
+        *bind_ko("q", "close", "닫기"),
+    ]
+
+    DEFAULT_CSS = """
+    _AttachmentPreviewModal {
+        align: center middle;
+    }
+    #preview_frame {
+        width: 95%;
+        max-width: 160;
+        height: 95%;
+        max-height: 60;
+        min-width: 40;
+        background: $surface;
+        border: thick $primary;
+        padding: 1;
+    }
+    #preview_title {
+        height: 1;
+        color: $primary;
+    }
+    #preview_meta {
+        height: 1;
+        color: $text-muted;
+    }
+    #preview_body {
+        height: 1fr;
+        border: none;
+    }
+    """
+
+    def __init__(
+        self, *, filename: str, mime: str = "", content: str | None,
+    ) -> None:
+        super().__init__()
+        self._filename = filename
+        self._mime = mime
+        self._content = content
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="preview_frame"):
+            yield Static(
+                f"[bold]{self._filename}[/bold]  —  Esc / q / Enter 로 닫기",
+                id="preview_title",
+            )
+            mime_label = self._mime or "(unknown)"
+            yield Static(
+                f"[dim]MIME: {mime_label}[/dim]",
+                id="preview_meta",
+            )
+            if self._content is not None:
+                body = self._content
+            else:
+                body = (
+                    "🚫 이 파일은 텍스트로 미리보기할 수 없습니다.\n\n"
+                    "지원: text/* (txt, md, csv, json, html, ...) + application/pdf.\n"
+                    "그 외 (image, video, archive, binary): 'o' 키로 외부 viewer 를\n"
+                    "사용하세요 (macOS open / Linux xdg-open / Windows startfile)."
+                )
+            ta = TextArea(body, id="preview_body", read_only=True)
+            # cursor / 라인넘버 — 사용자가 콘텐츠를 자유롭게 navigate 가능.
+            ta.show_line_numbers = True
+            yield ta
+
+    def action_close(self) -> None:
+        self.dismiss(None)
+
+
+class AttachmentBrowserScreen(ModalScreen[None]):
+    """Entry 별 첨부파일 list / 추가 / 삭제 — 큰 modal 팝업.
+
+    CL #52750+: 종전엔 `Screen` 으로 전체 화면 차지 → 사용자 요청으로
+    `ModalScreen` 변경. 뒤의 EntriesScreen 이 보이고 본 화면은 가운데
+    큰 frame.
 
     CL #51142+ (A12): 터미널 paste 로 들어온 텍스트가 절대 경로 + 존재하는
     파일이면 자동으로 첨부 후보로 인식 — 사용자가 `a` 누르고 path 입력하는
@@ -449,6 +532,8 @@ class AttachmentBrowserScreen(Screen):
 
     BINDINGS = [
         Binding("escape", "back", "뒤로"),
+        # CL #52750+: row 위 Enter — 파일 내용 미리보기 (text / PDF).
+        Binding("enter", "preview", "미리보기", priority=True),
         *bind_ko("a", "add", "추가"),
         # CL #52739+: 경로 직접 입력 (고급) — `a` 가 FilePicker 를 띄우는 게
         # 기본 흐름이라, 직접 path 타이핑은 `p` 키로 분리.
@@ -462,12 +547,26 @@ class AttachmentBrowserScreen(Screen):
 
     DEFAULT_CSS = """
     AttachmentBrowserScreen {
-        layout: vertical;
+        align: center middle;
+    }
+    #ab_frame {
+        /* 좁은 터미널 95%, 넓은 터미널 max-width 으로 cap. */
+        width: 95%;
+        max-width: 140;
+        height: 90%;
+        max-height: 50;
+        min-width: 40;
+        background: $surface;
+        border: thick $accent;
+        padding: 1;
     }
     #ab_status {
         height: auto;
         padding: 1;
         background: $boost;
+    }
+    #ab_table {
+        height: 1fr;
     }
     """
 
@@ -477,10 +576,10 @@ class AttachmentBrowserScreen(Screen):
         self.section_id = section_id
 
     def compose(self) -> ComposeResult:
-        yield Header()
-        yield Static(f"Entry {self.entry_id} — 첨부", id="ab_status")
-        yield DataTable(id="ab_table", zebra_stripes=True)
-        yield Footer()
+        with Vertical(id="ab_frame"):
+            yield Static(f"Entry {self.entry_id} — 첨부", id="ab_status")
+            yield DataTable(id="ab_table", zebra_stripes=True)
+            yield Footer()
 
     def on_mount(self) -> None:
         table = self.query_one("#ab_table", DataTable)
@@ -641,6 +740,36 @@ class AttachmentBrowserScreen(Screen):
             self.notify(f"열림: {full_path.name}")
         else:
             self.notify(f"열기 실패: {full_path}", severity="warning")
+
+    def action_preview(self) -> None:
+        """CL #52750+: 선택된 row 위 Enter — text/PDF 내용 미리보기 modal.
+
+        text/* mime 또는 .txt/.md/.csv/.json/... 확장자: read + 인코딩 추정.
+        application/pdf 또는 .pdf 확장자: pdfplumber 로 페이지별 추출.
+        그 외 binary: None 반환 → modal 이 "미리보기 불가" 안내.
+        """
+        table = self.query_one("#ab_table", DataTable)
+        if not table.row_count:
+            return
+        try:
+            row_key = table.coordinate_to_cell_key(table.cursor_coordinate).row_key
+            aid = int(row_key.value)
+        except (AttributeError, TypeError, ValueError):
+            return
+        rows = list_for(self.entry_id, section_id=self.section_id)
+        match = next((r for r in rows if r["id"] == aid), None)
+        if not match:
+            return
+        full_path = tui_data.attachments_root() / match["file_path"]
+        filename = match.get("original_filename") or full_path.name
+        mime = match.get("mime_type")
+        from whooing_core.preview import extract_preview_text
+        content = extract_preview_text(full_path, mime=mime)
+        self.app.push_screen(_AttachmentPreviewModal(
+            filename=filename,
+            mime=mime or "",
+            content=content,
+        ))
 
     def action_back(self) -> None:
         self.app.pop_screen()

@@ -558,3 +558,133 @@ def test_version_matches_pyproject():
         f"__init__.py version={__version__} != pyproject {declared} "
         f"(major.minor 불일치 — title bar 가 stale 하게 보임)"
     )
+
+
+# ---- CL #52750+ : modal 형태 + Enter 미리보기 -------------------------
+
+
+def test_screen_is_modalscreen_not_plain_screen():
+    """AttachmentBrowserScreen 이 ModalScreen — 뒤 화면이 보이는 팝업.
+
+    종전엔 Screen (전체 화면). 사용자 요청으로 ModalScreen 으로 변경 —
+    EntriesScreen 이 뒤에 보이는 큰 frame 팝업 형태.
+    """
+    from textual.screen import ModalScreen
+
+    from whooing_tui.screens.attachment_browser import AttachmentBrowserScreen
+    assert issubclass(AttachmentBrowserScreen, ModalScreen)
+
+
+def test_enter_key_bound_to_preview():
+    """row 위에서 Enter 누르면 _AttachmentPreviewModal push — binding 확인."""
+    from whooing_tui.screens.attachment_browser import AttachmentBrowserScreen
+
+    bindings = AttachmentBrowserScreen.BINDINGS
+    enter = next((b for b in bindings if b.key == "enter"), None)
+    assert enter is not None, "Enter binding 누락"
+    assert enter.action == "preview"
+
+
+def test_preview_modal_class_exists():
+    """미리보기 modal 클래스 export."""
+    from whooing_tui.screens.attachment_browser import _AttachmentPreviewModal
+    from textual.screen import ModalScreen
+    assert issubclass(_AttachmentPreviewModal, ModalScreen)
+
+
+def test_preview_modal_compose_with_text_content():
+    """text content 전달 시 그 텍스트가 TextArea 에 들어감."""
+    from whooing_tui.screens.attachment_browser import _AttachmentPreviewModal
+
+    modal = _AttachmentPreviewModal(
+        filename="hello.txt", mime="text/plain",
+        content="line1\nline2\n안녕",
+    )
+    assert modal._content == "line1\nline2\n안녕"
+    assert modal._filename == "hello.txt"
+
+
+def test_preview_modal_compose_with_none_content_shows_unsupported():
+    """content=None — binary 안내."""
+    from whooing_tui.screens.attachment_browser import _AttachmentPreviewModal
+
+    modal = _AttachmentPreviewModal(
+        filename="photo.jpg", mime="image/jpeg", content=None,
+    )
+    assert modal._content is None
+
+
+@pytest.mark.asyncio
+async def test_browser_modal_renders_with_frame(isolated, src_file):
+    """ModalScreen 으로 push 후 #ab_frame 컨테이너가 존재해야."""
+    from textual.containers import Vertical
+
+    from whooing_tui.app import WhooingTuiApp
+    from whooing_tui.screens.attachment_browser import AttachmentBrowserScreen
+
+    class _FakeClient:
+        async def list_sections(self):
+            return [{"section_id": "s1", "title": "main"}]
+        async def list_accounts(self, section_id):
+            return {}
+        async def list_entries(self, section_id, start_date, end_date):
+            return []
+
+    app = WhooingTuiApp(client=_FakeClient())  # type: ignore[arg-type]
+    async with app.run_test() as pilot:
+        from whooing_tui.screens.entries import EntriesScreen
+        import asyncio as _asyncio
+        deadline = _asyncio.get_running_loop().time() + 3.0
+        while _asyncio.get_running_loop().time() < deadline:
+            if isinstance(app.screen, EntriesScreen) and app.session.section_id:
+                break
+            await _asyncio.sleep(0.02)
+        ab = AttachmentBrowserScreen(entry_id="e1", section_id="s1")
+        await app.push_screen(ab)
+        await pilot.pause()
+        # frame Container 가 존재 (modal 의 시각 표면).
+        frame = ab.query_one("#ab_frame", Vertical)
+        assert frame is not None
+
+
+@pytest.mark.asyncio
+async def test_enter_on_row_pushes_preview_modal(isolated, src_file):
+    """row 위에서 Enter → _AttachmentPreviewModal push (e2e)."""
+    from whooing_tui.app import WhooingTuiApp
+    from whooing_tui.screens.attachment_browser import (
+        AttachmentBrowserScreen, _AttachmentPreviewModal, add_attachment,
+    )
+
+    class _FakeClient:
+        async def list_sections(self):
+            return [{"section_id": "s1", "title": "main"}]
+        async def list_accounts(self, section_id):
+            return {}
+        async def list_entries(self, section_id, start_date, end_date):
+            return []
+
+    # text 파일을 entry e1 에 첨부 — 미리보기 가능한 콘텐츠.
+    txt = src_file.parent / "hello.txt"
+    txt.write_text("preview test content\n안녕하세요", encoding="utf-8")
+    add_attachment("e1", str(txt), section_id="s1")
+
+    app = WhooingTuiApp(client=_FakeClient())  # type: ignore[arg-type]
+    async with app.run_test() as pilot:
+        from whooing_tui.screens.entries import EntriesScreen
+        import asyncio as _asyncio
+        deadline = _asyncio.get_running_loop().time() + 3.0
+        while _asyncio.get_running_loop().time() < deadline:
+            if isinstance(app.screen, EntriesScreen) and app.session.section_id:
+                break
+            await _asyncio.sleep(0.02)
+        ab = AttachmentBrowserScreen(entry_id="e1", section_id="s1")
+        await app.push_screen(ab)
+        await pilot.pause()
+        # row 가 list 됐는지 확인 + Enter 발화.
+        ab.action_preview()
+        await pilot.pause()
+        assert isinstance(app.screen, _AttachmentPreviewModal)
+        assert "hello.txt" in app.screen._filename
+        # 콘텐츠 매칭.
+        assert app.screen._content is not None
+        assert "preview test content" in app.screen._content

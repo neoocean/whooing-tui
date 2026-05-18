@@ -5,6 +5,69 @@
 > **0.17.x 이전** (CL #51119 ~ #1) 항목은 분량 정리 차원에서
 > [`CHANGELOG-archive-0.17.md`](./CHANGELOG-archive-0.17.md) 로 분리 보존.
 
+## CL #52750 — 0.54.0 — AttachmentBrowser 가 modal 팝업 + Enter 미리보기 (2026-05-18)
+
+배경 (사용자 요청): 첨부 list 화면을 거래내역 위에 큰 팝업 (modal) 으로
+바꾸고, 첨부 row 위에서 Enter 누르면 파일 내용 미리보기 — 텍스트 그대로,
+PDF 면 페이지별 텍스트 추출.
+
+### 동작 변경
+
+1. **`AttachmentBrowserScreen`: `Screen` → `ModalScreen[None]`**.
+   뒤의 EntriesScreen 이 보이는 frame 형태 (`width: 95%`, `max-width:140`,
+   `height: 90%`, `max-height: 50`). 좁은 터미널 95% 비례 + 넓은 환경 cap.
+   `Header` 제거 (modal 안에 자체 title bar 필요 없음). compose 의 자식들이
+   `with Vertical(id="ab_frame")` 안으로 들어감.
+
+2. **`Enter` 키 binding 추가** — `action_preview`. row 위에서 Enter 누르면
+   파일 내용을 새 `_AttachmentPreviewModal` 로.
+
+3. **`core/preview.py` 신규** — `extract_preview_text(path, mime, cap_chars)`
+   - text/* mime 또는 .txt/.md/.csv/.json/... 확장자: read + UTF-8/cp949/
+     latin-1 fallback. cap_chars (default 200,000 chars) 로 메모리 보호.
+   - application/pdf 또는 .pdf: `pdfplumber` (core dep) 로 페이지별 추출,
+     `━━━ Page N/total ━━━` 구분자. cap 도달 시 잘림 표시.
+   - 그 외 (image, video, archive 등): `None` → modal 의 "미리보기 불가"
+     안내. `o` 키로 외부 viewer 우회.
+
+4. **`_AttachmentPreviewModal`** (`attachment_browser.py` 내 ModalScreen) —
+   filename + mime 메타 + `TextArea` (read_only, line numbers) 로 콘텐츠.
+   Esc / q / Enter 로 닫기.
+
+### 수정 파일
+
+- `core/src/whooing_core/preview.py` — 신규 (110 줄).
+- `core/tests/test_preview.py` — 단위 테스트 25 케이스 (text utf-8 / cp949
+  fallback / cap / unknown binary / PDF 추출 / 확장자 fallback).
+- `tui/src/whooing_tui/screens/attachment_browser.py`
+  - import: `Header` 제거, `Vertical` 추가.
+  - `_AttachmentPreviewModal` 신규 (TextArea + frame CSS).
+  - `AttachmentBrowserScreen(Screen)` → `AttachmentBrowserScreen(ModalScreen[None])`.
+  - DEFAULT_CSS 에 `#ab_frame` 추가, `align: center middle`.
+  - BINDINGS 에 `Binding("enter", "preview", "미리보기", priority=True)`.
+  - `compose` 가 `with Vertical(id="ab_frame")` 으로 wrap.
+  - `action_preview` — 선택 row 의 file_path / mime 로 `extract_preview_text`
+    호출 후 `_AttachmentPreviewModal` push.
+- `tui/tests/test_attachment_browser.py` — 회귀 방지 7 케이스 (ModalScreen
+  subclass / Enter binding / preview modal class / compose 검증 + e2e).
+- `tui/pyproject.toml` — 0.53.4 → 0.54.0.
+- `tui/src/whooing_tui/__init__.py` — `__version__` 동기화.
+
+### 검증
+
+- **818 passed** (621 → +33; 25 core preview + 7 modal/preview integration
+  + 1 기타). 회귀 0.
+
+### 사용자 후속 확인
+
+다음 실행 시:
+1. 거래 수정 → attach → 첨부 화면이 **거래내역 목록 위 큰 팝업** 으로
+2. 첨부 row (cloudflare-invoice-2026-05-16.pdf) 위 **Enter** → 새 modal
+   에 PDF 본문 (Invoice number / Cloudflare Inc. 등) 표시
+3. 텍스트 파일 첨부도 같은 흐름 — 그대로 표시
+
+---
+
 ## CL #52749 — 0.53.4 — P4 submit 절대경로 인자 회귀 + numbered CL 정책 (2026-05-18)
 
 배경 (사용자 보고): 첨부 추가 후 "P4 submit 실패" notify. db row + 디스크
