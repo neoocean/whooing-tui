@@ -5,6 +5,78 @@
 > **0.17.x 이전** (CL #51119 ~ #1) 항목은 분량 정리 차원에서
 > [`CHANGELOG-archive-0.17.md`](./CHANGELOG-archive-0.17.md) 로 분리 보존.
 
+## CL #52815 — 0.67.0 — 중복 거래 평가 + 컨텍스트메뉴 폭 축소 (2026-05-18)
+
+배경 (사용자 요청 2건):
+
+1. m 컨텍스트메뉴의 풀다운이 표시 텍스트에 비해 너무 넓음 — 폭을 텍스트에
+   맞춰 줄여달라.
+2. 둘 이상의 거래를 선택한 다음 m 을 누르면 컨텍스트메뉴에 "중복인지 평가"
+   메뉴를 추가. 선택된 거래들을 다양한 방식으로 중복 평가, 중복이면 하나만
+   남기고 나머지 삭제하는 인터페이스, 중복이 아니면 표시 후 팝업을 닫는다.
+
+### MenuPopup 폭 축소
+
+`widgets/menubar.py` 의 `#menupopup_box` CSS:
+- `min-width: 20` 제거 — 텍스트 폭에 fit (was 20 cell 고정 최소).
+- `max-width: 60` 안전망 유지.
+- `#menupopup_title` / `#menupopup_list` 에 `width: auto` 명시 — 자식이
+  컨테이너를 늘리지 않도록.
+
+이전: "수정 (e)" 같은 짧은 항목도 20 cell 차지.
+이후: 가장 긴 항목 폭 + padding 만큼만.
+
+### 중복 평가 — `whooing_core.dupes`
+
+새 pure-function 모듈 `core/src/whooing_core/dupes.py` — sqlite / 후잉
+의존 없음. 입력은 entry dict iterable, 출력은 `DupeReport(verdict,
+reasons, pairs, keep_suggestion)`.
+
+평가 휴리스틱 (강한 매칭부터):
+- **identical** — money / date / 좌우 계정 / item(raw) / memo(raw) 모두 일치.
+- **very_likely** — 의미상 같은 거래로 보이나 raw 입력 차이가 있다:
+  - 좌/우 계정 반대 (입출금 혼동).
+  - item 정규화 후 일치 (공백·구두점 차이만).
+  - 같은 날·같은 계정·같은 금액에 item 만 다름 (카드 import + 수기 입력
+    겹침).
+  - 금액 부호만 반대 (환불/취소).
+- **possible** — 금액 일치 + 날짜 ±1 (가맹점 처리 지연), 또는 금액·날짜
+  일치하지만 계정 다름. 사람의 판단 필요.
+- **different** — 어느 휴리스틱도 통과 못함.
+
+`keep_suggestion` — 가장 오래된 (entry_date) 거래, 동률이면 entry_id 사전순.
+
+### DuplicateEvalScreen
+
+새 모달 `tui/src/whooing_tui/screens/dupe_eval.py`.
+
+흐름:
+1. EntriesScreen 에서 2+ 건 선택 → m → "선택 N건 중복인지 평가…".
+2. `_evaluate_duplicates_worker` 가 `DuplicateEvalScreen(targets, …)` push.
+3. on_mount 에서 `evaluate_duplicates(entries)` 호출, verdict 분기:
+   - "different" → "✅ 중복 아님" + 근거 + 닫기 버튼만.
+   - 그 외 → "⚠️ {라벨}" + 근거 + 쌍별 평가 + DataTable + dedup 버튼.
+4. 사용자가 ↑/↓ + k (또는 클릭) 로 keep 후보 변경, Enter 또는 "선택만 남기고
+   삭제" 버튼 → `_delete_many` callback (entries.py 가 주입) 호출.
+5. 후잉 API 삭제 + 로컬 sqlite annotation 정리 (`_purge_local`).
+6. dismiss(True) → EntriesScreen 가 selection clear + `refresh_entries`.
+
+dedup worker 는 `@work(exclusive=True, group="dupe_dedup")` — 빠른 더블
+클릭으로 중복 실행 방지. 실패한 eid 는 status 에 첫 사유 노출.
+
+### 테스트
+
+- `core/tests/test_dupes.py` — 15 unit test (휴리스틱 분기별 + edge cases).
+- `tui/tests/test_dupe_eval.py` — 6 통합 test (메뉴 노출 조건 / 화면 verdict /
+  dedup 실행 / 실패 status / 1건 거부).
+
+총 21 신규 테스트 — 0.66.0 시점 939 → 0.67.0 시점 960 (regression 0).
+
+### Backward compat
+
+`MenuPopup` 의 width 변경은 시각적 차이만 — API 동일. 기존 화면 모두
+영향 없음.
+
 ## CL #52792 — 0.66.0 — 보고서 좌/우 패널 통합 화면 (2026-05-18)
 
 배경 (사용자 요청): '보고서 / 통계' 팝업을 더 크게, 좌측에는 메뉴 / 우측

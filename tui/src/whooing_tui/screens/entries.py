@@ -918,6 +918,78 @@ class EntriesScreen(MenuBarMixin, Screen):
         self._selected_entry_ids.clear()
         self.refresh_entries()
 
+    def action_evaluate_duplicates(self) -> None:
+        """CL #52815+: 선택 2건 이상의 중복 여부 평가 + dedup 인터페이스.
+
+        사용자 요청 — m 컨텍스트메뉴에 노출, 선택된 거래들에 대해 다양한
+        휴리스틱으로 중복을 평가, 중복이면 keep 하나 + 나머지 삭제 인터페이스,
+        아니면 "중복 아님" 표시 후 닫기.
+
+        worker context — push_screen_wait 가 worker 필요. 결과가 True
+        (dedup 실행) 면 entries 재로드.
+        """
+        if len(self._selected_entry_ids) < 2:
+            self.set_status(
+                "중복 평가는 2건 이상 선택해야 합니다 (space 로 선택).",
+                error=True,
+            )
+            return
+        self._evaluate_duplicates_worker()
+
+    @work(exclusive=True, group="dupe", name="evaluate_duplicates")
+    async def _evaluate_duplicates_worker(self) -> None:
+        from whooing_tui.screens.dupe_eval import DuplicateEvalScreen
+
+        session = self.app.session  # type: ignore[attr-defined]
+        selected_ids = set(self._selected_entry_ids)
+        targets = [
+            e for e in self._entries
+            if str(e.get("entry_id") or "") in selected_ids
+        ]
+        if len(targets) < 2:
+            self.set_status(
+                "선택된 거래를 찾을 수 없습니다 — 재로드 후 다시 시도.",
+                error=True,
+            )
+            return
+
+        async def _delete_many(eids: list[str]) -> tuple[int, list[str]]:
+            """후잉 삭제 + 로컬 db 정리 — dedup 화면이 호출."""
+            deleted = 0
+            failed: list[str] = []
+            for eid in eids:
+                try:
+                    await self._client.delete_entry(
+                        section_id=session.section_id, entry_id=eid,
+                    )
+                    deleted += 1
+                    try:
+                        self._purge_local(eid)
+                    except Exception:  # pragma: no cover — db 없음 등
+                        log.exception("purge_local %s failed", eid)
+                except ToolError as e:
+                    failed.append(f"{eid} [{e.kind}] {e.message}")
+                except Exception as e:  # pragma: no cover
+                    log.exception("dedup delete %s failed", eid)
+                    failed.append(f"{eid} INTERNAL: {e}")
+            return deleted, failed
+
+        result = await self.app.push_screen_wait(  # type: ignore[attr-defined]
+            DuplicateEvalScreen(
+                targets,
+                client=self._client,
+                session=session,
+                delete_callback=_delete_many,
+            ),
+        )
+        if result is True:
+            self._selected_entry_ids.clear()
+            self.set_status("중복 정리 완료. 재로드 중…")
+            self.refresh_entries()
+        elif result is False:
+            self.set_status("중복 평가 종료 (변경 없음).")
+        # None (Esc) — silent.
+
     def action_open_monthly(self) -> None:
         """CL #51152+: 매월입력 거래 관리 화면."""
         from whooing_tui.screens.monthly_entries import MonthlyEntriesScreen
@@ -2094,6 +2166,13 @@ class EntriesScreen(MenuBarMixin, Screen):
             items.append(MenuItem(
                 label=f"선택 {len(self._selected_entry_ids)}건 일괄 태그 (#)",
                 action_id="batch_tag",
+            ))
+        # CL #52815+: 2건 이상 선택 시 '중복인지 평가' — 사용자 요청.
+        # 1건만 선택돼있으면 비교 대상이 없어 의미 없으므로 미노출.
+        if len(self._selected_entry_ids) >= 2:
+            items.append(MenuItem(
+                label=f"선택 {len(self._selected_entry_ids)}건 중복인지 평가…",
+                action_id="evaluate_duplicates",
             ))
         spec = MenuSpec(name="거래", items=tuple(items))
 

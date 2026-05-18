@@ -1,4 +1,4 @@
-"""풀다운 메뉴바 — Header 아래 항상 노출 + F10 진입.
+﻿"""풀다운 메뉴바 — Header 아래 항상 노출 + F10 진입.
 
 CL #51126+. 사용자 요청:
 > 기존 보고서 등 여러 기능이 추가될 예정이기 때문에 tui 앱의 전통을 따라
@@ -179,7 +179,9 @@ class MenuPopup(ModalScreen[tuple[int, str] | str | None]):
         border: solid $primary;
         padding: 0 1;
         width: auto;
-        min-width: 20;
+        /* CL #52814+: min-width 제거 (was 20) — 사용자 요청: 텍스트 폭에
+           맞춰 좁힌다. max-width 만 안전망으로 유지. OptionList 의 width:
+           auto 와 함께 컨테이너가 항목 최대 폭에 fit. */
         max-width: 60;
         height: auto;       /* 항목 수만큼만 — 화면 하단까지 늘어나지 않음. */
         margin-top: 2;     /* Header(1) + MenuBar(1) 아래로. */
@@ -189,10 +191,12 @@ class MenuPopup(ModalScreen[tuple[int, str] | str | None]):
         color: $accent;
         text-style: bold;
         height: 1;
+        width: auto;
     }
     #menupopup_list {
         height: auto;
         max-height: 20;
+        width: auto;
     }
     """
 
