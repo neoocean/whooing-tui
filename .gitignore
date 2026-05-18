@@ -28,6 +28,13 @@ whooing-tui.toml
 *.db-shm
 .whooing-tui-cache/
 
+# 로컬 데이터 디렉토리 — Perforce 에는 올라가도 되지만 public GitHub
+# 미러에는 절대 금지 (사용자 가계부 데이터 + 카드사 명세서 PDF 등 민감
+# 개인정보). monorepo root 의 db/ 가 사용자 sqlite, attachment/ 가
+# 첨부 본체 (YYYY/YYYY-MM-DD/<filename>). 디렉토리 통째 차단.
+/db/
+/attachment/
+
 # Coverage 결과물 (make coverage 의 출력) — 로컬 산출물
 .coverage
 .coverage.*
