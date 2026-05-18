@@ -151,7 +151,9 @@ async def _wait_for(predicate, *, timeout=3.0, interval=0.02):
 
 @pytest.mark.asyncio
 async def test_t_key_pushes_reports_menu():
-    """EntriesScreen 에서 't' → ReportsMenuScreen 등장."""
+    """EntriesScreen 에서 't' → ReportsScreen (CL #52792+ 좌/우 통합) 등장."""
+    from whooing_tui.screens.reports import ReportsScreen
+
     fake = _Client()
     app = WhooingTuiApp(client=fake)  # type: ignore[arg-type]
     async with app.run_test() as pilot:
@@ -163,17 +165,15 @@ async def test_t_key_pushes_reports_menu():
         es: EntriesScreen = app.screen  # type: ignore[assignment]
         es.action_open_reports()
         await pilot.pause()
-        assert isinstance(app.screen, ReportsMenuScreen)
+        assert isinstance(app.screen, ReportsScreen)
 
 
 @pytest.mark.asyncio
 async def test_menu_select_pushes_result_screen_and_fetches():
-    """메뉴에서 항목 선택 → ReportResultScreen + 클라이언트 호출.
-
-    CL #52790+: ReportsMenuScreen 이 자체적으로 push (dismiss 안 함) —
-    Esc 흐름이 menu → result → menu → entries 로 자연스럽게 동작.
+    """CL #52792+: 통합 ReportsScreen 의 자동 fetch — 진입 즉시 첫 항목
+    (balance_sheet) 의 client 호출 발생.
     """
-    from textual.widgets import OptionList
+    from whooing_tui.screens.reports import ReportsScreen
 
     fake = _Client()
     app = WhooingTuiApp(client=fake)  # type: ignore[arg-type]
@@ -186,34 +186,28 @@ async def test_menu_select_pushes_result_screen_and_fetches():
         es: EntriesScreen = app.screen  # type: ignore[assignment]
         es.action_open_reports()
         await pilot.pause()
-        assert isinstance(app.screen, ReportsMenuScreen)
-        # balance_sheet 선택 — OptionList.OptionSelected 시뮬레이션.
-        menu = app.screen
-        opt_list = menu.query_one("#reports-menu-list", OptionList)
-        # OptionList 의 첫 옵션 (balance_sheet) 선택.
-        opt_list.action_select()
-        await pilot.pause()
-        assert isinstance(app.screen, ReportResultScreen)
-        # fetch 가 worker 로 진행 — 잠시 기다려 client 호출 + payload 도착.
+        assert isinstance(app.screen, ReportsScreen)
+        # ReportsScreen 의 on_mount 가 첫 항목 (balance_sheet) 자동 fetch.
         ok = await _wait_for(
             lambda: fake.last_mcp_call is not None
             and getattr(app.screen, "last_payload", None) is not None,
             timeout=3.0,
         )
         assert ok
-        # CL #52755+: 공식 MCP server 의 `report-get` 도구 호출.
+        # 공식 MCP server 의 `report-get` 도구 호출.
         assert fake.last_mcp_call["name"] == "report-get"
         args = fake.last_mcp_call["arguments"]
         assert args["section_id"] == "s1"
         assert args["type"] == "report"
-        # account 는 enum — 콤마 다중 X. 통합 조회는 'all'.
         assert args["account"] == "all"
         assert args["rows_type"] == "none"
 
 
 @pytest.mark.asyncio
 async def test_menu_cancel_returns_without_pushing_result():
-    """메뉴에서 Esc — dismiss(None) — 결과 화면 뜨지 않음."""
+    """CL #52792+: ReportsScreen Esc → EntriesScreen 직접 복귀 (한 화면)."""
+    from whooing_tui.screens.reports import ReportsScreen
+
     fake = _Client()
     app = WhooingTuiApp(client=fake)  # type: ignore[arg-type]
     async with app.run_test() as pilot:
@@ -225,13 +219,11 @@ async def test_menu_cancel_returns_without_pushing_result():
         es: EntriesScreen = app.screen  # type: ignore[assignment]
         es.action_open_reports()
         await pilot.pause()
-        assert isinstance(app.screen, ReportsMenuScreen)
-        app.screen.dismiss(None)
+        assert isinstance(app.screen, ReportsScreen)
+        # ReportsScreen Esc → EntriesScreen 직접 복귀.
+        app.screen.action_close()
         await pilot.pause()
-        # 다시 EntriesScreen
         assert isinstance(app.screen, EntriesScreen)
-        # client 호출 없음
-        assert fake.last_mcp_call is None
 
 
 @pytest.mark.asyncio
@@ -563,6 +555,8 @@ async def test_esc_from_result_returns_to_menu_not_entries():
     """
     from textual.widgets import OptionList
 
+    from whooing_tui.screens.reports import ReportsScreen
+
     fake = _Client()
     app = WhooingTuiApp(client=fake)  # type: ignore[arg-type]
     async with app.run_test() as pilot:
@@ -574,20 +568,10 @@ async def test_esc_from_result_returns_to_menu_not_entries():
         es: EntriesScreen = app.screen  # type: ignore[assignment]
         es.action_open_reports()
         await pilot.pause()
-        assert isinstance(app.screen, ReportsMenuScreen)
-        # 메뉴에서 첫 항목 선택 → 결과 화면 push.
-        app.screen.query_one("#reports-menu-list", OptionList).action_select()
-        await pilot.pause()
-        assert isinstance(app.screen, ReportResultScreen)
-        # 결과 화면에서 Esc — pop → 메뉴 복귀.
+        # CL #52792+: 통합 ReportsScreen — 메뉴 + 결과 한 화면. Esc 한 번에
+        # EntriesScreen 복귀 (메뉴 ↔ 결과 분리 안 됨).
+        assert isinstance(app.screen, ReportsScreen)
         app.screen.action_close()
-        await pilot.pause()
-        # 메뉴로 돌아옴 (EntriesScreen 이 아님).
-        assert isinstance(app.screen, ReportsMenuScreen), (
-            f"Esc 후 화면: {type(app.screen).__name__} (메뉴 복귀 회귀)"
-        )
-        # 한 번 더 Esc — 메뉴도 닫혀 EntriesScreen.
-        app.screen.action_cancel()
         await pilot.pause()
         assert isinstance(app.screen, EntriesScreen)
 
@@ -615,3 +599,70 @@ def test_budget_renderer_handles_full_aggregate_shape():
     assert "유동" in out
     assert "오늘" in out
     assert "달성 가능성" in out and "100%" in out
+
+
+# ---- CL #52792+ : 통합 ReportsScreen 좌/우 패널 ----------------------
+
+
+@pytest.mark.asyncio
+async def test_reports_screen_has_menu_and_content_panes():
+    """좌측 OptionList + 우측 Static content + status — 패널 분리 layout."""
+    from textual.widgets import OptionList, Static
+
+    from whooing_tui.screens.reports import ReportsScreen
+
+    fake = _Client()
+    app = WhooingTuiApp(client=fake)  # type: ignore[arg-type]
+    async with app.run_test() as pilot:
+        await _wait_for(
+            lambda: isinstance(app.screen, EntriesScreen)
+            and app.session.section_id == "s1",
+            timeout=3.0,
+        )
+        es: EntriesScreen = app.screen  # type: ignore[assignment]
+        es.action_open_reports()
+        await pilot.pause()
+        assert isinstance(app.screen, ReportsScreen)
+        # 좌측 OptionList 가 11개 항목.
+        opt = app.screen.query_one("#reports-menu-list", OptionList)
+        assert opt.option_count == 11
+        # 우측 panel widgets 존재.
+        app.screen.query_one("#reports-status", Static)
+        app.screen.query_one("#reports-content", Static)
+
+
+@pytest.mark.asyncio
+async def test_reports_screen_auto_fetches_on_highlight_change():
+    """↑/↓ 로 항목 이동 → 자동 fetch (worker exclusive, 이전 cancel)."""
+    from textual.widgets import OptionList
+
+    from whooing_tui.screens.reports import ReportsScreen
+
+    fake = _Client()
+    app = WhooingTuiApp(client=fake)  # type: ignore[arg-type]
+    async with app.run_test() as pilot:
+        await _wait_for(
+            lambda: isinstance(app.screen, EntriesScreen)
+            and app.session.section_id == "s1",
+            timeout=3.0,
+        )
+        es: EntriesScreen = app.screen  # type: ignore[assignment]
+        es.action_open_reports()
+        await pilot.pause()
+        screen = app.screen
+        # 첫 항목 (balance_sheet) 자동 fetch.
+        await _wait_for(
+            lambda: fake.last_mcp_call is not None
+            and fake.last_mcp_call["arguments"].get("type") == "report",
+            timeout=3.0,
+        )
+        # 두 번째 항목 (pl_summary) 로 이동.
+        opt = screen.query_one("#reports-menu-list", OptionList)
+        opt.highlighted = 1
+        await pilot.pause()
+        # report_summary 호출 도착 대기.
+        await _wait_for(
+            lambda: fake.last_mcp_call["arguments"].get("type") == "report_summary",
+            timeout=3.0,
+        )
+        assert fake.last_mcp_call["name"] == "report-get"

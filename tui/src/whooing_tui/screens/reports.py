@@ -38,7 +38,7 @@ from typing import Any, Callable
 from textual import work
 from textual.app import ComposeResult
 from textual.binding import Binding
-from textual.containers import Vertical, VerticalScroll
+from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.screen import ModalScreen
 from textual.widgets import OptionList, Static
 from textual.widgets.option_list import Option
@@ -440,6 +440,227 @@ class ReportResultScreen(ModalScreen[None]):
             status.remove_class("error")
             content = self.query_one("#reports-result-content", Static)
             content.update(format_report_payload(self._item_id, payload))
+        except Exception:  # pragma: no cover
+            pass
+
+
+class ReportsScreen(ModalScreen[None]):
+    """CL #52792+ (사용자 요청): 좌측 메뉴 + 우측 결과를 한 큰 모달에 표시.
+
+    종전엔 `ReportsMenuScreen` (메뉴) → 선택 → `ReportResultScreen` (결과)
+    두 모달 — 메뉴를 잠시 닫고 결과만 보여 다른 항목 시도가 번거로움.
+    본 클래스는 두 패널을 동시 표시:
+      - 좌측 OptionList: 11개 보고서 항목.
+      - 우측 VerticalScroll > Static: 현재 highlight 된 항목의 결과.
+      - ↑/↓ 이동 → 자동 fetch (worker exclusive group="reports_fetch").
+      - Enter: 강제 refresh (선택적).
+      - Esc / q: 닫고 EntriesScreen 복귀.
+
+    백그라운드 fetch 는 `@work(exclusive=True)` 라 빠른 ↑/↓ 이동 시 이전
+    fetch 가 자동 cancel.
+
+    기존 `ReportsMenuScreen` / `ReportResultScreen` 은 backward compat 으로
+    유지 — 본 새 클래스는 사용자 가시 default.
+    """
+
+    DEFAULT_CSS = """
+    ReportsScreen {
+        align: center middle;
+    }
+    #reports-frame {
+        width: 95%;
+        max-width: 160;
+        min-width: 50;
+        height: 95%;
+        max-height: 50;
+        min-height: 16;
+        padding: 1 2;
+        border: thick $accent;
+        background: $surface;
+    }
+    #reports-title {
+        height: 1;
+        content-align: center middle;
+        color: $accent;
+    }
+    #reports-hint {
+        height: 1;
+        content-align: center middle;
+        color: $text-muted;
+    }
+    #reports-body {
+        layout: horizontal;
+        height: 1fr;
+        padding-top: 1;
+    }
+    #reports-menu-pane {
+        width: 30;
+        min-width: 24;
+        height: 1fr;
+        border-right: solid $primary;
+        padding: 0 1 0 0;
+    }
+    #reports-content-pane {
+        width: 1fr;
+        height: 1fr;
+        padding: 0 0 0 1;
+    }
+    #reports-status {
+        height: 1;
+        color: $text-muted;
+    }
+    #reports-status.error {
+        color: $error;
+    }
+    #reports-content {
+        padding: 1 0;
+    }
+    """
+
+    BINDINGS = [
+        Binding("escape", "close", "Close", show=True),
+        *bind_ko("q", "close", "Close", show=True),
+    ]
+
+    def __init__(
+        self,
+        client: WhooingClient,
+        session: SessionState,
+    ) -> None:
+        super().__init__()
+        self._client = client
+        self._session = session
+        self._current_item_id: str | None = None
+        # 마지막 결과 / 에러 — 테스트 친화.
+        self.last_payload: Any = None
+        self.last_error: str | None = None
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="reports-frame"):
+            yield Static("[bold]보고서 / 통계[/bold]", id="reports-title")
+            yield Static(
+                "↑/↓ 이동 → 자동 조회 / Esc 닫기",
+                id="reports-hint",
+            )
+            with Horizontal(id="reports-body"):
+                with Vertical(id="reports-menu-pane"):
+                    yield OptionList(id="reports-menu-list")
+                with Vertical(id="reports-content-pane"):
+                    yield Static("로딩 중…", id="reports-status")
+                    with VerticalScroll():
+                        yield Static("", id="reports-content")
+
+    def on_mount(self) -> None:
+        opt = self.query_one("#reports-menu-list", OptionList)
+        for item_id, label, _ in _build_menu():
+            opt.add_option(Option(label, id=item_id))
+        if opt.option_count:
+            opt.highlighted = 0
+            # 첫 항목 자동 fetch.
+            first = _build_menu()[0]
+            self._fetch_for(first[0], first[1])
+        opt.focus()
+
+    def action_close(self) -> None:
+        self.dismiss(None)
+
+    def on_option_list_option_highlighted(
+        self, event: OptionList.OptionHighlighted,
+    ) -> None:
+        """↑/↓ 이동 — 자동 fetch (exclusive worker)."""
+        oid = event.option.id
+        if not oid or oid == self._current_item_id:
+            return
+        for item_id, label, _ in _build_menu():
+            if item_id == oid:
+                self._fetch_for(item_id, label)
+                return
+
+    def on_option_list_option_selected(
+        self, event: OptionList.OptionSelected,
+    ) -> None:
+        """Enter — 강제 refresh."""
+        oid = event.option.id
+        if not oid:
+            return
+        for item_id, label, _ in _build_menu():
+            if item_id == oid:
+                self._fetch_for(item_id, label, force=True)
+                return
+
+    def _fetch_for(
+        self, item_id: str, label: str, *, force: bool = False,
+    ) -> None:
+        """worker spawn — fetch + 우측 panel update."""
+        self._current_item_id = item_id
+        # 우측 status — "로딩 중…".
+        try:
+            status = self.query_one("#reports-status", Static)
+            status.update(f"[dim]{label} — 로딩 중…[/dim]")
+            status.remove_class("error")
+            content = self.query_one("#reports-content", Static)
+            if force:
+                content.update("[dim]재조회 중…[/dim]")
+        except Exception:  # pragma: no cover
+            pass
+        self._fetch_worker(item_id, label)
+
+    @work(exclusive=True, group="reports_fetch", name="reports_fetch")
+    async def _fetch_worker(self, item_id: str, label: str) -> None:
+        fetch_fn = None
+        for iid, _label, fn in _build_menu():
+            if iid == item_id:
+                fetch_fn = fn
+                break
+        if fetch_fn is None:
+            self._show_error(label, "알 수 없는 메뉴 항목.")
+            return
+        try:
+            payload = await fetch_fn(self._client, self._session)
+        except ToolError as e:
+            self.last_error = f"[{e.kind}] {e.message}"
+            self._show_error(label, self.last_error)
+            return
+        except Exception as e:
+            from whooing_tui.official_mcp import OfficialMcpError
+            if isinstance(e, OfficialMcpError):
+                code = f" (code={e.code})" if e.code is not None else ""
+                self.last_error = f"[MCP{code}] {e}"
+                self._show_error(label, self.last_error)
+                return
+            log.exception("report fetch failed: %s", item_id)
+            self.last_error = f"INTERNAL: {e}"
+            self._show_error(label, self.last_error)
+            return
+        # 다른 항목으로 이동했으면 결과 폐기.
+        if self._current_item_id != item_id:
+            return
+        self.last_payload = payload
+        self.last_error = None
+        self._render_payload(item_id, label, payload)
+
+    def _show_error(self, label: str, msg: str) -> None:
+        try:
+            status = self.query_one("#reports-status", Static)
+            status.update(f"⚠️ {label} — 본문 참조")
+            status.add_class("error")
+            content = self.query_one("#reports-content", Static)
+            content.update(
+                f"[red bold]에러[/red bold]\n\n[red]{msg}[/red]\n\n"
+                f"[dim]↑/↓ 로 다른 보고서 시도, Esc 로 닫기.[/dim]"
+            )
+        except Exception:  # pragma: no cover
+            pass
+
+    def _render_payload(
+        self, item_id: str, label: str, payload: Any,
+    ) -> None:
+        try:
+            status = self.query_one("#reports-status", Static)
+            status.update(f"[dim]{label} — 완료[/dim]")
+            status.remove_class("error")
+            content = self.query_one("#reports-content", Static)
+            content.update(format_report_payload(item_id, payload))
         except Exception:  # pragma: no cover
             pass
 

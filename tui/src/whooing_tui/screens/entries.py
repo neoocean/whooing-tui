@@ -819,12 +819,12 @@ class EntriesScreen(MenuBarMixin, Screen):
     def action_open_reports(self) -> None:
         """CL #51116+: 통계 / 보고서 드롭다운 메뉴 (`t` 또는 ㅌ).
 
-        CL #52790+: ReportsMenuScreen 이 client/session 을 받아 결과 화면
-        을 자체 push. 결과 화면 Esc → 메뉴 화면 복귀 → 메뉴 Esc →
-        EntriesScreen. 종전엔 결과 Esc 가 한 번에 EntriesScreen 까지 닫혀
-        사용자가 메뉴 재진입 부담 (사용자 보고).
+        CL #52792+ (사용자 요청): 좌측 메뉴 + 우측 결과를 한 큰 모달로
+        통합 (`ReportsScreen`). ↑/↓ 이동 → 자동 fetch + 우측 패널 갱신.
+        종전 `ReportsMenuScreen` / `ReportResultScreen` 은 backward compat
+        으로 유지.
         """
-        from whooing_tui.screens.reports import ReportsMenuScreen
+        from whooing_tui.screens.reports import ReportsScreen
 
         session = self.app.session  # type: ignore[attr-defined]
         if not session.section_id:
@@ -832,7 +832,7 @@ class EntriesScreen(MenuBarMixin, Screen):
             return
 
         self.app.push_screen(
-            ReportsMenuScreen(client=self._client, session=session),
+            ReportsScreen(client=self._client, session=session),
         )
 
     # ---- CL #51145+ (H6) multi-select + batch tagging ------------------

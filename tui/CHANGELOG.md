@@ -5,6 +5,83 @@
 > **0.17.x 이전** (CL #51119 ~ #1) 항목은 분량 정리 차원에서
 > [`CHANGELOG-archive-0.17.md`](./CHANGELOG-archive-0.17.md) 로 분리 보존.
 
+## CL #52792 — 0.66.0 — 보고서 좌/우 패널 통합 화면 (2026-05-18)
+
+배경 (사용자 요청): '보고서 / 통계' 팝업을 더 크게, 좌측에는 메뉴 / 우측
+에는 선택 항목 결과 — 한 모달에 둘 다.
+
+### 동작 변경
+
+새 `ReportsScreen` 클래스 — 좌/우 패널 layout:
+
+```
+┌─ 보고서 / 통계 ──────────────────────────────────────────┐
+│ ↑/↓ 이동 → 자동 조회 / Esc 닫기                          │
+├──────────────────┬──────────────────────────────────────┤
+│ ▶ 재무상태표      │ 항목     금액 (KRW)                  │
+│   손익 요약       │ ─────  ────────────                 │
+│   월별 추이       │ 자산   -31,598,068                  │
+│   항목별 증감     │ 부채   164,524,712                  │
+│   캘린더          │ 자본   -196,122,780                 │
+│   최근 거래 20건  │ 수입            0                   │
+│   사용자 정의 BS  │ 지출   25,957,071                   │
+│   ...             │ 순이익  -25,957,071                 │
+└──────────────────┴──────────────────────────────────────┘
+```
+
+- **좌측** (width 30 cells): OptionList — 11 항목.
+- **우측** (1fr): 상단 status + VerticalScroll content.
+- **자동 fetch**: ↑/↓ 로 highlight 변경 시 즉시 worker 가 그 항목 fetch +
+  우측 패널 갱신. `@work(exclusive=True, group="reports_fetch")` 라
+  빠른 이동 시 이전 fetch 자동 cancel.
+- **Enter**: 강제 refresh.
+- **Esc / q**: EntriesScreen 직접 복귀 (한 모달).
+
+`ReportsScreen.on_mount` 가 첫 항목 (balance_sheet) 자동 fetch — 사용자
+진입 즉시 결과 표시.
+
+### Backward compat
+
+기존 `ReportsMenuScreen` / `ReportResultScreen` 클래스는 그대로 유지 —
+다른 곳에서 import 가능성 + 테스트의 일부 회귀 검증. `EntriesScreen.
+action_open_reports` 만 새 `ReportsScreen` 으로 push.
+
+### Race 방지
+
+사용자가 ↑/↓ 빠르게 누름 → 매 highlight 변경마다 새 fetch worker.
+`exclusive=True` + `group="reports_fetch"` 가 이전 worker cancel.
+또한 `_current_item_id` 비교로 worker 가 자기 결과 폐기 (다른 항목으로
+이동했으면).
+
+### 수정 파일
+
+- `tui/src/whooing_tui/screens/reports.py`
+  - imports: `Horizontal` 추가.
+  - 새 `ReportsScreen` 클래스 (~180 줄) — frame + 좌/우 panel CSS + 자동
+    fetch worker.
+  - `format_report_payload` 그대로 재사용.
+- `tui/src/whooing_tui/screens/entries.py`
+  - `action_open_reports` 가 `ReportsScreen(client, session)` push.
+- `tui/tests/test_reports.py` — 기존 4 통합 테스트 갱신 (옛 2-modal 흐름
+  → 새 한 화면), 회귀 방지 +2:
+  - `test_reports_screen_has_menu_and_content_panes` (좌 OptionList + 우
+    panel widgets 존재, 11 항목).
+  - `test_reports_screen_auto_fetches_on_highlight_change` (↑/↓ → 자동
+    fetch 트리거).
+- `tui/pyproject.toml` — 0.65.0 → 0.66.0.
+- `tui/src/whooing_tui/__init__.py` — `__version__` 동기화.
+
+### 검증
+
+- **939 passed** (937 → +2 신규). 회귀 0.
+
+### 사용자 후속 확인
+
+`t` 누름 → 큰 모달 등장 — 좌측 메뉴 11 항목, 우측 첫 항목 (재무상태표)
+결과 자동 표시. ↑/↓ 로 이동할 때마다 우측 즉시 갱신. Esc → EntriesScreen.
+
+---
+
 ## CL #52790 — 0.65.0 — 보고서 Esc 흐름 + budget renderer 강화 (2026-05-18)
 
 배경 (사용자 요청 2건, 캡처):
