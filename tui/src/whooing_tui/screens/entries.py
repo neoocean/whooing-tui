@@ -207,6 +207,14 @@ class EntriesScreen(MenuBarMixin, Screen):
         Binding("end", "row_end", "End", show=False, priority=True),
         Binding("pageup", "row_pageup", "PgUp", show=False, priority=True),
         Binding("pagedown", "row_pagedown", "PgDn", show=False, priority=True),
+        # CL #52773+: Shift + navigation — 범위 multi-select.
+        # anchor (이전 cursor) 부터 새 cursor 까지의 entries 를 selection set 에.
+        Binding("shift+up", "row_select_up", "Shift+↑", show=False, priority=True),
+        Binding("shift+down", "row_select_down", "Shift+↓", show=False, priority=True),
+        Binding("shift+home", "row_select_home", "Shift+Home", show=False, priority=True),
+        Binding("shift+end", "row_select_end", "Shift+End", show=False, priority=True),
+        Binding("shift+pageup", "row_select_pageup", "Shift+PgUp", show=False, priority=True),
+        Binding("shift+pagedown", "row_select_pagedown", "Shift+PgDn", show=False, priority=True),
         Binding("question_mark", "help", "Help", show=True, priority=True, key_display="?"),
         Binding("plus", "extend_window", "+7d", show=True),
         Binding("minus", "shrink_window", "-7d", show=True),
@@ -387,6 +395,10 @@ class EntriesScreen(MenuBarMixin, Screen):
         # CL #51145+ (H6): 일괄 작업용 multi-select. space 토글, '#' = 일괄 태그.
         # entry_id 의 set — refresh 시 reset (사라진 entry 의 stale 방지).
         self._selected_entry_ids: set[str] = set()
+        # CL #52773+: Shift+화살표 / Shift+click 의 anchor row — 마지막 단일
+        # selection 또는 cursor 가 anchor. None 이면 현재 cursor 가 anchor 로
+        # set 되며 시작. selection 해제 (`action_clear_filter` 등) 시 None.
+        self._selection_anchor: int | None = None
         # CL #51151+ (H11): tag → color (Rich/Textual 색명).
         self._tag_colors: dict[str, str] = {}
         # 태그 단위 column 네비 — `_active_col == _COL_INDEX["item"]` +
@@ -1130,6 +1142,133 @@ class EntriesScreen(MenuBarMixin, Screen):
             table.move_cursor(row=target, animate=False)
         except Exception:  # pragma: no cover
             pass
+
+    # ---- CL #52773+ Shift + navigation — 범위 multi-select ---------------
+
+    def _extend_selection_to(self, target_row: int) -> None:
+        """anchor row ~ target_row 사이의 entries 를 selection 에 추가.
+
+        anchor 가 None 이면 현재 cursor 를 anchor 로 set. 그 후 cursor 를
+        target_row 로 이동 + anchor~target 범위의 entry_id 를 selection 에
+        union (toggle 이 아닌 add — 사용자가 범위를 점진적으로 확장하는
+        Windows/macOS 표준 패턴).
+        """
+        table = self.query_one("#entries-table", DataTable)
+        if self._selection_anchor is None:
+            self._selection_anchor = table.cursor_row
+        anchor = self._selection_anchor
+        lo, hi = sorted((anchor, target_row))
+        for r in range(lo, hi + 1):
+            idx = self._entry_index_for_row(r)
+            if idx is None or idx < 0 or idx >= len(self._entries):
+                continue
+            eid = str(self._entries[idx].get("entry_id") or "")
+            if eid:
+                self._selected_entry_ids.add(eid)
+        try:
+            table.move_cursor(row=target_row, animate=False)
+        except Exception:  # pragma: no cover
+            pass
+        # 행을 다시 그려 ▣ 표시 반영.
+        self._render_table(self._entries, target_cursor=target_row)
+        self.set_status(
+            f"선택: {len(self._selected_entry_ids)}건 "
+            f"(Shift+navigation 으로 범위 확장 / m 또는 # 으로 일괄 태그)",
+        )
+
+    def action_row_select_up(self) -> None:
+        table = self.query_one("#entries-table", DataTable)
+        self._extend_selection_to(max(self._first_entry_row(), table.cursor_row - 1))
+
+    def action_row_select_down(self) -> None:
+        table = self.query_one("#entries-table", DataTable)
+        self._extend_selection_to(min(self._last_entry_row(), table.cursor_row + 1))
+
+    def action_row_select_home(self) -> None:
+        self._extend_selection_to(self._first_entry_row())
+
+    def action_row_select_end(self) -> None:
+        self._extend_selection_to(self._last_entry_row())
+
+    def action_row_select_pageup(self) -> None:
+        table = self.query_one("#entries-table", DataTable)
+        target = max(self._first_entry_row(), table.cursor_row - self._page_step())
+        self._extend_selection_to(target)
+
+    def action_row_select_pagedown(self) -> None:
+        table = self.query_one("#entries-table", DataTable)
+        target = min(self._last_entry_row(), table.cursor_row + self._page_step())
+        self._extend_selection_to(target)
+
+    # ---- CL #52773+ 마우스 click — Ctrl / Shift modifier multi-select ----
+
+    def on_click(self, event) -> None:
+        """Ctrl+click → 토글 한 항목. Shift+click → 현재 cursor ~ 클릭 row 범위.
+
+        modifier 없는 단순 click 은 textual DataTable 의 default (cursor 이동)
+        그대로 통과 — 본 핸들러는 event 를 stop 안 하면 default 도 작동.
+        """
+        # event 가 DataTable cell 위에서 발생한 경우만 처리.
+        try:
+            table = self.query_one("#entries-table", DataTable)
+        except Exception:  # pragma: no cover
+            return
+        widget = getattr(event, "widget", None) or getattr(event, "control", None)
+        if widget is not table and not self._is_descendant(widget, table):
+            return
+        ctrl = bool(getattr(event, "ctrl", False))
+        shift = bool(getattr(event, "shift", False))
+        if not (ctrl or shift):
+            # 일반 click — default cursor 이동 + anchor reset.
+            self._selection_anchor = table.cursor_row
+            return
+        # 클릭한 row 좌표 회수 — table 의 widget-local y → row index.
+        # textual 의 DataTable 은 `event.y` 가 widget 영역 기준 y offset.
+        try:
+            offset = event.get_content_offset(table) if hasattr(
+                event, "get_content_offset",
+            ) else None
+            if offset is not None:
+                clicked_row = table.hover_row
+            else:
+                clicked_row = getattr(event, "y", -1) - 1
+        except Exception:  # pragma: no cover
+            clicked_row = table.hover_row
+        if clicked_row is None or clicked_row < 0:
+            return
+        if ctrl:
+            # Ctrl+click — 토글 단일 항목, anchor 갱신.
+            idx = self._entry_index_for_row(clicked_row)
+            if idx is None or idx < 0 or idx >= len(self._entries):
+                return
+            eid = str(self._entries[idx].get("entry_id") or "")
+            if eid:
+                if eid in self._selected_entry_ids:
+                    self._selected_entry_ids.discard(eid)
+                else:
+                    self._selected_entry_ids.add(eid)
+                self._selection_anchor = clicked_row
+                self._render_table(self._entries, target_cursor=clicked_row)
+                self.set_status(
+                    f"선택: {len(self._selected_entry_ids)}건",
+                )
+                event.stop()
+        elif shift:
+            self._extend_selection_to(clicked_row)
+            event.stop()
+
+    @staticmethod
+    def _is_descendant(widget, ancestor) -> bool:
+        """widget 이 ancestor 의 트리 안에 있는지 — 단순 부모 chain walk."""
+        try:
+            cur = widget
+            while cur is not None:
+                if cur is ancestor:
+                    return True
+                cur = getattr(cur, "parent", None)
+        except Exception:  # pragma: no cover
+            pass
+        return False
 
     # ---- 컬럼 navigation (CL #51053+, 활성/비활성 상태는 #51064+) -----
 

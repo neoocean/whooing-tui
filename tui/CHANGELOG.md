@@ -5,6 +5,84 @@
 > **0.17.x 이전** (CL #51119 ~ #1) 항목은 분량 정리 차원에서
 > [`CHANGELOG-archive-0.17.md`](./CHANGELOG-archive-0.17.md) 로 분리 보존.
 
+## CL #52773 — 0.62.0 — MenuPopup backdrop 제거 + Ctrl/Shift multi-select (2026-05-18)
+
+배경 (사용자 요청 3건):
+
+1. 풀다운 메뉴가 화면 하단까지 길게 화면을 가리지 말고 메뉴 영역에만
+   나타나도록.
+2. 거래 목록에서 Ctrl+클릭으로 여러 항목 선택.
+3. 거래 목록에서 Shift+클릭 또는 Shift+방향키로 범위 선택.
+4. (이미 0.60.0 에 구현) 그 상태에서 m 키 → 컨텍스트 메뉴 → 일괄 태그.
+
+### 동작
+
+**A) MenuPopup backdrop 제거** (`widgets/menubar.py`):
+- 종전: `ModalScreen` 의 default 50% black overlay 가 화면 전체에 깔려서
+  메뉴 외 영역이 어둡게 보임 — 사용자에게는 "메뉴가 화면 하단까지 길게"
+  로 인식.
+- 변경: `MenuPopup` 의 CSS 에 `background: transparent` + `#menupopup_box`
+  에 `height: auto` 명시. 항목 수만큼만 높이 차지, 뒷 화면은 원래 색.
+
+**B) Ctrl+click multi-select** (`EntriesScreen.on_click`):
+- `event.ctrl` 가 True 면 클릭한 row 의 entry_id 를 selection 에 토글
+  (이미 선택 시 해제). cursor / anchor 도 갱신.
+- modifier 없는 일반 click 은 default cursor 이동만 (textual DataTable
+  통과).
+
+**C) Shift+click + Shift+navigation 범위 선택**:
+- 새 상태 `_selection_anchor: int | None` — anchor row 추적.
+- `_extend_selection_to(target_row)` — anchor None 이면 현재 cursor 를
+  anchor 로 set. anchor ~ target 사이 모든 row 의 entry_id 를 selection
+  set 에 **union** (toggle 이 아님 — Windows/macOS 표준 범위 확장 패턴).
+- 새 키:
+  - `Shift+↑` / `Shift+↓` — 한 row 씩 범위 확장
+  - `Shift+Home` / `Shift+End` — anchor ~ 첫/마지막 entry
+  - `Shift+PgUp` / `Shift+PgDn` — anchor ~ 한 페이지
+  - Shift+click — anchor ~ 클릭 row
+
+**D) m 키 → 일괄 태그** (CL #52763 의 context menu, 이미 구현):
+- `_selected_entry_ids` 가 1+ 이면 "선택 N건 일괄 태그 (#)" 항목 자동
+  추가. action_batch_tag 호출 → 태그 입력 dialog.
+
+### 수정 파일
+
+- `tui/src/whooing_tui/widgets/menubar.py`
+  - `MenuPopup.DEFAULT_CSS`: `background: transparent` + `#menupopup_box`
+    `height: auto`.
+- `tui/src/whooing_tui/screens/entries.py`
+  - `__init__` 에 `_selection_anchor: int | None`.
+  - BINDINGS 에 6 신규 Shift+nav binding (`shift+up/down/home/end/pageup/
+    pagedown` → `row_select_*`).
+  - 새 actions: `_extend_selection_to` + 6 `action_row_select_*` 메서드.
+  - 새 `on_click` handler — `event.ctrl` / `event.shift` 분기 (DataTable
+    descendant 만 처리). modifier 없는 click 은 통과.
+  - `_is_descendant` static helper.
+- `tui/tests/test_entries_mutate.py` — 회귀 방지 +5:
+  - `test_shift_nav_bindings_registered`
+  - `test_shift_down_extends_selection_range`
+  - `test_shift_end_selects_from_anchor_to_last`
+  - `test_clear_filter_resets_selection_anchor` (anchor 는 filter 와 직교 — 유지)
+  - `test_extend_selection_sets_anchor_when_none`
+- `tui/pyproject.toml` — 0.61.0 → 0.62.0.
+- `tui/src/whooing_tui/__init__.py` — `__version__` 동기화.
+
+### 검증
+
+- **898 passed** (893 → +5 신규). 회귀 0.
+
+### 사용자 후속 확인
+
+거래 목록에서:
+1. `F10` / `Alt+M` 또는 메뉴바 클릭 → 풀다운 메뉴 — **메뉴 영역만 표시**,
+   뒷 화면 어두워지지 않음.
+2. `Ctrl+클릭` (또는 macOS `⌘+click`) — 여러 항목 토글 선택.
+3. `Shift+클릭` 또는 `Shift+↑↓` — 범위 선택. anchor 가 처음 클릭/방향키
+   시작점, 그 후 cursor 까지 모두 selection.
+4. `m` 누름 → context menu → "선택 N건 일괄 태그 (#)" → 태그 입력 dialog.
+
+---
+
 ## CL #52771 — 0.61.0 — 거래 목록 Home/End/PgUp/PgDn (2026-05-18)
 
 배경 (사용자 요청): EntriesScreen 의 거래 목록에서 Home / End / PgUp /

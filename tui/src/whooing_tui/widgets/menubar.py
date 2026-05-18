@@ -168,6 +168,11 @@ class MenuPopup(ModalScreen[tuple[int, str] | str | None]):
     DEFAULT_CSS = """
     MenuPopup {
         align: left top;
+        /* CL #52773+: backdrop 제거 — modal frame 만 보이고 뒷 화면은
+           원래 색 그대로 (사용자 요청: 메뉴가 화면 하단까지 길게 가리지
+           않게). textual ModalScreen 의 default background 가 50% black
+           overlay 라 메뉴 외 영역까지 어두워졌었다. */
+        background: transparent;
     }
     #menupopup_box {
         background: $panel;
@@ -176,6 +181,7 @@ class MenuPopup(ModalScreen[tuple[int, str] | str | None]):
         width: auto;
         min-width: 20;
         max-width: 60;
+        height: auto;       /* 항목 수만큼만 — 화면 하단까지 늘어나지 않음. */
         margin-top: 2;     /* Header(1) + MenuBar(1) 아래로. */
         margin-left: 2;
     }
