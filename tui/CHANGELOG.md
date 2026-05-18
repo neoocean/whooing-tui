@@ -5,6 +5,56 @@
 > **0.17.x 이전** (CL #51119 ~ #1) 항목은 분량 정리 차원에서
 > [`CHANGELOG-archive-0.17.md`](./CHANGELOG-archive-0.17.md) 로 분리 보존.
 
+## CL #52718 — 0.52.0 — EntryEditDialog 에 attach row (2026-05-18)
+
+배경 (사용자 요청): 거래 수정 dialog 에서 바로 첨부 추가/관리가 가능했으면.
+종전엔 dialog 닫고 → EntriesScreen 의 `f` 키 → AttachmentBrowserScreen 으로
+2-step 필요. 사용자가 거래 메타 (memo / tags) 다듬으면서 같은 흐름으로
+첨부 처리하고 싶다는 자연스러운 요청.
+
+### 동작
+
+- EntryEditDialog 의 form-grid 마지막 row 에 **attach** label + `📎` 버튼.
+  | 모드 | label | 동작 |
+  | --- | --- | --- |
+  | 수정, 0 개 | `📎 첨부 없음 — Enter 로 추가` | Enter → AttachmentBrowserScreen |
+  | 수정, N 개 | `📎 N개 첨부 — Enter 로 관리` | 〃 (N 자동 갱신) |
+  | 신규 (entry_id 없음) | `📎 저장 후 첨부 가능` | disabled — push 안 됨 |
+- `on_screen_resume` hook 으로 AttachmentBrowserScreen 닫고 dialog 로 복귀
+  시 count 재계산 — browser 안에서 a/d 한 결과가 즉시 라벨에 반영.
+- form-grid `grid-size: 2 7 → 2 8`, `grid-rows: 3×7 → 3×8`. 모달 height 는
+  `height: auto` 라 추가 row 만큼 그대로 늘어남 (좁은 터미널 95% 규칙 유지).
+
+### 신규 모드는 왜 disabled?
+
+`AttachmentBrowserScreen(entry_id=...)` 가 entry_id 를 강하게 요구. 신규
+거래는 저장 후에야 entry_id 가 생기므로 dialog 안에서 미리 첨부할 수단이
+없다. 저장 → 거래 목록에서 다시 열기 → 첨부 가 자연스러운 흐름. disabled
+button + 안내 라벨로 의도 명시.
+
+### 수정
+
+- `tui/src/whooing_tui/screens/edit_entry.py`
+  - 새 widget `_AttachmentButton` (label 분기: 신규/0개/N개).
+  - `compose()` 의 form-grid 에 attach row 추가.
+  - `on_button_pressed` 에 `f-attachments` 분기 — `_open_attachments` 호출.
+  - `_open_attachments` — AttachmentBrowserScreen push.
+  - `_fetch_attachment_count` — `entries.py::_fetch_all_attachment_counts`
+    와 같은 패턴, 단일 entry_id 만 query.
+  - `on_screen_resume` hook — browser 닫힌 뒤 count 자동 갱신.
+  - DEFAULT_CSS 의 form-grid `2 7 → 2 8`, `grid-rows 3×7 → 3×8`.
+- `tui/tests/test_edit_entry_dialog.py` — `_AttachmentButton` label 단위
+  테스트 4 케이스 (신규 disabled / 수정 0개 / 수정 N개 / set_count 갱신).
+- `tui/tests/test_entries_mutate.py` — 통합 테스트 3 케이스 (수정 모드
+  button enabled / 신규 모드 button disabled / button click → browser push).
+- `tui/pyproject.toml` — 0.51.0 → 0.52.0.
+
+### 검증
+
+- 합계 — **606 passed** (회귀 0; +7 신규 attach 케이스).
+
+---
+
 ## CL #51160 — 0.51.0 — 리뷰 C13/C16: monthly TODO + CHANGELOG archive (2026-05-11)
 
 배경 (review C10~C14, C16 polish 묶음): 잔여 polish 항목을 합쳐 ship.

@@ -15,6 +15,7 @@ import pytest
 
 from whooing_tui.screens.edit_entry import (
     EntryDraft,
+    _AttachmentButton,
     _digits_only,
     _format_date_dashed,
     _format_money_comma,
@@ -161,3 +162,41 @@ def test_entry_draft_preserves_tags():
     )
     assert d.tags == ["식비", "저녁"]
     assert d.l_type == "expenses"
+
+
+# ---- _AttachmentButton (CL #52718+) -----------------------------------
+
+
+def test_attachment_button_new_mode_disabled_label():
+    """신규 모드 (entry_id 비어있음) — disabled + 안내 label."""
+    b = _AttachmentButton(entry_id="", count=0)
+    assert b.disabled is True
+    assert "저장 후" in str(b.label)
+    assert "📎" in str(b.label)
+
+
+def test_attachment_button_edit_mode_zero_count_label():
+    """수정 모드, 첨부 0개 — Enter 로 추가 안내."""
+    b = _AttachmentButton(entry_id="e123", count=0)
+    assert b.disabled is False
+    assert "Enter" in str(b.label)
+    assert "추가" in str(b.label)
+
+
+def test_attachment_button_edit_mode_with_count_label():
+    """수정 모드, N개 첨부 — N 숫자 노출."""
+    b = _AttachmentButton(entry_id="e123", count=3)
+    assert b.disabled is False
+    assert "3" in str(b.label)
+    assert "관리" in str(b.label)
+
+
+def test_attachment_button_set_count_updates_label():
+    """browser 다녀온 뒤 갱신 시나리오 — set_count 가 label 도 함께 갱신."""
+    b = _AttachmentButton(entry_id="e123", count=0)
+    assert "추가" in str(b.label)
+    b.set_count(5)
+    assert "5" in str(b.label)
+    assert "관리" in str(b.label)
+    b.set_count(0)
+    assert "추가" in str(b.label)

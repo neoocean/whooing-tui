@@ -17,6 +17,10 @@ UI 필드 (CL #51076+):
   memo     메모 (후잉 + 로컬 db 양쪽에 저장).
   tags     해시태그 (로컬 db only). 공백/콤마/`#` 구분 — `식비, 저녁`
            또는 `#식비 #저녁`.
+  attach   첨부파일 (수정 모드에서만, entry_id 가 있을 때) — 📎N 으로
+           현재 개수 표시 + Enter / 클릭 시 AttachmentBrowserScreen
+           push (a/d/o/e 로 추가/삭제/열기/note 편집). 신규 모드는
+           entry_id 가 없어 disabled — 저장 후 다시 열면 사용 가능.
 """
 
 from __future__ import annotations
@@ -237,6 +241,53 @@ class _AccountButton(Button):
         self.label = self._make_label(title, account_id)
 
 
+class _AttachmentButton(Button):
+    """attach 자리에 들어가는 picker 버튼.
+
+    label 은 첨부 개수에 따라 동적:
+      - 수정 모드 + 0 개  : "📎 첨부 없음 — Enter 로 추가"
+      - 수정 모드 + N개  : "📎 N개 첨부 — Enter 로 관리"
+      - 신규 모드        : "📎 저장 후 첨부 가능" (disabled)
+
+    `entry_id` 가 비어있으면 자동으로 disabled. AttachmentBrowserScreen 이
+    entry_id 를 요구하므로 신규 모드는 의미상 무효.
+    """
+
+    DEFAULT_CSS = """
+    _AttachmentButton {
+        width: 1fr;
+        text-align: left;
+    }
+    """
+
+    def __init__(
+        self,
+        *,
+        entry_id: str = "",
+        count: int = 0,
+        button_id: str | None = None,
+    ) -> None:
+        super().__init__(
+            self._make_label(entry_id, count),
+            id=button_id,
+            disabled=not entry_id,
+        )
+        self.entry_id = entry_id
+        self.count = count
+
+    @staticmethod
+    def _make_label(entry_id: str, count: int) -> str:
+        if not entry_id:
+            return "📎 저장 후 첨부 가능"
+        if count == 0:
+            return "📎 첨부 없음 — Enter 로 추가"
+        return f"📎 {count}개 첨부 — Enter 로 관리"
+
+    def set_count(self, count: int) -> None:
+        self.count = count
+        self.label = self._make_label(self.entry_id, count)
+
+
 class EntryEditDialog(ModalScreen[EntryDraft | None]):
     """거래 추가/수정 모달. dismiss(EntryDraft | None)."""
 
@@ -261,9 +312,9 @@ class EntryEditDialog(ModalScreen[EntryDraft | None]):
         color: $accent;
     }
     #form-grid {
-        grid-size: 2 7;
+        grid-size: 2 8;
         grid-columns: 9 1fr;
-        grid-rows: 3 3 3 3 3 3 3;
+        grid-rows: 3 3 3 3 3 3 3 3;
         height: auto;
         padding: 1 0;
     }
@@ -386,6 +437,13 @@ class EntryEditDialog(ModalScreen[EntryDraft | None]):
                 # Enter 로 TagsPicker 가 정식 picker 지만, hint 가 즉시
                 # 보여주면 사용자가 Picker 안 띄워도 직접 타이핑 완성 가능.
                 yield Static("", id="f-tags-hint")
+                yield Label("attach")
+                entry_id_str = str(self._existing.get("entry_id") or "")
+                yield _AttachmentButton(
+                    entry_id=entry_id_str,
+                    count=self._fetch_attachment_count() if entry_id_str else 0,
+                    button_id="f-attachments",
+                )
             yield Static("", id="form-error")
             with Horizontal(id="button-row"):
                 yield Button("Save (Ctrl+S)", id="btn-save", variant="primary")
@@ -413,6 +471,21 @@ class EntryEditDialog(ModalScreen[EntryDraft | None]):
         elif bid in ("f-left", "f-right"):
             # left/right 버튼 — 계정과목 picker 모달.
             self._open_account_picker(bid)
+        elif bid == "f-attachments":
+            self._open_attachments()
+
+    def on_screen_resume(self) -> None:
+        """attachment browser 가 닫히고 본 dialog 가 다시 보이게 되면
+        attach 버튼의 count 를 재계산 — browser 안에서 a/d 했을 수 있다.
+        신규 모드 (button disabled) 면 아무 것도 안 함.
+        """
+        try:
+            btn = self.query_one("#f-attachments", _AttachmentButton)
+        except Exception:
+            return
+        if not btn.entry_id:
+            return
+        btn.set_count(self._fetch_attachment_count())
 
     def on_input_submitted(self, event: Input.Submitted) -> None:
         """tags Input 위에서 Enter — TagsPickerScreen push.
@@ -488,6 +561,50 @@ class EntryEditDialog(ModalScreen[EntryDraft | None]):
                 self._session, side=side, current_id=btn.account_id or None,
             ),
             _on_pick,
+        )
+
+    def _fetch_attachment_count(self) -> int:
+        """현재 수정 중인 entry 의 첨부 개수. 실패 / 신규 모드면 0.
+
+        entries.py 의 `_fetch_all_attachment_counts` 와 같은 패턴 — 단
+        일 entry 만 query. db 없음 / 권한 / 섹션 unset 등은 모두 0 으로
+        graceful degrade (dialog 자체는 정상 열림).
+        """
+        eid = self._existing.get("entry_id")
+        if not eid:
+            return 0
+        try:
+            from whooing_core import attachments as core_attach
+            from whooing_tui import data as tui_data
+        except Exception:  # pragma: no cover
+            return 0
+        sid = self._session.section_id or None
+        try:
+            with tui_data.open_ro() as conn:
+                m = core_attach.list_attachments_for(
+                    conn, [str(eid)], section_id=sid,
+                )
+        except Exception:
+            return 0
+        return len(m.get(str(eid), []))
+
+    def _open_attachments(self) -> None:
+        """attach 버튼 → AttachmentBrowserScreen push.
+
+        AttachmentBrowserScreen 은 a/d/o/e/r 로 첨부를 추가/삭제/열기/note
+        편집/새로고침. 우리 dialog 는 그동안 push stack 아래에서 살아있다가
+        `on_screen_resume` 에서 count 를 다시 fetch.
+        """
+        eid = self._existing.get("entry_id")
+        if not eid:
+            return
+        from whooing_tui.screens.attachment_browser import AttachmentBrowserScreen
+
+        self.app.push_screen(
+            AttachmentBrowserScreen(
+                entry_id=str(eid),
+                section_id=self._session.section_id or None,
+            ),
         )
 
     def _open_tags_picker(self) -> None:

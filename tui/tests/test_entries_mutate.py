@@ -437,3 +437,72 @@ async def test_tags_input_empty_clears_hint():
         await pilot.pause()
         hint = dialog.query_one("#f-tags-hint", Static)
         assert str(hint.render()).strip() == ""
+
+
+# ---- CL #52718+ : attach button in EntryEditDialog --------------------
+
+
+@pytest.mark.asyncio
+async def test_edit_dialog_shows_attach_button_enabled_in_edit_mode():
+    """수정 모드 — entry_id 있으므로 attach button 이 enabled + 📎 라벨."""
+    from whooing_tui.screens.edit_entry import _AttachmentButton
+
+    fake = FakeClient()
+    app = WhooingTuiApp(client=fake)  # type: ignore[arg-type]
+    async with app.run_test() as pilot:
+        es = await _open_entries(app, pilot)
+        es.action_edit_entry()
+        await pilot.pause()
+        dialog = app.screen
+        assert isinstance(dialog, EntryEditDialog)
+        btn = dialog.query_one("#f-attachments", _AttachmentButton)
+        assert btn.entry_id == "e1"
+        assert btn.disabled is False
+        # 첨부가 없는 상태 (FakeClient 의 fixture 에 sqlite 첨부 시드 X)
+        # 라 count 0 — "Enter 로 추가" 메시지.
+        assert "📎" in str(btn.label)
+        assert "추가" in str(btn.label)
+
+
+@pytest.mark.asyncio
+async def test_new_dialog_shows_attach_button_disabled_in_new_mode():
+    """신규 모드 — entry_id 없으므로 attach button 이 disabled."""
+    from whooing_tui.screens.edit_entry import _AttachmentButton
+
+    fake = FakeClient()
+    app = WhooingTuiApp(client=fake)  # type: ignore[arg-type]
+    async with app.run_test() as pilot:
+        es = await _open_entries(app, pilot)
+        es.action_new_entry()
+        await pilot.pause()
+        dialog = app.screen
+        assert isinstance(dialog, EntryEditDialog)
+        btn = dialog.query_one("#f-attachments", _AttachmentButton)
+        assert btn.entry_id == ""
+        assert btn.disabled is True
+        assert "저장 후" in str(btn.label)
+
+
+@pytest.mark.asyncio
+async def test_edit_dialog_attach_button_pushes_browser():
+    """수정 모드 + attach button click → AttachmentBrowserScreen push."""
+    from textual.widgets import Button
+
+    from whooing_tui.screens.attachment_browser import AttachmentBrowserScreen
+    from whooing_tui.screens.edit_entry import _AttachmentButton
+
+    fake = FakeClient()
+    app = WhooingTuiApp(client=fake)  # type: ignore[arg-type]
+    async with app.run_test() as pilot:
+        es = await _open_entries(app, pilot)
+        es.action_edit_entry()
+        await pilot.pause()
+        dialog = app.screen
+        assert isinstance(dialog, EntryEditDialog)
+        btn = dialog.query_one("#f-attachments", _AttachmentButton)
+        # Button.Pressed 이벤트로 click 시뮬.
+        dialog.post_message(Button.Pressed(btn))
+        await pilot.pause()
+        assert isinstance(app.screen, AttachmentBrowserScreen)
+        assert app.screen.entry_id == "e1"
+        assert app.screen.section_id == "s1"
