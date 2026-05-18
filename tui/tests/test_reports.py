@@ -88,13 +88,27 @@ def test_format_report_payload_list_works():
 
 
 class _Client:
-    """test 용 — section/account/entries + report fetch 모킹."""
+    """test 용 — section/account/entries + report fetch 모킹.
+
+    CL #52755+: 보고서 fetch 가 모두 `call_official_tool` 위임으로 변경.
+    옛 endpoint-별 메서드 (get_report 등) 는 더 이상 호출되지 않으므로
+    제거. 대신 `call_official_tool` 의 호출 args 를 capture.
+    """
 
     def __init__(self) -> None:
         self.sections = [{"section_id": "s1", "title": "main"}]
         self.accounts = {"assets": [{"account_id": "x11", "title": "현금"}]}
         self._entries: list[dict[str, Any]] = []
-        self.last_report_call: dict[str, Any] | None = None
+        self.last_mcp_call: dict[str, Any] | None = None
+        # 도구별 응답 stub — 필요 시 override.
+        self.tool_responses: dict[str, Any] = {
+            "report-get": {"total": 12345, "accounts": []},
+            "report_customs-list": {"rows": []},
+            "budget-get": {"aggregate": {"total": {"budget": 500000}}},
+            "budget_goal-get": {"set_id": 0},
+        }
+        # 도구별 raise 옵션.
+        self.tool_errors: dict[str, Exception] = {}
 
     async def list_sections(self):
         return list(self.sections)
@@ -105,37 +119,11 @@ class _Client:
     async def list_entries(self, section_id, start_date, end_date):
         return list(self._entries)
 
-    async def get_report(self, **kwargs):
-        self.last_report_call = {"endpoint": "report", **kwargs}
-        return {"total": 12345, "accounts": []}
-
-    async def get_report_summary(self, **kwargs):
-        self.last_report_call = {"endpoint": "report_summary", **kwargs}
-        return {"rows_type": "none", "aggregate": {"expenses": 0}}
-
-    async def get_in_out(self, **kwargs):
-        self.last_report_call = {"endpoint": "in_out", **kwargs}
-        return {"aggregate": {}}
-
-    async def get_calendar(self, **kwargs):
-        self.last_report_call = {"endpoint": "calendar", **kwargs}
-        return {"aggregate": {}, "rows": {}}
-
-    async def get_entries_latest(self, **kwargs):
-        self.last_report_call = {"endpoint": "entries_latest", **kwargs}
-        return [{"entry_id": "e1"}]
-
-    async def list_report_customs(self, **kwargs):
-        self.last_report_call = {"endpoint": "report_customs", **kwargs}
-        return [{"id": "12", "title": "행1", "money": 100}]
-
-    async def get_budget(self, **kwargs):
-        self.last_report_call = {"endpoint": "budget", **kwargs}
-        return {"aggregate": {"total": {"budget": 500000}}}
-
-    async def get_budget_goal(self, **kwargs):
-        self.last_report_call = {"endpoint": "budget_goal", **kwargs}
-        return {"set_id": 0}
+    async def call_official_tool(self, name: str, arguments: dict[str, Any]):
+        self.last_mcp_call = {"name": name, "arguments": dict(arguments)}
+        if name in self.tool_errors:
+            raise self.tool_errors[name]
+        return self.tool_responses.get(name, {})
 
     # mutation stubs — 본 테스트 셋에서는 안 쓰임.
     async def create_entry(self, **kw):
@@ -196,17 +184,19 @@ async def test_menu_select_pushes_result_screen_and_fetches():
         assert isinstance(app.screen, ReportResultScreen)
         # fetch 가 worker 로 진행 — 잠시 기다려 client 호출 + payload 도착.
         ok = await _wait_for(
-            lambda: fake.last_report_call is not None
+            lambda: fake.last_mcp_call is not None
             and getattr(app.screen, "last_payload", None) is not None,
             timeout=3.0,
         )
         assert ok
-        assert fake.last_report_call["endpoint"] == "report"
-        assert fake.last_report_call["section_id"] == "s1"
-        # CL #51117+: type 파라미터는 제거됐고, balance_sheet 메뉴는
-        # account="assets,liabilities" + rows_type="none" 으로 호출.
-        assert fake.last_report_call["account"] == "assets,liabilities"
-        assert fake.last_report_call["rows_type"] == "none"
+        # CL #52755+: 공식 MCP server 의 `report-get` 도구 호출.
+        assert fake.last_mcp_call["name"] == "report-get"
+        args = fake.last_mcp_call["arguments"]
+        assert args["section_id"] == "s1"
+        assert args["type"] == "report"
+        # account 는 enum — 콤마 다중 X. 통합 조회는 'all'.
+        assert args["account"] == "all"
+        assert args["rows_type"] == "none"
 
 
 @pytest.mark.asyncio
@@ -228,13 +218,13 @@ async def test_menu_cancel_returns_without_pushing_result():
         await pilot.pause()
         # 다시 EntriesScreen
         assert isinstance(app.screen, EntriesScreen)
-        # client report 호출 없음
-        assert fake.last_report_call is None
+        # client 호출 없음
+        assert fake.last_mcp_call is None
 
 
 @pytest.mark.asyncio
 async def test_result_screen_dispatches_correct_endpoint_for_budget_goal():
-    """budget_goal 항목 → get_budget_goal endpoint 호출."""
+    """budget_goal 항목 → 공식 MCP 의 `budget_goal-get` 도구 호출."""
     fake = _Client()
     app = WhooingTuiApp(client=fake)  # type: ignore[arg-type]
     async with app.run_test() as pilot:
@@ -253,25 +243,21 @@ async def test_result_screen_dispatches_correct_endpoint_for_budget_goal():
             ),
         )
         await _wait_for(
-            lambda: fake.last_report_call is not None,
+            lambda: fake.last_mcp_call is not None,
             timeout=3.0,
         )
-        assert fake.last_report_call["endpoint"] == "budget_goal"
-        assert fake.last_report_call["section_id"] == "s1"
+        assert fake.last_mcp_call["name"] == "budget_goal-get"
+        assert fake.last_mcp_call["arguments"]["section_id"] == "s1"
 
 
 @pytest.mark.asyncio
 async def test_result_screen_handles_tool_error_silently():
-    """후잉 API 가 ToolError 던지면 결과 화면이 적색 메시지로 표시 + 모달
-    그대로 (앱은 정상)."""
+    """공식 MCP 호출이 ToolError 던지면 결과 화면이 적색 메시지로 표시 +
+    모달 그대로 (앱은 정상)."""
     from whooing_tui.models import ToolError
 
     fake = _Client()
-
-    async def _err_get_report(**kwargs):
-        raise ToolError("USER_INPUT", "잘못된 파라미터")
-
-    fake.get_report = _err_get_report  # type: ignore[assignment]
+    fake.tool_errors["report-get"] = ToolError("USER_INPUT", "잘못된 파라미터")
 
     app = WhooingTuiApp(client=fake)  # type: ignore[arg-type]
     async with app.run_test() as pilot:
@@ -305,11 +291,7 @@ async def test_error_message_shown_in_body_not_only_status():
     from whooing_tui.models import ToolError
 
     fake = _Client()
-
-    async def _err_get_report(**kwargs):
-        raise ToolError("UPSTREAM", "비-JSON 응답 (status=403)")
-
-    fake.get_report = _err_get_report  # type: ignore[assignment]
+    fake.tool_errors["report-get"] = ToolError("UPSTREAM", "비-JSON 응답 (status=403)")
 
     app = WhooingTuiApp(client=fake)  # type: ignore[arg-type]
     async with app.run_test() as pilot:
@@ -335,3 +317,56 @@ async def test_error_message_shown_in_body_not_only_status():
         assert "UPSTREAM" in body_text or "비-JSON" in body_text or "에러" in body_text, (
             f"body 에 에러 정보 누락 — 빈 화면 회귀: {body_text!r}"
         )
+
+
+# ---- CL #52755+ : 공식 후잉 MCP 위임 schema 회귀 방지 -----------------
+
+
+def test_menu_balance_sheet_uses_account_all_not_csv():
+    """CL #52755+: balance_sheet fetch 는 account='all' 이어야.
+
+    종전엔 'assets,liabilities' (콤마 다중) — 후잉 schema 의 enum 위반
+    이라 403. 다시 콤마 표기로 돌아가면 라이브 API 가 거부.
+    """
+    from whooing_tui.screens.reports import _build_menu
+    import inspect
+    items = {iid: fn for iid, _label, fn in _build_menu()}
+    src = inspect.getsource(items["balance_sheet"])
+    assert '"account": "all"' in src or "'account': 'all'" in src
+
+
+def test_menu_budget_uses_ym_dates_not_ymd():
+    """budget-get 의 start_date/end_date 는 YYYYMM (6자리). YYYYMMDD 면
+    후잉 API 가 거부."""
+    from whooing_tui.screens.reports import _build_menu, _ym_start_today
+    s, e = _ym_start_today()
+    assert len(s) == 6 and len(e) == 6, f"YYYYMM 6자리 기대: ({s}, {e})"
+    assert s.isdigit() and e.isdigit()
+
+
+def test_menu_all_fetches_use_official_mcp_tool():
+    """모든 11 fetch_fn 이 client.call_official_tool 을 호출 — 자체 REST
+    path 추측 코드로 다시 돌아가면 fail.
+    """
+    import inspect
+    from whooing_tui.screens.reports import _build_menu
+
+    for iid, _label, fn in _build_menu():
+        src = inspect.getsource(fn)
+        assert "call_official_tool" in src, (
+            f"{iid} 가 call_official_tool 위임 안 함 — 자체 REST 추측 회귀"
+        )
+        # 옛 메서드 호출이 다시 들어가면 안 됨.
+        for old in (
+            "client.get_report(", "client.get_report_summary(",
+            "client.get_in_out(", "client.get_calendar(",
+            "client.get_entries_latest(", "client.list_report_customs(",
+            "client.get_budget(", "client.get_budget_goal(",
+        ):
+            assert old not in src, f"{iid} 가 옛 메서드 {old!r} 호출"
+
+
+def test_call_official_tool_helper_exists_on_client():
+    """WhooingClient 에 call_official_tool helper 가 노출."""
+    from whooing_tui.client import WhooingClient
+    assert hasattr(WhooingClient, "call_official_tool")

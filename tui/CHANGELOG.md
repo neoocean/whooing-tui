@@ -5,6 +5,110 @@
 > **0.17.x 이전** (CL #51119 ~ #1) 항목은 분량 정리 차원에서
 > [`CHANGELOG-archive-0.17.md`](./CHANGELOG-archive-0.17.md) 로 분리 보존.
 
+## CL #52755 — 0.55.0 — 보고서 403 근본 원인 fix — 공식 후잉 MCP 위임 (2026-05-18)
+
+배경: 0.54.1 에서 사용자에게 *상황 (403 / 빈 결과)* 을 명확히 보여주는
+UI fix 만 했음. 403 자체의 근본 원인은 추적 보류였음. 이번 CL 이 그것 fix.
+
+### 진단
+
+후잉 공식 MCP server (`https://whooing.com/mcp`) 를 `tools/list` 로 조회한
+결과 — 우리 `client.py` 의 REST path 추측이 schema 와 충돌:
+
+| 우리 가정 | 후잉 실제 schema |
+|---|---|
+| 종류별 endpoint (`/report/{account}.json`) | **단일 `report-get` 도구 + `type` 파라미터로 분기** |
+| `account="assets,liabilities"` (콤마 다중) | `account` 가 **enum** (`assets`/`liabilities`/`capital`/`expenses`/`income`/`all`). 콤마 다중 X. |
+| `budget` 의 `start_date/end_date` 가 YYYYMMDD | **YYYYMM** (6자리, 월 단위) |
+| `cashflow` endpoint 없음 (메뉴에서 제거) | `type='cashflow'` valid (다만 본 CL 은 메뉴 추가 안 함) |
+
+이로써:
+- balance_sheet / pl_summary / monthly_trend 가 403 → account enum 위반.
+- budget_expenses / budget_income 이 빈 응답 → YYYYMMDD 가 무시되고 빈 기간으로 해석.
+- custom_bs / custom_pl 의 응답 shape 가 약간 다름.
+
+### 수정 (근본)
+
+자체 REST path 추측을 그만두고 **모든 보고서 fetch 가 공식 후잉 MCP
+server 의 `tools/call` 로 위임**. 후잉이 schema 정의 + path 관리 — 우리는
+도구 이름 + arguments dict 만.
+
+새 모듈:
+- `tui/src/whooing_tui/official_mcp.py` — minimal HTTP JSON-RPC client.
+  `OfficialMcpClient.call_tool(name, arguments)` 만 노출. SSE 응답도
+  지원 (후잉이 `text/event-stream` 으로 보내는 경우). archived
+  `mcp/src/whooing_mcp/official_mcp.py` 와 독립 (mcp/ 패키지 의존 없음).
+
+`WhooingClient.call_official_tool(name, args)` helper:
+- 매 호출마다 새 `OfficialMcpClient` 인스턴스 (후잉 MCP server 가
+  stateless 라 connection reuse 의무 없음). 단순함 우선.
+
+`reports.py::_build_menu` 의 11 fetch_fn 모두 갱신:
+- `report-get` 으로 balance_sheet / pl_summary / monthly_trend / in_out /
+  calendar / entries_latest 통합. `type` 파라미터 로 분기, `account: "all"`.
+- `report_customs-list` 로 custom_bs / custom_pl.
+- `budget-get` 의 start/end 를 **YYYYMM** 으로 (새 helper `_ym_start_today`).
+- `budget_goal-get` 그대로.
+
+`OfficialMcpError` 가 raise 되면 `ReportResultScreen._fetch` 가 ToolError
+처럼 분기해서 status + body 양쪽에 표시 (0.54.1 의 UI 와 일관).
+
+### 라이브 검증
+
+11 메뉴 모두 정상 응답:
+```
+balance_sheet   dict/6  (assets, liabilities, capital, expenses, income, total)
+pl_summary      dict/6
+monthly_trend   dict/3  (rows_type, rows, ...)
+in_out          dict/5  (이미 정상)
+calendar        dict/3  (이미 정상)
+entries_latest  list/20 (이미 정상)
+custom_bs       dict/1  {rows: []}   (사용자가 정의 안 함)
+custom_pl       dict/1  {rows: []}
+budget_expenses dict/4  (aggregate, total, ...)
+budget_income   dict/4
+budget_goal     dict/10 (set_id, base_ym, goal_ym, ...)
+```
+
+### 의도적으로 안 한 것
+
+- 기존 `WhooingClient.get_report` / `get_report_summary` / `get_in_out` /
+  `get_calendar` / `get_entries_latest` / `list_report_customs` /
+  `get_report_custom` / `get_budget` / `get_budget_goal` 9 메서드 — 그대로
+  보존. 외부 호출자가 없으면 후속 CL 에서 정리.
+- `cashflow` 메뉴 항목 추가 — schema 상 valid 지만 사용자가 명시 요청
+  없으므로 보류.
+- 옛 path 의 `client.py` 메서드들에 deprecated 표시 — 후속 CL.
+
+### 수정 파일
+
+- `tui/src/whooing_tui/official_mcp.py` — **신규** (~140 줄).
+- `tui/src/whooing_tui/client.py` — `WhooingClient.call_official_tool` helper.
+- `tui/src/whooing_tui/screens/reports.py` — `_build_menu` 의 11 fetch_fn
+  전부 갱신 + `_ym_start_today` helper + `OfficialMcpError` 분기.
+- `tui/tests/test_official_mcp.py` — **신규** (11 단위: SSE parse / call
+  flow / isError / JSON-RPC error / X-API-Key 헤더 / envelope schema).
+- `tui/tests/test_reports.py` — fake `_Client` 가 `call_official_tool`
+  로 변경. 회귀 방지 +4:
+  - `test_menu_balance_sheet_uses_account_all_not_csv`
+  - `test_menu_budget_uses_ym_dates_not_ymd`
+  - `test_menu_all_fetches_use_official_mcp_tool`
+  - `test_call_official_tool_helper_exists_on_client`
+- `tui/pyproject.toml` — 0.54.1 → 0.55.0.
+- `tui/src/whooing_tui/__init__.py` — `__version__` 동기화.
+
+### 검증
+
+- **837 passed** (822 + 15 신규). 회귀 0.
+
+### 사용자 후속 확인
+
+`t` → 재무상태표 / 손익 요약 / 월별 추이 모두 **JSON 결과 가 본문에
+표시** 되어야 합니다 (403 사라짐). 본문이 너무 raw 라 가독성 떨어지면
+종류별 전용 렌더링은 후속 CL.
+
+---
+
 ## CL #52753 — 0.54.1 — 보고서 화면 에러/빈 결과 안내 (2026-05-18)
 
 배경 (사용자 보고): "보고서 화면에 빈 화면이 나옵니다." 라이브 API 진단:

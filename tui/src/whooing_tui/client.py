@@ -765,6 +765,30 @@ class WhooingClient:
             }),
         )
 
+    # ---- 공식 후잉 MCP 위임 (CL #52755+) ---------------------------------
+    #
+    # 우리 REST path 추측이 일부 endpoint (`/report/{account}.json` 등) 에서
+    # 403 으로 실패. 후잉이 공식 MCP server (`https://whooing.com/mcp`) 를
+    # 운영하고 거기에는 정확한 도구 스키마가 노출돼 있다. 보고서 fetch 는
+    # 그것을 위임하면 path 추측 자체가 사라짐.
+
+    async def call_official_tool(
+        self, name: str, arguments: dict[str, Any],
+    ) -> Any:
+        """공식 후잉 MCP server 의 도구 호출 (tools/call).
+
+        본 메서드는 `OfficialMcpClient` 의 thin wrapper — 우리 토큰 사용,
+        매 호출마다 새 client 인스턴스 (간단; 후잉 MCP server 가 stateless
+        라 connection reuse 필요성 작음).
+
+        예외:
+          OfficialMcpError 가 raise — caller 가 잡아 ToolError 로 변환할 수
+          있으나 본 wrapper 는 raw 노출 (호출자가 도구 별로 다른 처리).
+        """
+        from whooing_tui.official_mcp import OfficialMcpClient
+        om = OfficialMcpClient(self.auth.token)
+        return await om.call_tool(name, arguments)
+
     # ---- monthly entries (정기/반복) — CL #51152+ -----------------------
     # 후잉 공식 docs 의 정확한 path 미공개 — 추정 RESTful 패턴.
     # 라이브 검증 시 path 가 다르면 `_monthly_path` / `_monthly_collection_path`

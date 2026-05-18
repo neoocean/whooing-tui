@@ -74,78 +74,118 @@ def _ytd() -> tuple[str, str]:
 MenuItem = tuple[str, str, Callable[..., Any]]
 
 
+def _ym_start_today() -> tuple[str, str]:
+    """이번 달 (YYYYMM, YYYYMM) — budget-get 의 start/end 가 6자리 (월) 단위."""
+    today = today_yyyymmdd()
+    return (today[:6], today[:6])
+
+
 def _build_menu() -> list[MenuItem]:
     """(item_id, display label, fetch coroutine factory) 의 list.
 
-    CL #51117 부터: WhooingClient 의 endpoint-별 메서드 호출.
-    `cashflow` 은 실 API 에 대응 endpoint 없어 메뉴에서 제외.
+    **CL #52755+: 모든 보고서 fetch 가 후잉 공식 MCP server 위임.**
+
+    종전엔 client.py 의 자체 REST path 추측 (`/report/{account}.json` 등)
+    이라 일부 endpoint 에서 403 ("비-JSON 응답") 실패. 후잉 공식 MCP
+    server (`https://whooing.com/mcp`) 가 모든 도구 + 정확한 schema 를
+    노출 — 그것을 `client.call_official_tool(name, args)` 로 호출하면
+    path 추측 자체가 사라짐.
+
+    주요 schema 차이 (공식 MCP 기준):
+      - report-get: 모든 보고서가 단일 도구, `type` 파라미터 분기.
+      - account: enum (assets/liabilities/capital/expenses/income/all) —
+        콤마 다중 X. 본 메뉴는 'all' 로 통합 조회.
+      - budget-get: start_date/end_date 가 **YYYYMM** (6자리, 월).
+      - report 류 start_date/end_date 는 YYYYMMDD (8자리).
     """
 
     async def fetch_balance_sheet(client, session):
-        # 자산 + 부채 (capital 자동 계산), 현재 시점 (rows_type=none).
-        return await client.get_report(
-            section_id=session.section_id,
-            account="assets,liabilities", rows_type="none",
-        )
+        # 재무상태표 — 전 계정 (자산/부채/자본/수입/지출) 현재 시점 합계.
+        return await client.call_official_tool("report-get", {
+            "type": "report",
+            "section_id": session.section_id,
+            "account": "all",
+            "rows_type": "none",
+        })
 
     async def fetch_pl_summary(client, session):
         s, e = _month_start_today()
-        return await client.get_report_summary(
-            section_id=session.section_id,
-            account="expenses,income",
-            start_date=s, end_date=e, rows_type="none",
-        )
+        return await client.call_official_tool("report-get", {
+            "type": "report_summary",
+            "section_id": session.section_id,
+            "account": "all",
+            "start_date": s, "end_date": e,
+            "rows_type": "none",
+        })
 
     async def fetch_monthly_trend(client, session):
         s, e = _ytd()
-        # PL flat 시계열 (수익/지출/순이익 월별).
-        return await client.get_report_summary(
-            section_id=session.section_id, account="expenses,income",
-            rows_type="month", start_date=s, end_date=e,
-        )
+        return await client.call_official_tool("report-get", {
+            "type": "report_summary",
+            "section_id": session.section_id,
+            "account": "all",
+            "start_date": s, "end_date": e,
+            "rows_type": "month",
+        })
 
     async def fetch_in_out(client, session):
         s, e = _month_start_today()
-        return await client.get_in_out(
-            section_id=session.section_id, start_date=s, end_date=e,
-        )
+        return await client.call_official_tool("report-get", {
+            "type": "in_out",
+            "section_id": session.section_id,
+            "start_date": s, "end_date": e,
+        })
 
     async def fetch_calendar(client, session):
         s, e = _month_start_today()
-        return await client.get_calendar(
-            section_id=session.section_id, start_date=s, end_date=e,
-        )
+        return await client.call_official_tool("report-get", {
+            "type": "calendar",
+            "section_id": session.section_id,
+            "start_date": s, "end_date": e,
+        })
 
     async def fetch_entries_latest(client, session):
-        return await client.get_entries_latest(
-            section_id=session.section_id, limit=20,
-        )
+        return await client.call_official_tool("report-get", {
+            "type": "entries_latest",
+            "section_id": session.section_id,
+            "limit": 20,
+        })
 
     async def fetch_custom_bs(client, session):
-        return await client.list_report_customs(
-            section_id=session.section_id, report="report_bs",
-        )
+        return await client.call_official_tool("report_customs-list", {
+            "section_id": session.section_id,
+            "report": "report_bs",
+        })
 
     async def fetch_custom_pl(client, session):
-        return await client.list_report_customs(
-            section_id=session.section_id, report="report_pl",
-        )
+        return await client.call_official_tool("report_customs-list", {
+            "section_id": session.section_id,
+            "report": "report_pl",
+        })
 
     async def fetch_budget_expenses(client, session):
-        return await client.get_budget(
-            section_id=session.section_id, account="expenses",
-        )
+        s, e = _ym_start_today()  # YYYYMM
+        return await client.call_official_tool("budget-get", {
+            "section_id": session.section_id,
+            "pl": "expenses",
+            "start_date": s, "end_date": e,
+        })
 
     async def fetch_budget_income(client, session):
-        return await client.get_budget(
-            section_id=session.section_id, account="income",
-        )
+        s, e = _ym_start_today()  # YYYYMM
+        return await client.call_official_tool("budget-get", {
+            "section_id": session.section_id,
+            "pl": "income",
+            "start_date": s, "end_date": e,
+        })
 
     async def fetch_budget_goal(client, session):
-        return await client.get_budget_goal(section_id=session.section_id)
+        return await client.call_official_tool("budget_goal-get", {
+            "section_id": session.section_id,
+        })
 
     return [
-        ("balance_sheet", "재무상태표 (자산/부채/자본 — 현재)", fetch_balance_sheet),
+        ("balance_sheet", "재무상태표 (전 계정 — 현재)", fetch_balance_sheet),
         ("pl_summary", "손익 요약 (이번 달)", fetch_pl_summary),
         ("monthly_trend", "월별 추이 (YTD)", fetch_monthly_trend),
         ("in_out", "항목별 증감 (이번 달)", fetch_in_out),
@@ -333,7 +373,15 @@ class ReportResultScreen(ModalScreen[None]):
             self.last_error = f"[{e.kind}] {e.message}"
             self._show_error(self.last_error)
             return
-        except Exception as e:  # pragma: no cover
+        except Exception as e:
+            # CL #52755+: OfficialMcpError 도 ToolError 와 같은 분기로
+            # — 사용자에게 같은 ERROR 메시지 표면. 단 import 는 lazy.
+            from whooing_tui.official_mcp import OfficialMcpError
+            if isinstance(e, OfficialMcpError):
+                code = f" (code={e.code})" if e.code is not None else ""
+                self.last_error = f"[MCP{code}] {e}"
+                self._show_error(self.last_error)
+                return
             log.exception("report fetch failed")
             self.last_error = f"INTERNAL: {e}"
             self._show_error(self.last_error)
