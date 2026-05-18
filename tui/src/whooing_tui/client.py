@@ -1104,6 +1104,13 @@ class CachedWhooingClient:
     async def get_entries_latest(self, **kwargs) -> Any:
         return await self._inner.get_entries_latest(**kwargs)
 
+    # CL #52755+: 공식 후잉 MCP 위임 (보고서 fetch 가 사용). CachedWhooingClient
+    # 도 같은 메서드 노출해야 reports.py 에서 직접 호출 가능 — 사용자 보고
+    # `'CachedWhooingClient' object has no attribute 'call_official_tool'`
+    # 회귀 fix (CL #52765).
+    async def call_official_tool(self, name: str, arguments: dict[str, Any]) -> Any:
+        return await self._inner.call_official_tool(name, arguments)
+
     # 사용자가 'r' 누르면 호출 — 화면이 직접 강제 재로드 가능.
     def invalidate_section(self, section_id: str) -> None:
         self._store.invalidate_accounts(section_id)

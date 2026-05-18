@@ -5,6 +5,59 @@
 > **0.17.x 이전** (CL #51119 ~ #1) 항목은 분량 정리 차원에서
 > [`CHANGELOG-archive-0.17.md`](./CHANGELOG-archive-0.17.md) 로 분리 보존.
 
+## CL #52765 — 0.60.1 — CachedWhooingClient 가 call_official_tool wrap 누락 회귀 fix (2026-05-18)
+
+배경 (사용자 보고): 보고서 화면 → "손익 요약 (이번 달)" 선택 시 본문에
+
+```
+INTERNAL: 'CachedWhooingClient' object has no attribute 'call_official_tool'
+```
+
+### 원인
+
+CL #52755 (0.55.0) 에서 `WhooingClient.call_official_tool` 만 추가하고
+**`CachedWhooingClient` 의 wrap 메서드를 빠뜨림**. production 의 default
+client 는 `CachedWhooingClient` (memory cache 가 entries/accounts 만
+대상이라 안전하게 wrap 가능). `reports.py::_build_menu` 의 fetch_fn 이
+`client.call_official_tool(...)` 호출 → AttributeError → `_fetch` 의
+catch-all 분기 → `INTERNAL: ...` body 표시.
+
+### 수정
+
+`tui/src/whooing_tui/client.py::CachedWhooingClient` 끝에 wrap 메서드:
+
+```python
+async def call_official_tool(self, name: str, arguments: dict[str, Any]) -> Any:
+    return await self._inner.call_official_tool(name, arguments)
+```
+
+캐시 없음 — 공식 MCP 위임 결과는 매번 fresh. inner 의 throttle/retry 가
+그대로 적용.
+
+### 회귀 방지 (+2 테스트)
+
+- `test_cached_client_has_call_official_tool` — `CachedWhooingClient` 가
+  `call_official_tool` attribute 보유. 다음 사람이 wrap 빠뜨리면 즉시 fail.
+- `test_cached_client_call_official_tool_delegates_to_inner` — 호출 인자
+  가 inner 로 정확히 전달.
+
+### 수정 파일
+
+- `tui/src/whooing_tui/client.py` — `CachedWhooingClient.call_official_tool`.
+- `tui/tests/test_reports.py` — 회귀 방지 +2 케이스.
+- `tui/pyproject.toml` — 0.60.0 → 0.60.1.
+- `tui/src/whooing_tui/__init__.py` — `__version__` 동기화.
+
+### 검증
+
+- **887 passed** (885 → +2 회귀 방지). 회귀 0.
+
+### 사용자 후속 확인
+
+`t` → "손익 요약 (이번 달)" / 모든 11 메뉴 정상 응답 (raw JSON 표시).
+
+---
+
 ## CL #52764 — docs only — 0.52.0~0.60.0 누적 변경 모든 문서 반영 (2026-05-18)
 
 코드 / 버전 변경 없음. 2026-05-18 단일 세션의 16 CL (CL #52716~#52763,

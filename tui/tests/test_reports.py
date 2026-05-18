@@ -370,3 +370,44 @@ def test_call_official_tool_helper_exists_on_client():
     """WhooingClient 에 call_official_tool helper 가 노출."""
     from whooing_tui.client import WhooingClient
     assert hasattr(WhooingClient, "call_official_tool")
+
+
+# ---- CL #52765+ : CachedWhooingClient 도 call_official_tool wrap -----
+
+
+def test_cached_client_has_call_official_tool():
+    """CL #52765: CachedWhooingClient 가 call_official_tool 을 wrap.
+
+    종전 CL #52755 에서 WhooingClient 에만 추가 — production 의 default
+    client (CachedWhooingClient) 가 그 메서드 없어서 `INTERNAL: ... no
+    attribute 'call_official_tool'` 에러 (사용자 보고). 본 테스트가 회귀
+    방지.
+    """
+    from whooing_tui.client import CachedWhooingClient
+    assert hasattr(CachedWhooingClient, "call_official_tool"), (
+        "CachedWhooingClient 가 call_official_tool 을 wrap 안 함 — "
+        "보고서 fetch 가 INTERNAL error 회귀"
+    )
+
+
+@pytest.mark.asyncio
+async def test_cached_client_call_official_tool_delegates_to_inner():
+    """wrap 메서드가 inner 의 호출에 정확히 전달."""
+    from whooing_tui.cache import CacheStore
+    from whooing_tui.client import CachedWhooingClient
+
+    class _FakeInner:
+        async def call_official_tool(self, name, arguments):
+            return {"called": name, "args": arguments}
+
+    cached = CachedWhooingClient(
+        inner=_FakeInner(),  # type: ignore[arg-type]
+        store=CacheStore(":memory:"),
+    )
+    out = await cached.call_official_tool(
+        "report-get", {"type": "report", "section_id": "s1"},
+    )
+    assert out == {
+        "called": "report-get",
+        "args": {"type": "report", "section_id": "s1"},
+    }
