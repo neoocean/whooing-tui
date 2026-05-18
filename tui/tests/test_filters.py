@@ -65,8 +65,8 @@ def test_outside_paren_keywords_returns_set_type():
 
 
 def test_filterable_columns_constant():
-    """date / left / right / item 만 — 사용자 명시 4개."""
-    assert FILTERABLE_COLUMNS == ("date", "left", "right", "item")
+    """CL #52757+: memo 도 추가 — 5개 (substring 매칭)."""
+    assert FILTERABLE_COLUMNS == ("date", "left", "right", "item", "memo")
 
 
 # ---- filter_entries ---------------------------------------------------
@@ -173,10 +173,10 @@ def test_filter_by_item_empty_target_returns_empty():
 
 
 def test_filter_unsupported_column_returns_empty():
-    """money / memo 등 미지원 column 은 빈 list (호출자 책임)."""
+    """money / unknown 같은 미지원 column 은 빈 list — memo 는 CL #52757
+    부터 지원 (substring), 별도 케이스에서 다룬다."""
     es = _entries()
     assert filter_entries(es, "money", es[0]) == []
-    assert filter_entries(es, "memo", es[0]) == []
     assert filter_entries(es, "unknown", es[0]) == []
 
 
@@ -193,3 +193,57 @@ def test_filter_returns_subset_not_mutating_input():
     es_copy = list(es)
     filter_entries(es, "date", es[0])
     assert es == es_copy
+
+
+# ---- CL #52757+ : memo substring 필터 ---------------------------------
+
+
+def test_memo_keywords_korean_and_punctuation():
+    """memo 키워드 추출 — 공백/쉼표/괄호 분리, 2글자 이상."""
+    from whooing_tui.filters import memo_keywords
+    assert memo_keywords("우유, 수박 (쿠팡)") == {"우유", "수박", "쿠팡"}
+    assert memo_keywords("택시") == {"택시"}
+    assert memo_keywords("") == set()
+    assert memo_keywords(None) == set()
+
+
+def test_memo_keywords_drops_single_char():
+    """단일 글자 토큰은 false-positive 위험 — 제외."""
+    from whooing_tui.filters import memo_keywords
+    # "a 수박" → "a" 는 1글자 → 제외, "수박" 만.
+    assert memo_keywords("a 수박") == {"수박"}
+    # 모두 1글자면 빈 set — 필터 비활성.
+    assert memo_keywords("a b c") == set()
+
+
+def test_filter_memo_substring_matches_other_entries():
+    """target memo 의 '수박' 키워드가 다른 memo 의 substring 으로 들어있으면
+    매칭. 사용자 보고의 정확한 시나리오 회귀 방지.
+    """
+    entries = [
+        {"entry_id": "e1", "memo": "우유, 수박 (쿠팡)"},
+        {"entry_id": "e2", "memo": "수박 1개"},         # 부분 일치
+        {"entry_id": "e3", "memo": "사과 1봉지"},       # 매칭 X
+        {"entry_id": "e4", "memo": "쿠팡 정기 결제"},   # '쿠팡' 키워드로 매칭
+        {"entry_id": "e5", "memo": ""},                # 빈 memo
+    ]
+    target = entries[0]
+    out = filter_entries(entries, "memo", target)
+    ids = {e["entry_id"] for e in out}
+    assert ids == {"e1", "e2", "e4"}, f"got {ids}"
+
+
+def test_filter_memo_no_keywords_returns_empty():
+    """target memo 의 유효 키워드 0개 → 빈 list."""
+    entries = [
+        {"entry_id": "e1", "memo": "수박"},
+        {"entry_id": "e2", "memo": "사과"},
+    ]
+    target = {"memo": ""}  # 키워드 없음
+    assert filter_entries(entries, "memo", target) == []
+
+
+def test_filter_memo_target_none_returns_empty():
+    """target memo None → 빈 list."""
+    entries = [{"entry_id": "e1", "memo": "수박"}]
+    assert filter_entries(entries, "memo", {"memo": None}) == []

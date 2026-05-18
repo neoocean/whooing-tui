@@ -5,6 +5,85 @@
 > **0.17.x 이전** (CL #51119 ~ #1) 항목은 분량 정리 차원에서
 > [`CHANGELOG-archive-0.17.md`](./CHANGELOG-archive-0.17.md) 로 분리 보존.
 
+## CL #52757 — 0.56.0 — memo substring 필터 + tags hint 중복 제외 (2026-05-18)
+
+배경 (사용자 요청 2건):
+
+1. memo 컬럼 필터링 — 자유 입력이라 정확 일치는 거의 없음. "수박" 이
+   포함되어 있으면 다른 memo 의 "수박" 포함 항목도 매칭하는 substring
+   필터로 수정.
+2. tags hint — 이미 입력된 태그 (예: `#보안`) 가 hint 에 다시 추천됨.
+   중복 추천 회피.
+
+(사용자 3번째 요청 — 거래 fetch 의 점진적 과거 확장 + sqlite 캐시 —
+큰 변경이라 별도 CL 로 분리 예정.)
+
+### 동작 변경
+
+**1) memo substring 필터** (`filters.py`):
+- `FILTERABLE_COLUMNS` 에 `"memo"` 추가 (4 → 5).
+- 새 helper `memo_keywords(memo)` — 공백/쉼표/괄호 분리 + **2글자 이상**
+  토큰만 (1글자 토큰은 false-positive 위험).
+- `filter_entries(column="memo", target)` — target 의 키워드 중 하나라도
+  다른 entry 의 memo 에 **substring 포함**되면 매칭.
+
+예시:
+```
+target memo = "우유, 수박 (쿠팡)"  →  keywords = {우유, 수박, 쿠팡}
+다른 entries:
+  "수박 1개"          → 매칭 (수박)
+  "쿠팡 정기 결제"     → 매칭 (쿠팡)
+  "사과 1봉지"        → 매칭 X
+```
+
+`entries.py::action_context_enter`:
+- 종전: `col in ("money", "memo"): edit`
+- 새: `col == "money": edit` (memo 는 FILTERABLE 분기로 자동 필터).
+- `_announce_active_column` hint 도 memo 일 때 "비슷한 memo 로 필터
+  (키워드 substring)" 안내.
+- `_filter_label` 도 memo 케이스 — `memo∋{수박, 쿠팡}` 식 표시.
+
+**2) tags hint 중복 제외** (`edit_entry.py::_refresh_tags_hint`):
+- 종전: `existing_in_input = set(tokens[:-1])` — 마지막 token 만 제외.
+- 새: `existing_in_input = set(tokens)` — **모든 token 제외**. 사용자가
+  이미 친 태그는 후보에서 빠짐. last 의 prefix 매칭은 그대로 — 같은
+  set 비교라 `last="보"` 면 후보 `"보안"` 은 set 안에 `"보"` 만 있어서
+  여전히 prefix 매칭됨.
+
+### 수정 파일
+
+- `tui/src/whooing_tui/filters.py`
+  - `memo_keywords()` 신규.
+  - `FILTERABLE_COLUMNS` 에 "memo" 추가.
+  - `filter_entries` 의 memo 분기.
+- `tui/src/whooing_tui/screens/entries.py`
+  - `action_context_enter` 의 분기 변경.
+  - `_announce_active_column` hint 갱신.
+  - `_filter_label` 의 memo 케이스.
+- `tui/src/whooing_tui/screens/edit_entry.py`
+  - `_refresh_tags_hint` 의 `existing_in_input` 가 전체 token 포함.
+- `tui/tests/test_filters.py` — 회귀 방지 5:
+  - `memo_keywords` 케이스 2 (정규 / 1글자 제외).
+  - `filter_memo_substring_matches_other_entries` (정확 시나리오 재현).
+  - `filter_memo_no_keywords_returns_empty` / `target_none_returns_empty`.
+- `tui/tests/test_entries_mutate.py` — 회귀 방지 2:
+  - `test_tags_input_with_already_typed_tag_excludes_from_hint`.
+  - `test_tags_input_typing_prefix_still_suggests_other_matches`.
+- `tui/pyproject.toml` — 0.55.0 → 0.56.0.
+- `tui/src/whooing_tui/__init__.py` — `__version__` 동기화.
+
+### 검증
+
+- **844 passed** (837 → +7 신규). 회귀 0.
+
+### 보류 (별도 CL)
+
+사용자 3번째 요청 — *컬럼 필터링이 현재 1개월 윈도우 내에서만 동작 →
+점진적 과거 확장 + sqlite 캐시 + 변경분만 fetch 업데이트* — 큰 변경 (schema
+추가 / background worker / UI 진행 표시). 별도 CL 로 진행 예정.
+
+---
+
 ## CL #52755 — 0.55.0 — 보고서 403 근본 원인 fix — 공식 후잉 MCP 위임 (2026-05-18)
 
 배경: 0.54.1 에서 사용자에게 *상황 (403 / 빈 결과)* 을 명확히 보여주는

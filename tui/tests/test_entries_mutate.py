@@ -554,3 +554,79 @@ async def test_edit_dialog_attach_button_pushes_browser():
         assert isinstance(app.screen, AttachmentBrowserScreen)
         assert app.screen.entry_id == "e1"
         assert app.screen.section_id == "s1"
+
+
+# ---- CL #52757+ : tags hint 가 이미 입력된 태그 제외 -------------------
+
+
+@pytest.mark.asyncio
+async def test_tags_input_with_already_typed_tag_excludes_from_hint():
+    """이미 #보안 이 tags 에 들어가 있고 typing 끝났으면 hint 추천 X.
+
+    사용자 보고: "이미 보안 태그가 붙어있는데 보안 태그를 추천해줍니다.
+    이미 태그가 설정되어 있으면 추천할 필요 없습니다."
+    """
+    from whooing_tui.screens.entries import EntriesScreen
+    from whooing_tui.screens.edit_entry import EntryEditDialog
+    from textual.widgets import Input, Static
+
+    fake = FakeClient()
+    app = WhooingTuiApp(client=fake)  # type: ignore[arg-type]
+    async with app.run_test() as pilot:
+        es = await _open_entries(app, pilot)
+        from whooing_core import db as core_db
+        from whooing_tui import data as tui_data
+        with tui_data.open_rw() as conn:
+            core_db.set_hashtags(conn, "e_seed_1", ["보안", "백업", "Arq"])
+            core_db.upsert_annotation(
+                conn, entry_id="e_seed_1", section_id="s1", note=None,
+            )
+        es.action_edit_entry()
+        await pilot.pause()
+        dialog = app.screen
+        assert isinstance(dialog, EntryEditDialog)
+        tags_input = dialog.query_one("#f-tags", Input)
+        # 이미 #보안 이 typing 완료된 상태 (사용자 캡처 시나리오).
+        tags_input.value = "#Arq #백업 #보안"
+        await pilot.pause()
+        hint = dialog.query_one("#f-tags-hint", Static)
+        rendered = str(hint.render())
+        # "보안" 이 hint 에 추천돼서는 안 됨.
+        assert "보안" not in rendered, (
+            f"이미 입력된 태그가 hint 에 다시 추천됨 (회귀): {rendered!r}"
+        )
+
+
+@pytest.mark.asyncio
+async def test_tags_input_typing_prefix_still_suggests_other_matches():
+    """이미 #보안 이 있지만 추가로 '백' 타이핑 중이면 '백업' 추천은 OK
+    (다른 후보가 사라지지 않게)."""
+    from whooing_tui.screens.entries import EntriesScreen
+    from whooing_tui.screens.edit_entry import EntryEditDialog
+    from textual.widgets import Input, Static
+
+    fake = FakeClient()
+    app = WhooingTuiApp(client=fake)  # type: ignore[arg-type]
+    async with app.run_test() as pilot:
+        es = await _open_entries(app, pilot)
+        from whooing_core import db as core_db
+        from whooing_tui import data as tui_data
+        with tui_data.open_rw() as conn:
+            core_db.set_hashtags(conn, "e_seed_1", ["보안", "백업"])
+            core_db.upsert_annotation(
+                conn, entry_id="e_seed_1", section_id="s1", note=None,
+            )
+        es.action_edit_entry()
+        await pilot.pause()
+        dialog = app.screen
+        assert isinstance(dialog, EntryEditDialog)
+        tags_input = dialog.query_one("#f-tags", Input)
+        # 이미 #보안 + 다시 '백' 타이핑 중.
+        tags_input.value = "#보안 #백"
+        await pilot.pause()
+        hint = dialog.query_one("#f-tags-hint", Static)
+        rendered = str(hint.render())
+        # "백업" 은 추천돼야 (last token "백" 의 prefix).
+        assert "백업" in rendered, (
+            f"prefix 매칭 후보가 사라짐: {rendered!r}"
+        )

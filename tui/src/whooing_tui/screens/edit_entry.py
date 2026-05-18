@@ -523,13 +523,16 @@ class EntryEditDialog(ModalScreen[EntryDraft | None]):
         if not last:
             hint_static.update("")
             return
-        # 이미 입력란에 있는 태그 (중복 추천 회피).
+        # CL #52757+: 이미 입력란에 있는 태그 — **마지막 token 도 포함** —
+        # 추천에서 모두 제외. 종전엔 `tokens[:-1]` 만 제외라서 사용자가
+        # 이미 "#보안" 까지 다 친 경우에도 hint 에 "#보안" 추천 (사용자
+        # 보고: "이미 보안 태그가 붙어있는데 보안 태그를 추천해줍니다").
+        # last 의 prefix 매칭 후보 중 *정확히 last 와 같은* 태그만 제외.
         existing_in_input = set()
-        for t in tokens[:-1]:
+        for t in tokens:
             t = t.lstrip("#").strip()
             if t:
                 existing_in_input.add(t)
-        # 후보 = _all_tags_db (이미 prefill).
         candidates = [
             t for t in self._all_tags_db.keys()
             if t not in existing_in_input

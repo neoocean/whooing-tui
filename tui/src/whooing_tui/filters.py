@@ -7,8 +7,12 @@
   - **left**     : 같은 l_account_id.
   - **right**    : 같은 r_account_id.
   - **item**     : 괄호 바깥 키워드 중 하나라도 같으면 매칭.
+  - **memo**     : (CL #52757+) target memo 의 키워드 (≥2글자) 중 하나라도
+                   다른 entry 의 memo 에 substring 포함되면 매칭. 사용자
+                   요청: memo 는 자유 입력이라 정확 일치는 거의 없으므로
+                   "비슷한" (= 키워드 substring) 으로 매칭.
 
-money / memo 같은 다른 컬럼은 사용자 명시 외라 본 모듈에서 다루지 않는다.
+money 컬럼은 필터 대상 아님 — Enter 시 edit_entry 로.
 
 `_apply_filter` 가 (target, column, all_entries) 를 받아 부분집합 list 를
 반환 — pure 함수, side-effect 없음. 테스트 친화.
@@ -53,8 +57,30 @@ def outside_paren_keywords(item: Any) -> set[str]:
     return {p.strip() for p in parts if p.strip()}
 
 
+def memo_keywords(memo: Any) -> set[str]:
+    """memo 의 의미 있는 키워드 set — 공백/쉼표/괄호 분리 + 2글자 이상.
+
+    예:
+      "우유, 수박 (쿠팡)"   → {"우유", "수박", "쿠팡"}
+      "택시"                → {"택시"}
+      "abc"                 → {"abc"}
+      "a"                   → set()  (1글자 무시 — false positive 방지)
+      None / ""             → set()
+
+    CL #52757+. 한 글자 토큰은 너무 흔해 다른 entry 와 우연 매칭 (예: "비")
+    가능성 — 의도적 제외.
+    """
+    if not memo:
+        return set()
+    s = str(memo)
+    # 공백 / 쉼표 / 괄호 [] / 작은 따옴표 모두 separator.
+    parts = re.split(r"[\s,()\[\]'\"]+", s)
+    return {p.strip() for p in parts if len(p.strip()) >= 2}
+
+
 # 컬럼 이름 ↔ 필터 가능 여부.
-FILTERABLE_COLUMNS: tuple[str, ...] = ("date", "left", "right", "item")
+# CL #52757+: memo 추가 — substring 매칭 (memo_keywords 기반).
+FILTERABLE_COLUMNS: tuple[str, ...] = ("date", "left", "right", "item", "memo")
 
 
 def filter_entries(
@@ -94,6 +120,19 @@ def filter_entries(
         return [
             e for e in entries
             if outside_paren_keywords(e.get("item")) & target_keys
+        ]
+
+    if column == "memo":
+        # CL #52757+: memo 는 자유 입력이라 정확 일치 거의 없음 — substring.
+        # target 의 keyword 중 하나라도 다른 memo 에 substring 으로 들어있으면
+        # 매칭. 토큰 비교는 outside_paren_keywords 와 비슷하지만 길이 cap 만
+        # 있고 괄호 strip 은 안 함 (memo 안 괄호도 유의미).
+        target_keys = memo_keywords(target.get("memo"))
+        if not target_keys:
+            return []
+        return [
+            e for e in entries
+            if any(k in (e.get("memo") or "") for k in target_keys)
         ]
 
     return []

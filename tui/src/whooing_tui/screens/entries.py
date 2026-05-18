@@ -1359,9 +1359,12 @@ class EntriesScreen(MenuBarMixin, Screen):
                 )
                 return
         col = self._COLUMN_NAMES[self._active_col]
-        if col in FILTERABLE_COLUMNS:
+        if col == "memo":
+            # CL #52757+: memo 는 substring 매칭 — 사용자 직관과 일치.
+            hint = "Enter = 비슷한 memo 로 필터 (키워드 substring)"
+        elif col in FILTERABLE_COLUMNS:
             hint = f"Enter = 같은 {col} 으로 필터"
-        elif col in ("money", "memo"):
+        elif col == "money":
             hint = "Enter = 거래 수정"
         else:
             hint = ""  # unreachable
@@ -1398,9 +1401,10 @@ class EntriesScreen(MenuBarMixin, Screen):
             return
         col = self._COLUMN_NAMES[self._active_col]
         if col in FILTERABLE_COLUMNS:
+            # CL #52757+: memo 도 FILTERABLE — substring 매칭.
             self._apply_filter(col, target)
         else:
-            # money / memo 컬럼 → edit_entry.
+            # money 컬럼 → edit_entry.
             self.action_edit_entry()
 
     def _apply_tag_filter(self, tag: str) -> None:
@@ -1468,6 +1472,10 @@ class EntriesScreen(MenuBarMixin, Screen):
             from whooing_tui.filters import outside_paren_keywords
             keys = outside_paren_keywords(target.get("item"))
             return f"item∋{{{', '.join(sorted(keys))}}}"
+        if column == "memo":  # CL #52757+
+            from whooing_tui.filters import memo_keywords
+            keys = memo_keywords(target.get("memo"))
+            return f"memo∋{{{', '.join(sorted(keys))}}}"
         if column == "tag":  # CL #51102+
             return f"tag=#{target.get('tag') or '?'}"
         return column
