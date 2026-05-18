@@ -546,3 +546,115 @@ def test_create_numbered_change_helper_exists():
     """CL 생성 helper 가 export 되어 다른 호출자도 같은 정책 따를 수 있도록."""
     from whooing_tui import p4_sync
     assert hasattr(p4_sync, "_create_numbered_change")
+
+
+# ---- CL #52832+ : startup db freshness helpers --------------------------
+
+
+def test_has_pending_local_changes_false_when_no_p4(tmp_path):
+    """P4 환경 부재 → False (silent)."""
+    with patch("whooing_tui.p4_sync.shutil.which", return_value=None):
+        assert p4_sync.has_pending_local_changes(tmp_path / "db.sqlite") is False
+
+
+def test_is_outdated_vs_p4_false_when_no_p4(tmp_path):
+    with patch("whooing_tui.p4_sync.shutil.which", return_value=None):
+        assert p4_sync.is_outdated_vs_p4(tmp_path / "db.sqlite") is False
+
+
+def test_has_pending_local_changes_false_when_unmapped(monkeypatch, tmp_path):
+    """`where` 가 non-zero (매핑 외) → False, reconcile 호출도 안 함."""
+    log_file = tmp_path / "p4-calls.txt"
+    fake_p4 = tmp_path / "p4"
+    fake_p4.write_text(
+        f"#!/bin/sh\n"
+        f"echo \"$@\" >> {log_file}\n"
+        f"if [ \"$1\" = \"where\" ]; then exit 1; fi\n"
+        f"exit 0\n",
+    )
+    fake_p4.chmod(0o755)
+    monkeypatch.setenv("WHOOING_P4_BIN", str(fake_p4))
+    db = tmp_path / "db.sqlite"
+    db.write_bytes(b"")
+    result = p4_sync.has_pending_local_changes(db)
+    assert result is False
+    log = log_file.read_text().splitlines()
+    assert not any("reconcile" in line for line in log)
+
+
+def test_has_pending_local_changes_true_when_reconcile_outputs_line(
+    monkeypatch, tmp_path,
+):
+    """`reconcile -n` 의 stdout 에 변경 후보 한 줄 → True."""
+    log_file = tmp_path / "p4-calls.txt"
+    fake_p4 = tmp_path / "p4"
+    fake_p4.write_text(
+        f"#!/bin/sh\n"
+        f"echo \"$@\" >> {log_file}\n"
+        f'if [ "$1" = "reconcile" ]; then\n'
+        f"  echo \"//depot/db.sqlite#3 - edit\"\n"
+        f"  exit 0\n"
+        f"fi\n"
+        f"exit 0\n",
+    )
+    fake_p4.chmod(0o755)
+    monkeypatch.setenv("WHOOING_P4_BIN", str(fake_p4))
+    db = tmp_path / "db.sqlite"
+    db.write_bytes(b"")
+    assert p4_sync.has_pending_local_changes(db) is True
+
+
+def test_has_pending_local_changes_false_when_reconcile_empty(
+    monkeypatch, tmp_path,
+):
+    """`reconcile -n` 의 stdout 이 비어있음 → False."""
+    log_file = tmp_path / "p4-calls.txt"
+    fake_p4 = tmp_path / "p4"
+    fake_p4.write_text(
+        f"#!/bin/sh\necho \"$@\" >> {log_file}\nexit 0\n",
+    )
+    fake_p4.chmod(0o755)
+    monkeypatch.setenv("WHOOING_P4_BIN", str(fake_p4))
+    db = tmp_path / "db.sqlite"
+    db.write_bytes(b"")
+    assert p4_sync.has_pending_local_changes(db) is False
+
+
+def test_is_outdated_vs_p4_false_when_up_to_date_message(
+    monkeypatch, tmp_path,
+):
+    """`sync -n` 이 'file(s) up-to-date' 출력 → False (최신)."""
+    log_file = tmp_path / "p4-calls.txt"
+    fake_p4 = tmp_path / "p4"
+    fake_p4.write_text(
+        f"#!/bin/sh\n"
+        f"echo \"$@\" >> {log_file}\n"
+        f'if [ "$1" = "sync" ]; then\n'
+        f"  echo \"file(s) up-to-date.\" >&2\n"
+        f"fi\n"
+        f"exit 0\n",
+    )
+    fake_p4.chmod(0o755)
+    monkeypatch.setenv("WHOOING_P4_BIN", str(fake_p4))
+    db = tmp_path / "db.sqlite"
+    db.write_bytes(b"")
+    assert p4_sync.is_outdated_vs_p4(db) is False
+
+
+def test_is_outdated_vs_p4_true_when_sync_would_update(monkeypatch, tmp_path):
+    """`sync -n` 이 sync 후보를 출력 → True (오래됨)."""
+    log_file = tmp_path / "p4-calls.txt"
+    fake_p4 = tmp_path / "p4"
+    fake_p4.write_text(
+        f"#!/bin/sh\n"
+        f"echo \"$@\" >> {log_file}\n"
+        f'if [ "$1" = "sync" ]; then\n'
+        f"  echo \"//depot/db.sqlite#5 - updating\"\n"
+        f"fi\n"
+        f"exit 0\n",
+    )
+    fake_p4.chmod(0o755)
+    monkeypatch.setenv("WHOOING_P4_BIN", str(fake_p4))
+    db = tmp_path / "db.sqlite"
+    db.write_bytes(b"")
+    assert p4_sync.is_outdated_vs_p4(db) is True

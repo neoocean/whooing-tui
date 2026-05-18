@@ -406,6 +406,105 @@ def test_p4_sync_pending_count_starts_at_zero():
     assert p4_sync.pending_count() == 0
 
 
+# ---- CL #52832+ : startup db freshness check ---------------------------
+
+
+def test_startup_check_screen_class_exists():
+    """`_StartupCheckScreen` ModalScreen 으로 정의."""
+    from textual.screen import ModalScreen
+    from whooing_tui.app import _StartupCheckScreen
+    assert issubclass(_StartupCheckScreen, ModalScreen)
+
+
+def test_startup_check_screen_has_no_cancel_bindings():
+    """검사 중 사용자가 cancel 할 수 없도록 Esc / q / ctrl+c 모두 noop."""
+    from whooing_tui.app import _StartupCheckScreen
+    actions = {b.key: b.action for b in _StartupCheckScreen.BINDINGS}
+    assert actions.get("escape") == "noop"
+    assert actions.get("q") == "noop"
+    assert actions.get("ctrl+c") == "noop"
+
+
+@pytest.mark.asyncio
+async def test_startup_check_dismisses_true_when_data_dir_set(monkeypatch):
+    """`WHOOING_DATA_DIR` 명시 set (테스트/override) → 모든 검사 skip → True."""
+    import asyncio as _aio
+    monkeypatch.setenv("WHOOING_DATA_DIR", "/tmp/whooing-test")
+    from whooing_tui.app import _StartupCheckScreen
+    from textual.app import App
+
+    result: list = []
+
+    class _MiniApp(App):
+        def on_mount(self) -> None:
+            self.push_screen(_StartupCheckScreen(), self._done)
+
+        def _done(self, ok):
+            result.append(ok)
+            self.exit()
+
+    app = _MiniApp()
+    async with app.run_test() as pilot:
+        deadline = _aio.get_running_loop().time() + 3.0
+        while _aio.get_running_loop().time() < deadline:
+            if result:
+                break
+            await _aio.sleep(0.02)
+    assert result == [True]
+
+
+@pytest.mark.asyncio
+async def test_startup_check_dismisses_false_when_outdated(monkeypatch, tmp_path):
+    """outdated 상태면 사용자가 닫기 버튼 누르면 dismiss(False) → 앱 종료 path."""
+    import asyncio as _aio
+    # P4 환경 mock — outdated 라고 응답하는 fake p4 (sync -n 이 sync 메시지 출력).
+    log_file = tmp_path / "calls.txt"
+    fake_p4 = tmp_path / "p4"
+    fake_p4.write_text(
+        f"#!/bin/sh\n"
+        f"echo \"$@\" >> {log_file}\n"
+        f'if [ "$1" = "where" ]; then exit 0; fi\n'
+        f'if [ "$1" = "reconcile" ]; then exit 0; fi\n'
+        f'if [ "$1" = "sync" ]; then echo "//depot/db#5 - updating"; fi\n'
+        f"exit 0\n",
+    )
+    fake_p4.chmod(0o755)
+    monkeypatch.setenv("WHOOING_P4_BIN", str(fake_p4))
+    # DATA_DIR 은 set 하지 않음 — 실제 db_path() 가 user dir 을 가리키지만
+    # has_pending/reconcile/sync 가 fake p4 라 안전.
+    monkeypatch.delenv("WHOOING_DATA_DIR", raising=False)
+
+    from whooing_tui.app import _StartupCheckScreen
+    from textual.app import App
+    from textual.widgets import Button
+
+    result: list = []
+
+    class _MiniApp(App):
+        def on_mount(self) -> None:
+            self.push_screen(_StartupCheckScreen(), self._done)
+
+        def _done(self, ok):
+            result.append(ok)
+            self.exit()
+
+    app = _MiniApp()
+    async with app.run_test() as pilot:
+        # outdated 상태 도달까지 대기.
+        deadline = _aio.get_running_loop().time() + 5.0
+        while _aio.get_running_loop().time() < deadline:
+            if isinstance(app.screen, _StartupCheckScreen):
+                if app.screen.stage == "outdated":
+                    break
+            await _aio.sleep(0.05)
+        assert isinstance(app.screen, _StartupCheckScreen)
+        assert app.screen.stage == "outdated"
+        # 닫기 버튼 클릭 시뮬 — dismiss(False) → callback 에서 exit.
+        app.screen.dismiss(False)
+        await pilot.pause()
+    assert result == [False]
+
+
 # ---- CL #52781+ : 한글 자모 조합 (iOS Blink fix) ---------------------
 
 

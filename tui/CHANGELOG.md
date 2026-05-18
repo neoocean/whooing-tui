@@ -5,6 +5,83 @@
 > **0.17.x 이전** (CL #51119 ~ #1) 항목은 분량 정리 차원에서
 > [`CHANGELOG-archive-0.17.md`](./CHANGELOG-archive-0.17.md) 로 분리 보존.
 
+## CL #52832 — 0.69.0 — 시작 db 신선도 검사 + 크래시 보강 (2026-05-18)
+
+배경 (사용자 요청 3 항목 + 부수):
+
+1. 앱 실행 시 sqlite db 가 P4 head 보다 오래되었는지 검사 → 오래됐으면
+   경고 후 종료 (P4 head 가 최신이어야만 시작).
+2. 시작 시 로컬에 unsubmitted 변경이 있으면 일단 submit 한 뒤 시작.
+3. 위 두 작업을 사용자에게 알리는 splash 팝업 (지금 무엇을 하고 있는지).
+4. 그동안 발견된 트레이스 크래시 사례를 줄이도록 코드 검토 / hardening.
+
+### `p4_sync` 새 helper (CL #52832+)
+
+- `has_pending_local_changes(path) -> bool` — `p4 reconcile -n -m <path>`
+  의 preview 출력으로 판단. stdout 에 변경 후보 1줄 이상이면 True.
+- `is_outdated_vs_p4(path) -> bool` — `p4 sync -n <path>` 의 출력으로
+  판단. "up-to-date" 메시지가 있으면 False, 그 외 stdout 에 sync 후보
+  메시지가 있으면 True.
+- 둘 다 P4 환경 부재 / db 가 workspace 매핑 외인 경우 silent False —
+  caller (startup check) 가 strict 모드 안 켜짐 → 검사 skip.
+
+### `_StartupCheckScreen`
+
+`whooing_tui/app.py` 에 새 ModalScreen.
+
+흐름:
+1. App.on_mount 가 EntriesScreen 대신 본 모달을 먼저 push.
+2. on_mount 즉시 "데이터베이스 상태를 확인합니다…" 표시 (사용자 안내 #3).
+3. worker (`@work(exclusive=True, group="startup")`) 가 blocking p4 호출
+   을 thread executor 로 위임:
+   - `has_pending_local_changes` → True 면 "로컬 변경 사항이 있어 먼저 P4
+     에 submit 합니다…" 로 라벨 갱신 + `flush_on_exit` 실행 (blocking).
+   - `is_outdated_vs_p4` → True 면 stage 를 "outdated" 로 + 빨간 에러
+     메시지 + "p4 sync <path> 후 재시작" 안내 + "닫기" 버튼 노출.
+4. 닫기 → `dismiss(False)` → App 의 `_on_startup_check_done(False)` →
+   `self.exit()` (변경 사항 없으므로 graceful_quit 거치지 않음).
+5. 정상이면 즉시 `dismiss(True)` → EntriesScreen push.
+
+특징:
+- 검사 중 cancel 불가 — BINDINGS 에 Esc / q / ctrl+c 가 `noop` action.
+- `WHOOING_DATA_DIR` 가 set (테스트 격리) 면 모든 검사 skip — 즉시 True.
+- 진행 단계는 `stage: str` attribute 로 노출 (테스트 친화):
+  init|checking|submitting|outdated|ok|skipped.
+
+### 크래시 보강 (Explore 감사 기반)
+
+- `screens/accounts.py:_submit_check_then_delete` — `target["type_key"]`
+  / `target["account_id"]` 직접 인덱싱이 KeyError 위험. `.get()` + 명시
+  검증 + 빈 값일 때 사용자 안내 메시지로 변경.
+- `screens/statement_import.py:_extract_and_dedup` — adapter 가 잘못된
+  date 문자열 (빈문자열 / 비-digit) 을 돌려주면 `strptime` 이 ValueError
+  로 worker traceback. valid 8-digit YYYYMMDD 만 필터 + 그래도 strptime
+  실패 시 status 메시지로 안내.
+
+### 종료 시 submit 보장 (사용자 요청 재확인)
+
+이미 CL #51119 이래로 `flush_on_exit` 가 `wait_for_pending` + blocking
+submit. CL #52819 (0.68.0) 에서 q 의 모든 경로가 graceful_quit 으로
+통일. 본 CL 에서는 그 흐름을 *그대로* 유지 (시작 시 강제 submit 까지 더해
+완전히 일관) — 변경 없이 사용자 요청 충족.
+
+### 테스트 (+ 11 신규)
+
+- `p4_sync` 헬퍼: 7 unit test (P4 부재 / 매핑 외 / reconcile 출력 / sync
+  up-to-date / sync outdated 메시지 등).
+- `_StartupCheckScreen`: 4 통합 test (class exists, no-cancel bindings,
+  WHOOING_DATA_DIR set 시 즉시 True dismiss, fake p4 가 outdated 응답
+  하면 stage="outdated" 도달 → 닫기 → dismiss(False)).
+
+총 966 → 977 (+11, 0 regression).
+
+### Backward compat
+
+- 기존 모든 호출자: app/cli/screens 모두 시작 흐름 그대로. 검사는 모달
+  안에서만 추가됨.
+- 테스트: `WHOOING_DATA_DIR` 격리 fixture 가 자동 적용되므로 기존 통합
+  test 가 모두 startup check 를 skip 모드로 통과 (regression 0).
+
 ## CL #52819 — 0.68.0 — 종료 모달 진행 작업 표시 + 취소 불가 (2026-05-18)
 
 배경 (사용자 요청 3 항목):

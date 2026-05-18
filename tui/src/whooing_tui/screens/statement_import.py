@@ -1,4 +1,4 @@
-"""StatementImportScreen — 카드 명세서 (HTML / PDF) 를 후잉에 import.
+﻿"""StatementImportScreen — 카드 명세서 (HTML / PDF) 를 후잉에 import.
 
 Wizard 단계:
   1. 입력: file_path 가 주어진 상태로 진입 (또는 home 에서 'i' 로 진입 후 prompt)
@@ -328,10 +328,25 @@ class StatementImportScreen(Screen):
             return
 
         # dedup
-        dates = sorted({r.date for r in self.rows})
+        # CL #52832+ crash audit: adapter 가 잘못된 date 문자열 (예: 빈문자
+        # 열 / "20259999") 을 돌려주면 strptime 이 ValueError → worker
+        # traceback. valid YYYYMMDD 8자리 digit 만 살림.
+        dates = sorted({
+            r.date for r in self.rows
+            if isinstance(r.date, str) and len(r.date) == 8 and r.date.isdigit()
+        })
+        if not dates:
+            self._set_status(
+                "⚠️ 거래에 유효한 날짜 (YYYYMMDD) 가 없습니다 — 어댑터 확인.",
+            )
+            return
         from datetime import datetime, timedelta
-        d0 = datetime.strptime(dates[0], "%Y%m%d") - timedelta(days=2)
-        d1 = datetime.strptime(dates[-1], "%Y%m%d") + timedelta(days=2)
+        try:
+            d0 = datetime.strptime(dates[0], "%Y%m%d") - timedelta(days=2)
+            d1 = datetime.strptime(dates[-1], "%Y%m%d") + timedelta(days=2)
+        except ValueError as ex:
+            self._set_status(f"⚠️ 날짜 파싱 실패: {ex}")
+            return
         ledger = await self.client.list_entries(
             section_id=self.section_id,
             start_date=d0.strftime("%Y%m%d"),

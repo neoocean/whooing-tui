@@ -106,6 +106,68 @@ def is_p4_available() -> bool:
     return proc.returncode == 0
 
 
+def has_pending_local_changes(path: Path) -> bool:
+    """CL #52832+: `path` 가 로컬에서 수정되어 아직 P4 submit 전인지.
+
+    `p4 reconcile -n -m <path>` 의 출력으로 판단 — `-n` 은 preview 라 실제
+    open 하지 않고, `-m` 은 디스크 modtime + size + checksum 으로 변경 감지.
+
+    `True`: 로컬에 unsubmitted 변경 있음 — caller 는 `flush_on_exit` 같은
+            blocking submit 후 진행해야.
+    `False`: 변경 없음 / P4 환경 부재 / 매핑 외 (caller 가 silent 처리).
+    """
+    bin_path = _p4_bin()
+    if bin_path is None:
+        return False
+    if not is_file_in_p4(path):
+        return False
+    try:
+        proc = _run_p4(
+            bin_path, ["reconcile", "-n", "-m", str(path)],
+            cwd=str(path.parent), timeout=10,
+        )
+    except Exception:
+        log.debug("p4 reconcile -n failed", exc_info=True)
+        return False
+    # reconcile -n 의 stdout 에 변경 후보가 한 줄씩. 없으면 stdout 빈문자열
+    # + stderr 에 "no file(s) to reconcile". rc 는 변경 있을 때 0, 없을 때
+    # 1 인 경우가 많지만 환경마다 차이 — stdout 내용으로 판단.
+    out = (proc.stdout or "").strip()
+    return bool(out)
+
+
+def is_outdated_vs_p4(path: Path) -> bool:
+    """CL #52832+: `path` 가 P4 head 보다 *오래된* (sync 필요한) 상태인지.
+
+    `p4 sync -n <path>` 의 출력으로 판단:
+      - "file(s) up-to-date" → False (최신).
+      - 파일이 새 rev 로 업데이트되거나 추가될 거라는 메시지 → True.
+      - P4 환경 부재 / 매핑 외 → False (caller 가 strict 모드 X).
+
+    caller 는 True 면 사용자에게 "DB 최신 아님 — p4 sync 후 재시작" 안내.
+    """
+    bin_path = _p4_bin()
+    if bin_path is None:
+        return False
+    if not is_file_in_p4(path):
+        return False
+    try:
+        proc = _run_p4(
+            bin_path, ["sync", "-n", str(path)],
+            cwd=str(path.parent), timeout=10,
+        )
+    except Exception:
+        log.debug("p4 sync -n failed", exc_info=True)
+        return False
+    combined = (proc.stdout or "") + (proc.stderr or "")
+    # "up-to-date" 가 어디든 (stdout 또는 stderr) 들어 있으면 최신.
+    if "up-to-date" in combined:
+        return False
+    # stdout 에 sync 후보가 있다는 메시지 ("#N - updating", "#N - added as")
+    # 있으면 outdated. 빈 stdout 이면 (예: invalid path) False 로 보수.
+    return bool((proc.stdout or "").strip())
+
+
 def is_file_in_p4(path: Path) -> bool:
     """`path` 가 P4 workspace 에 매핑돼 있는지 — `p4 fstat <path>` 검사.
 

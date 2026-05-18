@@ -22,7 +22,7 @@ from typing import Optional
 from textual import work
 from textual.app import App, ComposeResult
 from textual.binding import Binding
-from textual.containers import Vertical
+from textual.containers import Horizontal, Vertical
 from textual.screen import ModalScreen
 from textual.widgets import Footer, Header, Static
 
@@ -166,6 +166,190 @@ class _ShutdownModal(ModalScreen[None]):
             pass
 
 
+class _StartupCheckScreen(ModalScreen[bool]):
+    """CL #52832+ 사용자 요청: 앱 시작 시 P4 db 상태 확인 splash 모달.
+
+    절차:
+      1. 모달 표시 즉시 "데이터베이스 확인 중…" → 사용자가 무엇이 진행 중인지
+         즉시 알도록.
+      2. 로컬에 unsubmitted 변경 있으면 우선 *blocking* 으로 submit.
+         (다른 환경의 다음 시작이 head 를 sync 받을 수 있도록.)
+      3. P4 head 보다 오래된 (sync 필요) 상태인지 확인.
+         - 오래됨 → 에러 메시지 + 닫기 버튼 → dismiss(False) → 앱 종료.
+         - 최신 → dismiss(True) → app 이 EntriesScreen push.
+
+    `WHOOING_DATA_DIR` 가 명시 set 되면 (테스트 격리) 모든 검사 skip — 즉시
+    dismiss(True). P4 환경 부재 / db 가 workspace 매핑 외인 경우도 silent skip.
+
+    종료 시퀀스처럼 *취소 불가* — Esc / q / ctrl+c noop.
+    """
+
+    BINDINGS = [
+        Binding("escape", "noop", "", show=False, priority=True),
+        Binding("q", "noop", "", show=False, priority=True),
+        Binding("ctrl+c", "noop", "", show=False, priority=True),
+    ]
+
+    DEFAULT_CSS = """
+    _StartupCheckScreen {
+        align: center middle;
+    }
+    #startup_box {
+        width: 95%;
+        max-width: 70;
+        min-width: 40;
+        height: auto;
+        padding: 1 2;
+        border: thick $primary;
+        background: $surface;
+    }
+    #startup_title {
+        height: 1;
+        content-align: center middle;
+        color: $primary;
+    }
+    #startup_status {
+        padding: 1 0;
+        height: auto;
+    }
+    #startup_status.error {
+        color: $error;
+    }
+    #startup_buttons {
+        height: 3;
+        align: center middle;
+        margin-top: 1;
+        display: none;
+    }
+    #startup_buttons.visible {
+        display: block;
+    }
+    """
+
+    def __init__(self) -> None:
+        super().__init__()
+        # 테스트 친화: 진행 단계 / 결과를 attribute 로 노출.
+        self.stage: str = "init"  # init|checking|submitting|outdated|ok|skipped
+        self.last_status: str = ""
+
+    def compose(self) -> ComposeResult:
+        from textual.widgets import Button
+        with Vertical(id="startup_box"):
+            yield Static("[bold]whooing-tui 시작 중…[/bold]", id="startup_title")
+            yield Static(
+                "데이터베이스 상태를 확인합니다…",
+                id="startup_status",
+            )
+            with Horizontal(id="startup_buttons"):
+                yield Button("닫기", id="startup_btn_close", variant="error")
+
+    def on_mount(self) -> None:
+        self._set_status("데이터베이스 상태를 확인합니다…")
+        self._run_check()
+
+    def action_noop(self) -> None:
+        """검사 진행 중 cancel 불가."""
+        return
+
+    def on_button_pressed(self, event) -> None:
+        if event.button.id == "startup_btn_close":
+            # outdated 상태 — dismiss(False) → app 종료.
+            self.dismiss(False)
+
+    def _set_status(self, text: str, *, error: bool = False) -> None:
+        self.last_status = text
+        try:
+            s = self.query_one("#startup_status", Static)
+            s.update(text)
+            if error:
+                s.add_class("error")
+            else:
+                s.remove_class("error")
+        except Exception:  # pragma: no cover
+            pass
+
+    def _show_close_button(self) -> None:
+        try:
+            self.query_one("#startup_buttons").add_class("visible")
+            from textual.widgets import Button
+            self.query_one("#startup_btn_close", Button).focus()
+        except Exception:  # pragma: no cover
+            pass
+
+    @work(exclusive=True, group="startup", name="startup_check")
+    async def _run_check(self) -> None:
+        """blocking p4 작업은 thread executor 로 — main loop 차단 방지."""
+        import asyncio
+        import os
+
+        # 테스트 격리: WHOOING_DATA_DIR set → 모두 skip.
+        if os.getenv("WHOOING_DATA_DIR") is not None:
+            self.stage = "skipped"
+            self.dismiss(True)
+            return
+
+        try:
+            from whooing_tui import data as tui_data
+            from whooing_tui import p4_sync
+            db_path = tui_data.db_path()
+        except Exception:
+            log.exception("startup check: db_path lookup failed")
+            self.dismiss(True)  # 최선 노력 — 표면화 X.
+            return
+
+        loop = asyncio.get_running_loop()
+
+        # 1) 로컬 unsubmitted 변경 → submit (blocking).
+        self.stage = "checking"
+        try:
+            has_pending = await loop.run_in_executor(
+                None, p4_sync.has_pending_local_changes, db_path,
+            )
+        except Exception:
+            log.exception("startup: reconcile -n failed")
+            has_pending = False
+
+        if has_pending:
+            self.stage = "submitting"
+            self._set_status(
+                "로컬 변경 사항이 있어 먼저 P4 에 submit 합니다…\n"
+                "[dim]잠시만 기다려 주세요.[/dim]",
+            )
+            try:
+                await loop.run_in_executor(
+                    None, p4_sync.flush_on_exit, db_path,
+                )
+            except Exception:
+                log.exception("startup: submit failed")
+                # 실패해도 진행 — 다음 단계의 outdated 검사가 막을 수 있음.
+
+        # 2) P4 head 와 비교 → outdated 면 종료.
+        self._set_status("P4 head 와 비교 중…")
+        try:
+            outdated = await loop.run_in_executor(
+                None, p4_sync.is_outdated_vs_p4, db_path,
+            )
+        except Exception:
+            log.exception("startup: sync -n failed")
+            outdated = False
+
+        if outdated:
+            self.stage = "outdated"
+            self._set_status(
+                "⚠️ 로컬 데이터베이스가 P4 head 보다 오래되었습니다.\n\n"
+                "다른 환경에서 submit 된 변경 사항을 받지 못한 상태로 "
+                "앱을 시작하면 충돌이 발생할 수 있습니다.\n\n"
+                f"먼저 터미널에서 [bold]p4 sync {db_path}[/bold] 를 실행한 뒤 "
+                "다시 시작하세요.",
+                error=True,
+            )
+            self._show_close_button()
+            return
+
+        self.stage = "ok"
+        self.dismiss(True)
+
+
 class WhooingTuiApp(App):
     """Whooing TUI 메인 앱.
 
@@ -221,9 +405,25 @@ class WhooingTuiApp(App):
             # client 가 None 이면 테스트가 직접 만든 경우이므로 화면도
             # 띄우지 않는다 (테스트는 fake client 를 넘긴다).
             return
-        # CL #51023 부터 초기 화면은 EntriesScreen — 자체적으로 sections
-        # / accounts / entries 를 chain 으로 부팅한다.
-        self.push_screen(EntriesScreen(self._client))
+        # CL #52832+ 사용자 요청: db 상태 확인 splash 를 먼저 — 로컬 변경
+        # 이 있으면 submit, P4 head 보다 오래됐으면 종료. 검사 통과 (True)
+        # 시 EntriesScreen push.
+        self.push_screen(_StartupCheckScreen(), self._on_startup_check_done)
+
+    def _on_startup_check_done(self, ok: bool | None) -> None:
+        """`_StartupCheckScreen` 결과 처리.
+
+        True  : 정상 → EntriesScreen 으로 진입.
+        False : DB 가 P4 head 보다 오래됨 → 사용자가 sync 후 재시작해야.
+                즉시 종료 (graceful_quit 거치지 않음 — 아직 변경 사항이
+                없는 상태).
+        None  : 모달이 비정상 dismiss (이론상 BINDINGS 가 cancel 차단).
+                보수적으로 종료.
+        """
+        if ok and self._client is not None:
+            self.push_screen(EntriesScreen(self._client))
+            return
+        self.exit()
 
     def on_unmount(self) -> None:
         """App 종료 직전 — 진행 중인 P4 sync submit 들을 끝까지 기다린 뒤,

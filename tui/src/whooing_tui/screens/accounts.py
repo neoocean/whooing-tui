@@ -485,12 +485,22 @@ class AccountsScreen(MenuBarMixin, Screen):
     @work(exclusive=True, group="acc-mutate", name="check_then_delete")
     async def _submit_check_then_delete(self, target: dict[str, Any]) -> None:
         session = self.app.session  # type: ignore[attr-defined]
+        # CL #52832+ crash audit: target dict 의 key 가 빠지면 KeyError 가
+        # worker 에서 traceback 으로 나옴. .get() + 명시 검증 + 사용자 안내.
+        type_key = target.get("type_key")
+        account_id = target.get("account_id")
+        if not type_key or not account_id:
+            self.set_status(
+                "삭제할 계정의 type/id 가 비어있습니다 — 재로드 후 다시 시도.",
+                error=True,
+            )
+            return
         # 1. 사전 검사 (entries 건수 / 잔액 / 마지막 항목)
         try:
             check = await self._client.check_account_deletable(
                 section_id=session.section_id,
-                account=target["type_key"],
-                account_id=target["account_id"],
+                account=type_key,
+                account_id=account_id,
             )
         except ToolError as e:
             self.set_status(f"삭제 사전검사 실패 [{e.kind}] {e.message}", error=True)
