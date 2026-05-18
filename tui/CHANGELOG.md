@@ -5,6 +5,77 @@
 > **0.17.x 이전** (CL #51119 ~ #1) 항목은 분량 정리 차원에서
 > [`CHANGELOG-archive-0.17.md`](./CHANGELOG-archive-0.17.md) 로 분리 보존.
 
+## CL #52753 — 0.54.1 — 보고서 화면 에러/빈 결과 안내 (2026-05-18)
+
+배경 (사용자 보고): "보고서 화면에 빈 화면이 나옵니다." 라이브 API 진단:
+
+| 메뉴 | 결과 |
+|---|---|
+| **재무상태표** (첫 항목, default cursor) | **HTTP 403 → ToolError [UPSTREAM]** |
+| 손익 요약 / 월별 추이 | HTTP 403 |
+| 사용자 정의 BS/PL | **빈 list `[]`** (사용자가 정의 안 함) |
+| 나머지 6 (in_out / calendar / entries_latest / budget*) | 정상 |
+
+종전 코드의 사용자 경험:
+- 403: `_show_error` 가 작은 status (1줄) 만 갱신, body 는 빈 채 — 사용자가
+  "빈 화면" 으로 인식.
+- 빈 list/dict: `format_report_payload` 가 `[]` / `{}` 만 출력 — 역시
+  사용자에겐 "빈 화면".
+
+### 동작 변경
+
+1. **`_show_error` 가 body 에도 에러 메시지 큼지막하게 표시**:
+   ```
+   에러
+   [UPSTREAM] 비-JSON 응답 (status=403)
+   Esc / q 로 닫고 다른 보고서를 시도해 보세요.
+   ```
+   status 한 줄은 "⚠️ 에러 — 본문 참조" 로 단축 — 사용자가 본문 영역을
+   확인하도록 유도.
+
+2. **`format_report_payload` 의 빈 결과 처리**:
+   - `None`: `(응답 없음 — 후잉 API 가 None 반환)` + 토큰/path 안내.
+   - 빈 `list`: `(결과 없음)` + "사용자 정의 보고서면 후잉 웹에서 먼저
+     정의가 필요" 안내.
+   - 빈 `dict`: `(결과 없음 — 응답 dict 가 비어있음)`.
+
+### 의도적으로 안 한 것
+
+- **403 자체 fix**: 후잉 API endpoint path 또는 토큰 권한 이슈 — 별도 작업.
+  본 CL 은 사용자에게 *상황을 명확히 보여줄* 수 있도록 UI 만 개선.
+- **endpoint path 갱신** — 라이브 검증 (별도 트래픽) 필요.
+
+### 수정 파일
+
+- `tui/src/whooing_tui/screens/reports.py`
+  - `_show_error`: body 도 갱신, status 단축.
+  - `format_report_payload`: None / 빈 list / 빈 dict 명확 안내.
+- `tui/tests/test_reports.py` — 회귀 방지 +4:
+  - `test_format_report_payload_empty_list_explains` — `[]` 가 보이면 안 됨.
+  - `test_format_report_payload_empty_dict_explains` — `{}` 가 보이면 안 됨.
+  - `test_format_report_payload_nonempty_list_uses_json_dump` — 비빈 list 회귀.
+  - `test_error_message_shown_in_body_not_only_status` — 사용자 보고
+    그대로 시뮬: ToolError → body 의 content Static 에 에러 텍스트 포함.
+- `tui/pyproject.toml` — 0.54.0 → 0.54.1.
+- `tui/src/whooing_tui/__init__.py` — `__version__` 동기화.
+
+### 검증
+
+- **822 passed** (818 + 4 신규). 회귀 0.
+
+### 사용자 후속 검증
+
+`t` 키 → "재무상태표" 선택 시:
+- 종전: 빈 화면.
+- 새: 본문에 빨간 큰 "에러" + "[UPSTREAM] 비-JSON 응답 (status=403)" +
+  닫기 안내. 403 의 근본 원인 (endpoint path / 권한) 은 별도 작업.
+
+`사용자 정의 BS/PL` 선택 시:
+- 종전: `[]` 만.
+- 새: "(결과 없음) 후잉 웹에서 먼저 정의가 필요합니다." 안내.
+
+---
+
 ## CL #52750 — 0.54.0 — AttachmentBrowser 가 modal 팝업 + Enter 미리보기 (2026-05-18)
 
 배경 (사용자 요청): 첨부 list 화면을 거래내역 위에 큰 팝업 (modal) 으로

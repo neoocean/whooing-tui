@@ -55,6 +55,27 @@ def test_format_report_payload_none_yields_placeholder():
     assert "응답 없음" in out
 
 
+# CL #52753+: 빈 list / 빈 dict 도 명확한 안내 (사용자 보고: "빈 화면")
+def test_format_report_payload_empty_list_explains():
+    out = format_report_payload("custom_bs", [])
+    assert "결과 없음" in out
+    # 단순 `[]` 만 출력하면 사용자가 빈 화면으로 인식 — 안내 메시지 포함.
+    assert "[]" not in out
+
+
+def test_format_report_payload_empty_dict_explains():
+    out = format_report_payload("balance_sheet", {})
+    assert "결과 없음" in out
+    assert "{}" not in out
+
+
+def test_format_report_payload_nonempty_list_uses_json_dump():
+    """비빈 list 는 종전 동작 — JSON pretty dump."""
+    out = format_report_payload("entries_latest", [{"x": 1}])
+    assert "```" in out
+    assert '"x": 1' in out
+
+
 def test_format_report_payload_list_works():
     out = format_report_payload(
         "entries_latest", [{"item": "스타벅스", "money": 5000}],
@@ -272,3 +293,45 @@ async def test_result_screen_handles_tool_error_silently():
         assert ok
         assert "USER_INPUT" in app.screen.last_error  # type: ignore[union-attr]
         assert isinstance(app.screen, ReportResultScreen)
+
+
+@pytest.mark.asyncio
+async def test_error_message_shown_in_body_not_only_status():
+    """CL #52753+: 에러가 status (작은 1줄) 만이 아니라 body (큰 영역) 에도
+    표시 — 사용자 보고 "보고서 화면이 빈 화면" 회귀 방지.
+    """
+    from textual.widgets import Static
+
+    from whooing_tui.models import ToolError
+
+    fake = _Client()
+
+    async def _err_get_report(**kwargs):
+        raise ToolError("UPSTREAM", "비-JSON 응답 (status=403)")
+
+    fake.get_report = _err_get_report  # type: ignore[assignment]
+
+    app = WhooingTuiApp(client=fake)  # type: ignore[arg-type]
+    async with app.run_test() as pilot:
+        await _wait_for(
+            lambda: isinstance(app.screen, EntriesScreen)
+            and app.session.section_id == "s1",
+            timeout=3.0,
+        )
+        from whooing_tui.screens.reports import ReportResultScreen
+        await app.push_screen(
+            ReportResultScreen(
+                fake, app.session, item_id="balance_sheet", label="재무상태표",
+            ),
+        )
+        await _wait_for(
+            lambda: getattr(app.screen, "last_error", None) is not None,
+            timeout=3.0,
+        )
+        # body 의 content Static 가 에러 메시지를 포함해야 함 — 빈 화면 X.
+        content = app.screen.query_one("#reports-result-result-content", Static) \
+            if False else app.screen.query_one("#reports-result-content", Static)
+        body_text = str(content.render())
+        assert "UPSTREAM" in body_text or "비-JSON" in body_text or "에러" in body_text, (
+            f"body 에 에러 정보 누락 — 빈 화면 회귀: {body_text!r}"
+        )

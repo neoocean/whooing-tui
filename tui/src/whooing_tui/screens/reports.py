@@ -342,10 +342,22 @@ class ReportResultScreen(ModalScreen[None]):
         self._render_payload(payload)
 
     def _show_error(self, msg: str) -> None:
+        """CL #52753+: 에러 메시지를 status (좁은 한 줄) + body (큰 영역) 양쪽에.
+
+        종전엔 status 한 줄만 갱신 — 사용자가 body 의 빈 공간만 보고 "빈
+        화면" 으로 인식했음 (사용자 보고). body 에도 같은 메시지를 큼지막
+        하게 + Esc 안내까지 같이 노출.
+        """
         try:
             status = self.query_one("#reports-result-status", Static)
-            status.update(msg)
+            status.update("⚠️ 에러 — 본문 참조")
             status.add_class("error")
+            content = self.query_one("#reports-result-content", Static)
+            content.update(
+                f"[red bold]에러[/red bold]\n\n"
+                f"[red]{msg}[/red]\n\n"
+                f"[dim]Esc / q 로 닫고 다른 보고서를 시도해 보세요.[/dim]"
+            )
         except Exception:  # pragma: no cover
             pass
 
@@ -368,9 +380,27 @@ def format_report_payload(item_id: str, payload: Any) -> str:
 
     Phase 1 은 raw JSON pretty dump 가 baseline — 종류별 전용 렌더는 후속
     CL 에서 증분.
+
+    CL #52753+: None / 빈 list / 빈 dict 의 경우 명확한 안내 메시지.
+    종전엔 `[]` / `{}` 만 표시돼 사용자가 "빈 화면" 으로 인식 (사용자 보고).
+    사용자 정의 BS/PL 보고서가 정의 안 된 환경에서 자주 발생.
     """
     if payload is None:
-        return "[dim](응답 없음)[/dim]"
+        return (
+            "[yellow](응답 없음 — 후잉 API 가 None 반환)[/yellow]\n\n"
+            "[dim]토큰 권한 또는 endpoint path 문제일 수 있습니다.[/dim]"
+        )
+    if isinstance(payload, list) and len(payload) == 0:
+        return (
+            "[yellow](결과 없음)[/yellow]\n\n"
+            "[dim]이 조건/기간에 해당하는 데이터가 0건입니다. "
+            "사용자 정의 보고서면 후잉 웹에서 먼저 정의가 필요합니다.[/dim]"
+        )
+    if isinstance(payload, dict) and len(payload) == 0:
+        return (
+            "[yellow](결과 없음 — 응답 dict 가 비어있음)[/yellow]\n\n"
+            "[dim]후잉 API 가 빈 응답을 반환했습니다.[/dim]"
+        )
 
     # balance_sheet / pl_summary 등은 dict, customs / entries_latest 는 list.
     # 양쪽 모두 indent JSON 으로 dump — UTF-8 보존.
