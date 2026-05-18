@@ -219,8 +219,13 @@ def _dedup(
 # ---- Main screen ----------------------------------------------------
 
 
-class StatementImportScreen(Screen):
-    """카드 명세서 import 화면. 진입 시 file_path 필수."""
+class StatementImportScreen(ModalScreen[None]):
+    """카드 명세서 import 화면 (CL #52841+ ModalScreen 으로 변경).
+
+    종전엔 Screen 전체를 차지 — 사용자 요청으로 popup 모달 형태. 화면
+    가운데 큰 frame, 뒷 화면 (EntriesScreen) 은 background 로 살짝 보임.
+    진입 시 file_path 필수.
+    """
 
     BINDINGS = [
         Binding("escape", "back", "뒤로"),
@@ -229,15 +234,37 @@ class StatementImportScreen(Screen):
 
     DEFAULT_CSS = """
     StatementImportScreen {
+        align: center middle;
+    }
+    #import_frame {
+        width: 95%;
+        max-width: 160;
+        min-width: 60;
+        height: 90%;
+        max-height: 50;
+        min-height: 16;
+        padding: 1 2;
+        border: thick $accent;
+        background: $surface;
         layout: vertical;
+    }
+    #import_title {
+        height: 1;
+        content-align: center middle;
+        color: $accent;
     }
     #status {
         height: auto;
-        padding: 1;
-        background: $boost;
+        padding: 1 0;
+        background: transparent;
     }
     #preview {
         height: 1fr;
+    }
+    #import_foot {
+        height: 1;
+        content-align: center middle;
+        color: $text-muted;
     }
     #pw_box {
         /* CL #51120+: 좁은 터미널 대응. */
@@ -273,13 +300,17 @@ class StatementImportScreen(Screen):
         self.proposals: list[CSVRow] = []
 
     def compose(self) -> ComposeResult:
-        yield Header()
-        yield Static(
-            f"명세서: {self.file_path}\n섹션: {self.section_id} · 카드: {self.r_account_id}",
-            id="status",
-        )
-        yield DataTable(id="preview", zebra_stripes=True)
-        yield Footer()
+        with Vertical(id="import_frame"):
+            yield Static("[bold]카드 명세서 import[/bold]", id="import_title")
+            yield Static(
+                f"명세서: {self.file_path}\n섹션: {self.section_id} · 카드: {self.r_account_id}",
+                id="status",
+            )
+            yield DataTable(id="preview", zebra_stripes=True)
+            yield Static(
+                "Ctrl+Enter 입력 확정 · Esc 닫기",
+                id="import_foot",
+            )
 
     def on_mount(self) -> None:
         table = self.query_one("#preview", DataTable)
@@ -454,7 +485,9 @@ class StatementImportScreen(Screen):
         )
 
     def action_back(self) -> None:
-        self.app.pop_screen()
+        # CL #52841+: ModalScreen 이므로 dismiss. pop_screen 도 동작하지만
+        # dismiss 가 modal 의 표준 종료 path (callback 호출 등 포함).
+        self.dismiss(None)
 
 
 def _find_account_type(accounts: dict, account_id: str) -> str | None:

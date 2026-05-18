@@ -44,6 +44,14 @@ install:
 	$(PIP) install --quiet -e 'core[dev]'
 	$(PIP) install --quiet -e 'tui[dev]'
 	$(PIP) install --quiet -e 'mcp[dev]'
+	@# CL #52841+: Playwright 헤드리스 chromium 자동 설치. HTML 명세서
+	@# 어댑터 (현대카드 / 하나카드) 가 client-side JS 복호화 처리에 사용.
+	@# 이미 설치된 환경에서는 idempotent (별도 다운로드 안 함). 네트워크
+	@# 부재 / 권한 문제 시 silent skip — 사용자가 직접 `playwright install
+	@# chromium` 실행 가능. 사이즈 ~170MB.
+	@$(VENV)/bin/playwright install chromium >/dev/null 2>&1 \
+		&& echo "OK — chromium (Playwright) 준비됨." \
+		|| echo "WARN — playwright install chromium 자동 실행 실패 (HTML 명세서 import 시 다시 시도하세요)."
 	@echo "OK — core / tui / mcp 모두 editable install."
 
 install-dev: install

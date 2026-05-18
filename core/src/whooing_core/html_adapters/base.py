@@ -1,4 +1,4 @@
-"""HTML adapter 공통 — Playwright 헤드리스 복호화 + DOM 추출 helper."""
+﻿"""HTML adapter 공통 — Playwright 헤드리스 복호화 + DOM 추출 helper."""
 
 from __future__ import annotations
 
@@ -91,4 +91,20 @@ async def decrypt_html_with_playwright(
     except HtmlDecryptError:
         raise
     except Exception as ex:
+        # CL #52841+: Playwright Python 패키지는 설치돼있어도 *브라우저
+        # 바이너리* 가 별도 다운로드 필요. 자주 발생하는 케이스라 사용자에게
+        # 정확한 fix 명령을 표면화 — "Executable doesn't exist" / "playwright
+        # install" 메시지가 보이면 안내 cmd 를 prefix.
+        msg = str(ex)
+        if (
+            "Executable doesn't exist" in msg
+            or "playwright install" in msg
+        ):
+            raise HtmlDecryptError(
+                "Playwright 브라우저 바이너리 미설치 — 터미널에서 다음 명령을 "
+                "한 번 실행하세요:\n\n"
+                "    .venv/bin/playwright install chromium\n\n"
+                "(또는 `make install` 을 다시 실행 — CL #52841+ 부터 자동 포함). "
+                f"\n\n원인 메시지: {ex}",
+            ) from ex
         raise HtmlDecryptError(f"Playwright 복호화 실패: {ex}") from ex

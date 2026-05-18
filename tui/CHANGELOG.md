@@ -5,6 +5,73 @@
 > **0.17.x 이전** (CL #51119 ~ #1) 항목은 분량 정리 차원에서
 > [`CHANGELOG-archive-0.17.md`](./CHANGELOG-archive-0.17.md) 로 분리 보존.
 
+## CL #52841 — 0.70.1 — Playwright 브라우저 자동 설치 + 명세서 import 팝업화 (2026-05-18)
+
+배경 (사용자 보고):
+1. `mcp/` 모듈이 필요한지 — 답: **불필요** (런타임 import 0건). 다만 보존
+   정책은 그대로 (archived 2026-05-10, 회귀 참조용). 안전하게 제거 가능
+   하지만 본 CL 에서는 그대로 둠.
+2. 현대카드 HTML 명세서 import 시 "Playwright 복호화 실패: BrowserType.
+   launch: Executable doesn't exist" 트레이스. 원인은 Playwright Python
+   패키지는 있지만 chromium 바이너리 미설치 (`~/Library/Caches/ms-playwright/`
+   부재).
+3. StatementImportScreen 이 전체 화면 — 팝업 모달 형태로 변경 요청.
+
+### Playwright 브라우저 자동 설치 (Makefile)
+
+`make install` 끝에 `playwright install chromium` 한 줄 추가:
+- idempotent — 이미 설치된 환경에서는 즉시 끝.
+- ~170MB 다운로드. 네트워크 / 권한 문제 시 silent skip (WARN 메시지만).
+- 사용자가 직접 `.venv/bin/playwright install chromium` 호출도 가능.
+
+### Playwright 에러 메시지 강화
+
+`core/html_adapters/base.py` 의 `decrypt_html_with_playwright` 가
+"Executable doesn't exist" / "playwright install" 메시지를 감지하면
+일반 fallback 메시지 대신 *정확한 fix 명령* 을 사용자 가시 메시지로:
+
+```
+Playwright 브라우저 바이너리 미설치 — 터미널에서 다음 명령을 한 번 실행
+하세요:
+
+    .venv/bin/playwright install chromium
+
+(또는 `make install` 을 다시 실행 — CL #52841+ 부터 자동 포함).
+```
+
+### StatementImportScreen → ModalScreen
+
+종전엔 `class StatementImportScreen(Screen)` — Header/Footer + 본문이
+*전체 화면* 차지. 본 CL 부터 `class StatementImportScreen(ModalScreen[None])`:
+- compose 가 Vertical `#import_frame` 한 박스 안에 제목 / 상태 / 표 /
+  도움말 안내. width 95% max 160, height 90% max 50.
+- background 가 surface, border thick accent — 다른 모달과 동일 톤.
+- `action_back` 가 `pop_screen()` 대신 `dismiss(None)` — modal 표준
+  종료 path.
+
+### `mcp/` 모듈 사용 여부
+
+코드 전체 grep 결과 — `whooing_mcp` 의 *런타임 import 0건*. 모든 참조는
+docstring / README / MEMORY.md 의 historical 노트. archived 정책 (보존
++ 테스트 회귀 검증) 은 README 에 이미 명시.
+
+→ TUI 동작에는 불필요. 향후 별 CL 에서 `make install` 의 `pip install -e mcp`
+줄을 빼고, 디렉토리 자체는 git history 에 보존하면 모노레포 슬림화 가능
+(사용자 결정).
+
+### 테스트
+
+기존 14 statement_import 테스트 모두 통과 — Modal 전환은 시각적 / 사용자
+가시 변경, 진행 흐름 동일. 전체 1004 통과 (regression 0).
+
+### Backward compat
+
+- `StatementImportScreen` 의 시그니처 / 호출 위치 그대로. 호출자
+  (`EntriesScreen.action_import_card_statement`) 가 `push_screen` 으로
+  띄우는 흐름도 동일 — ModalScreen 도 push_screen 으로 띄움.
+- 기존 Screen 의 `pop_screen()` 종료 path 가 본 화면에는 `dismiss(None)`
+  로 바뀜 — 같은 효과.
+
 ## CL #52834 — 0.70.0 — 유지보수 백로그 일괄 적용 (2026-05-18)
 
 배경 (사용자 요청): `docs/MAINTAINABILITY-REVIEW.md` 의 항목들을 모두
