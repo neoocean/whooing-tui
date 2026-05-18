@@ -5,6 +5,99 @@
 > **0.17.x 이전** (CL #51119 ~ #1) 항목은 분량 정리 차원에서
 > [`CHANGELOG-archive-0.17.md`](./CHANGELOG-archive-0.17.md) 로 분리 보존.
 
+## CL #52834 — 0.70.0 — 유지보수 백로그 일괄 적용 (2026-05-18)
+
+배경 (사용자 요청): `docs/MAINTAINABILITY-REVIEW.md` 의 항목들을 모두
+자율 수행. 깨지지 않는 단위로 7 단계로 나눠 처리. 각 단계 후 전체 테스트
+통과 확인. 코드 변경은 *옵트-인 / 후방 호환 wrapper* 패턴이라 기존 호출
+경로는 모두 그대로 동작.
+
+### Phase 1 — LLM 진입점 + README
+
+- 새 `CLAUDE.md` (repo 루트) — 진입점 / 모듈 맵 / 핵심 클래스 / 디자인
+  패턴 / 흔한 함정. AI 어시스턴트가 코드 검색 전에 본 문서부터 읽도록.
+- `README.md` 의 MCP 항목 명확화 — wrapper 는 archived, *공식 후잉 MCP*
+  서버는 보고서 위임용으로 현역. + `docs/` 디렉토리 인덱스.
+
+### Phase 2 — `constants.py` 일원화
+
+새 `tui/src/whooing_tui/constants.py` — 다음 매직 상수 모음:
+- `WHOOING_SERVER_PAGE_CAP=100` (entries-list cap).
+- `DEFAULT_WINDOW_DAYS=30`, `WINDOW_STEP_DAYS=7`, `MAX_WINDOW_DAYS=365*5`,
+  `MIN_WINDOW_DAYS=1`.
+- `HANGUL_SYLLABLE_FIRST=0xAC00`, `HANGUL_SYLLABLE_LAST=0xD7A3`.
+- `ABBREV_KOREAN_CHARS=2`.
+- `COMPACT_THRESHOLDS=(80,60,45,35)`.
+- `P4_*_TIMEOUT_SEC` 군, `LIVE_REFRESH_INTERVAL_SEC=0.25`.
+
+`screens/entries.py` 및 `app.py` 의 해당 상수들은 본 모듈로 alias.
+
+### Phase 3 — `@safe_action` 데코레이터
+
+새 `tui/src/whooing_tui/actions.py` — `action_*` / worker 의 try/except +
+`set_status` 보일러플레이트를 데코레이터 한 줄로 제거. ToolError / 일반
+Exception 분기, 동기 + 비동기 모두. 옵트-인 — 기존 try/except 는 안 건드림.
+
+### Phase 4 — `text_utils.py` re-export
+
+새 `tui/src/whooing_tui/text_utils.py` — `screens/entries_compact.py` 의
+pure helper (`is_hangul`, `abbreviate_account_name`, `compute_compact_
+level`, `hidden_columns_for_level`, `column_is_visible`) 를 정식 경로로
+re-export. 호출처가 screen 모듈을 import 하는 어색한 결합 해소.
+
+### Phase 5 — `ConfirmModal` 중복 제거
+
+`screens/edit_entry.py` 의 자체 ConfirmModal 정의를 제거, CL #51156 의
+`widgets/confirm.ConfirmModal` 로 일원화. 기존 import 경로는 후방 호환
+alias 로 살아있음.
+
+### Phase 6 — `EntryRepository` 추출
+
+새 `tui/src/whooing_tui/repository.py`:
+- `tags_for(entry_id)`, `tags_for_many(entry_ids)`, `all_tags()`,
+  `attachment_counts(entry_ids, section_id)`, `tag_colors(section_id)`.
+- `persist(entry_id, section_id, memo, tags)` (P4 자동 submit 포함),
+  `purge(entry_id)` (annotation/태그/첨부 + P4 submit).
+
+`EntriesScreen` 의 `_persist_local` / `_purge_local` / `_fetch_*` 메서드는
+모두 본 repo 의 thin wrapper 로 축소 — 본문 ~100 줄 감소. 다른 화면도
+같은 repo 인스턴스 받아 일관된 인터페이스로 사용 가능.
+
+### Phase 7 — 응답 TypedDict (점진 narrowing 첫 단계)
+
+새 `tui/src/whooing_tui/responses.py` — 자주 쓰이는 응답 shape 의 TypedDict:
+- `EntryDict`, `SectionDict`, `AccountDict`, `AccountsByType`,
+  `CreateEntryResponse`.
+
+런타임 dict 와 호환이라 기존 호출자는 모두 그대로 동작. 새 코드 / refactor
+하는 함수만 점진 적용 — `Any` 전부 narrow 는 후속 CL.
+
+`client.py` 전체 분리 (Transport/API/EndpointGroups) 는 *deferred* — 안정적
+인 모듈이라 즉시 가치보다 cost 가 높음. 본 CL 의 TypedDict 도입이 narrowing
+첫 단계로 충분한 LLM/IDE 추론 향상.
+
+### MAINTAINABILITY-REVIEW.md 갱신
+
+각 항목 옆에 `[적용 CL #52834]` / `[deferred]` 마크 — 후속 검토 시 같은
+문서가 다시 살아있는 백로그로.
+
+### 테스트
+
+신규 단위 테스트 (+ 27):
+- `test_actions.py` — `@safe_action` 의 동기 / 비동기 / ToolError / 일반
+  Exception / target.set_status 없는 case (9 tests).
+- `test_repository.py` — read / write 라운드트립, 빈 입력 noop (11 tests).
+- `test_responses.py` — TypedDict 구조 smoke (7 tests).
+
+총 977 → 1004 (+27, 0 regression).
+
+### Backward compat
+
+- 모든 기존 import 경로 유지 (`screens.edit_entry.ConfirmModal`,
+  `EntriesScreen._fetch_local_tags` 등 모두 wrapper / alias 로 살아있음).
+- 클래스 속성 `_SERVER_PAGE_CAP` / `_HANGUL_FIRST` 등도 constants 의 값을
+  alias — 직접 참조하던 외부 코드 깨지지 않음.
+
 ## CL #52832 — 0.69.0 — 시작 db 신선도 검사 + 크래시 보강 (2026-05-18)
 
 배경 (사용자 요청 3 항목 + 부수):

@@ -704,72 +704,8 @@ class EntryEditDialog(ModalScreen[EntryDraft | None]):
         self.query_one("#form-error", Static).update(msg)
 
 
-class ConfirmModal(ModalScreen[bool]):
-    """짧은 yes/no 확인 모달. dismiss(True/False).
-
-    삭제처럼 되돌릴 수 없는 작업 직전에 띄운다.
-    """
-
-    DEFAULT_CSS = """
-    ConfirmModal {
-        align: center middle;
-    }
-    #confirm-frame {
-        /* CL #51120+: 좁은 터미널 대응. */
-        width: 95%;
-        max-width: 56;
-        min-width: 30;
-        height: auto;
-        padding: 1 2;
-        border: thick $error;
-        background: $surface;
-    }
-    #confirm-title {
-        height: 1;
-        content-align: center middle;
-        color: $error;
-    }
-    #confirm-message {
-        padding: 1 0;
-        height: auto;
-    }
-    #confirm-buttons {
-        height: 3;
-        align: center middle;
-    }
-    #confirm-buttons Button {
-        margin: 0 1;
-        min-width: 12;
-    }
-    """
-
-    BINDINGS = [
-        Binding("escape", "no", "No", show=True),
-        *bind_ko("y", "yes", "Yes", show=True, priority=True),
-        *bind_ko("n", "no", "No", show=True, priority=True),
-    ]
-
-    def __init__(self, message: str, *, title: str = "확인") -> None:
-        super().__init__()
-        self._message = message
-        self._title = title
-
-    def compose(self) -> ComposeResult:
-        with Vertical(id="confirm-frame"):
-            yield Static(f"[bold]{self._title}[/bold]", id="confirm-title")
-            yield Static(self._message, id="confirm-message")
-            with Horizontal(id="confirm-buttons"):
-                yield Button("Yes (y)", id="btn-yes", variant="error")
-                yield Button("No (n)", id="btn-no")
-
-    def action_yes(self) -> None:
-        self.dismiss(True)
-
-    def action_no(self) -> None:
-        self.dismiss(False)
-
-    def on_button_pressed(self, event: Button.Pressed) -> None:
-        if event.button.id == "btn-yes":
-            self.action_yes()
-        elif event.button.id == "btn-no":
-            self.action_no()
+# CL #52834+: 이전엔 본 파일에 자체 ConfirmModal 정의가 있었으나 CL #51156
+# 의 `widgets/confirm.ConfirmModal` 과 책임 중복이었다. 본 파일은 후방 호환
+# alias 만 유지 — 기존 import (`from whooing_tui.screens.edit_entry import
+# ConfirmModal`) 가 깨지지 않도록.
+from whooing_tui.widgets.confirm import ConfirmModal  # noqa: F401, E402

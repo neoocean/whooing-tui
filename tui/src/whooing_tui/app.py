@@ -26,7 +26,7 @@ from textual.containers import Horizontal, Vertical
 from textual.screen import ModalScreen
 from textual.widgets import Footer, Header, Static
 
-from whooing_tui import __version__
+from whooing_tui import __version__, constants
 from whooing_tui.auth import load_auth_from_env
 from whooing_tui.cache import CacheStore, default_cache_path
 from whooing_tui.client import CachedWhooingClient, WhooingClient
@@ -118,7 +118,7 @@ class _ShutdownModal(ModalScreen[None]):
         # 테스트가 검사할 수 있도록 마지막 라벨들을 attribute 로 노출.
         self.last_task_labels: list[str] = []
         self._refresh_tasks()
-        self.set_interval(0.25, self._refresh_tasks)
+        self.set_interval(constants.LIVE_REFRESH_INTERVAL_SEC, self._refresh_tasks)
 
     def action_noop(self) -> None:
         """취소 시도 무시 — 사용자 요청: 종료 시퀀스 시작되면 취소 불가."""

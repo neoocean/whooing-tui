@@ -1,4 +1,4 @@
-# whooing-tui (monorepo)
+﻿# whooing-tui (monorepo)
 
 후잉 가계부([whooing.com](https://whooing.com)) 의 사용자 도구를 모아 둔 monorepo.
 세 개의 독립 설치 가능 Python 패키지로 구성됩니다:
@@ -88,10 +88,20 @@ make clean
 
 ## 관련 프로젝트
 
-- [`mcp/`](mcp/) — **archived 2026-05-10**. 코드는 monorepo 안에 보존되며
-  TUI 의 `mcp_bridge.py` 가 보고서·예산 같은 영역을 한정적으로 호출
-  (deprecated). 신규 호출자는 `WhooingClient` (REST 직접) 또는 자체 MCP
-  클라이언트로 가도록 권장.
+- [`mcp/`](mcp/) — **archived 2026-05-10**. wrapper 패키지의 *코드* 는
+  monorepo 안에 보존되어 historical 참조 + 회귀 검증용. 신규 import 는
+  하지 않는다.
+- 단, *공식 후잉 MCP 서버* (`https://whooing.com/mcp`) 는 TUI 의
+  보고서·예산·목표 위임 경로에서 **현역으로 사용 중** — `tui/src/
+  whooing_tui/official_mcp.py` 가 JSON-RPC 클라이언트. 이는 위 wrapper
+  와는 별개의 코드 + 별개의 server.
+
+`docs/` 디렉토리:
+- [`docs/README.md`](docs/README.md) — 시나리오 카탈로그.
+- [`docs/scenarios/`](docs/scenarios/) — 사용자 워크플로 단위 가이드 9개.
+- [`docs/MAINTAINABILITY-REVIEW.md`](docs/MAINTAINABILITY-REVIEW.md) — 유지
+  보수 백로그.
+- [`CLAUDE.md`](CLAUDE.md) — AI 어시스턴트용 진입점 / 모듈 맵.
 
 ## License
 

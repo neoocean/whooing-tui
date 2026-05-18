@@ -54,9 +54,11 @@ from textual.widgets import Button, DataTable, Footer, Header, Input, Label, Sta
 
 from whooing_core import db as core_db
 
+from whooing_tui import constants
 from whooing_tui import data as tui_data
 from whooing_tui.client import WhooingClient
 from whooing_tui.config import load_config
+from whooing_tui.repository import EntryRepository
 from whooing_tui.dates import days_ago_yyyymmdd, today_yyyymmdd
 from whooing_tui.filters import FILTERABLE_COLUMNS, filter_entries
 from whooing_tui.ime import bind_ko
@@ -249,8 +251,9 @@ class EntriesScreen(MenuBarMixin, Screen):
 
     # 한 번에 fetch 할 거래는 후잉 server-side hard cap 100건. 단일 일자에
     # 100건 초과는 _list_entries_chunked 가 더 분할할 수 없으므로 footer
-    # 에 경고 띄움 (DESIGN §4.3 + MEMORY §7).
-    _SERVER_PAGE_CAP = 100
+    # 에 경고 띄움 (DESIGN §4.3 + MEMORY §7). CL #52834+ 부터 `constants`
+    # 모듈로 일원화 — 본 클래스 속성은 alias.
+    _SERVER_PAGE_CAP = constants.WHOOING_SERVER_PAGE_CAP
 
     # CL #51126+: F10 풀다운 메뉴바. 사용자 요청 — 기능이 늘어나면서 모든
     # 진입점을 한 곳에. 메뉴는 모듈 함수 _build_menus 가 list 로 반환 —
@@ -305,8 +308,10 @@ class EntriesScreen(MenuBarMixin, Screen):
     # _NARROW_THRESHOLD 는 후방 호환 — `_compact` boolean property 와 함께
     # 기존 호출자/테스트가 깨지지 않도록 유지 (level >= 2 가 종래 의미의
     # 컴팩트). 임계값 자체는 _COMPACT_THRESHOLDS 가 source of truth.
-    _COMPACT_THRESHOLDS: tuple[int, ...] = (80, 60, 45, 35)
-    _NARROW_THRESHOLD: int = 60  # legacy alias — _COMPACT_THRESHOLDS[1].
+    # CL #52834+ 부터 `constants.COMPACT_THRESHOLDS` 로 일원화 — 클래스
+    # 속성은 alias (legacy 호출자 보호).
+    _COMPACT_THRESHOLDS: tuple[int, ...] = constants.COMPACT_THRESHOLDS
+    _NARROW_THRESHOLD: int = constants.COMPACT_THRESHOLDS[1]  # 60
 
     # CL #51125+: left/right 셀 약어 시 사전 제거할 괄호류. 한글 인용부호
     # (「」 『』) 까지 — 사용자 답변에서 명시. isalnum 일반화는 보수성을
@@ -335,13 +340,18 @@ class EntriesScreen(MenuBarMixin, Screen):
     )
     # 한글 음절 범위 (Hangul Syllables block, U+AC00~U+D7A3) — 첫 글자가
     # 한글이면 한국식 줄임말 규칙 적용, 그 외 (영문/숫자/혼합) 면 단순 [:2].
-    _HANGUL_FIRST = 0xAC00
-    _HANGUL_LAST = 0xD7A3
-    _ABBREV_CHARS: int = 2
+    # CL #52834+ 부터 `constants` 모듈로 일원화 — 클래스 속성은 alias.
+    _HANGUL_FIRST = constants.HANGUL_SYLLABLE_FIRST
+    _HANGUL_LAST = constants.HANGUL_SYLLABLE_LAST
+    _ABBREV_CHARS: int = constants.ABBREV_KOREAN_CHARS
 
     def __init__(self, client: WhooingClient) -> None:
         super().__init__()
         self._client = client
+        # CL #52834+: 로컬 sqlite annotation/태그/첨부 카운트 호출을 한
+        # repo 로 위임. 본 화면의 _fetch_*/_persist_local/_purge_local 은
+        # 후방 호환 wrapper.
+        self._repo = EntryRepository()
         cfg = load_config()
         self._window_days: int = max(1, cfg.default_window_days)
         # status 평문 보관 (테스트 친화 — HomeScreen 과 동일 컨벤션)
@@ -2040,13 +2050,25 @@ class EntriesScreen(MenuBarMixin, Screen):
         )
 
     def action_extend_window(self) -> None:
-        self._window_days = min(365 * 5, self._window_days + 7)
-        self.set_status(f"윈도우 +7일 → 최근 {self._window_days}일. 재로드 중…")
+        self._window_days = min(
+            constants.MAX_WINDOW_DAYS,
+            self._window_days + constants.WINDOW_STEP_DAYS,
+        )
+        self.set_status(
+            f"윈도우 +{constants.WINDOW_STEP_DAYS}일 → 최근 "
+            f"{self._window_days}일. 재로드 중…"
+        )
         self.refresh_entries()
 
     def action_shrink_window(self) -> None:
-        self._window_days = max(1, self._window_days - 7)
-        self.set_status(f"윈도우 -7일 → 최근 {self._window_days}일. 재로드 중…")
+        self._window_days = max(
+            constants.MIN_WINDOW_DAYS,
+            self._window_days - constants.WINDOW_STEP_DAYS,
+        )
+        self.set_status(
+            f"윈도우 -{constants.WINDOW_STEP_DAYS}일 → 최근 "
+            f"{self._window_days}일. 재로드 중…"
+        )
         self.refresh_entries()
 
     # ---- new / edit / delete -----------------------------------------
@@ -2342,21 +2364,12 @@ class EntriesScreen(MenuBarMixin, Screen):
     # ---- local sqlite (memo + 해시태그) helpers ------------------------
 
     def _fetch_local_tags(self, entry_id: str) -> list[str]:
-        """edit dialog 진입 직전, 로컬 db 에서 entry_id 의 해시태그 prefill.
+        """edit dialog 진입 직전 로컬 db 에서 해시태그 prefill.
 
-        실패는 fatal 이 아니다 — db 가 비어있거나 entry 가 처음 보는 거래면
-        그냥 빈 list 반환. 어떤 경우든 dialog 가 열리는 흐름을 막지 않는다.
+        CL #52834+: EntryRepository.tags_for() 로 위임. 본 메서드는 후방
+        호환 wrapper — 다른 코드가 본 이름으로 호출 중.
         """
-        if not entry_id:
-            return []
-        try:
-            with tui_data.open_ro() as conn:
-                rows = core_db.get_annotations_for(conn, [str(entry_id)])
-        except Exception:  # pragma: no cover — db 미존재 등
-            log.exception("fetch_local_tags failed")
-            return []
-        info = rows.get(str(entry_id)) or {}
-        return list(info.get("hashtags") or [])
+        return self._repo.tags_for(entry_id)
 
     def _render_item_cell_with_tag_marker(
         self, entry: dict[str, Any], tag_idx: int,
@@ -2391,73 +2404,26 @@ class EntriesScreen(MenuBarMixin, Screen):
         return " ".join(parts)
 
     def _fetch_all_entry_tags(self, entry_ids: list[str]) -> dict[str, list[str]]:
-        """entry_id list → {entry_id: [tag, ...]} batch fetch.
-
-        한 query 로 모든 entry 의 해시태그를 받아 사전화 — `_format_cell`
-        의 item 컬럼 인라인 + 태그 필터 가 같은 source 를 본다. 실패는
-        fatal 이 아니다 (db 없음 / 권한 등) — 빈 사전 반환.
-        """
-        if not entry_ids:
-            return {}
-        try:
-            with tui_data.open_ro() as conn:
-                rows = core_db.get_annotations_for(conn, entry_ids)
-        except Exception:  # pragma: no cover
-            log.exception("fetch_all_entry_tags failed")
-            return {}
-        return {
-            eid: list(info.get("hashtags") or [])
-            for eid, info in rows.items()
-            if info.get("hashtags")
-        }
+        """CL #52834+: EntryRepository.tags_for_many() 로 위임."""
+        return self._repo.tags_for_many(entry_ids)
 
     def _fetch_all_attachment_counts(
         self, entry_ids: list[str],
     ) -> dict[str, int]:
-        """CL #51134+ (A6): entry_id list → {entry_id: count}.
-
-        한 query 로 모든 entry 의 첨부 개수 — `_format_cell` 의 item 컬럼
-        prefix `📎N`. 실패는 fatal 이 아니다 (db 없음 / 권한) — 빈 사전.
-
-        CL #51144+ (A5): 활성 섹션의 첨부만 — cross-section 누수 방지.
-        """
-        if not entry_ids:
-            return {}
+        """CL #52834+: EntryRepository.attachment_counts() 로 위임 (활성 섹션 격리)."""
         session = self.app.session  # type: ignore[attr-defined]
-        sid = session.section_id or None
-        try:
-            from whooing_core import attachments as core_attach
-            with tui_data.open_ro() as conn:
-                m = core_attach.list_attachments_for(
-                    conn, entry_ids, section_id=sid,
-                )
-        except Exception:  # pragma: no cover
-            log.exception("fetch_all_attachment_counts failed")
-            return {}
-        return {eid: len(rows) for eid, rows in m.items() if rows}
+        return self._repo.attachment_counts(
+            entry_ids, section_id=session.section_id or None,
+        )
 
     def _fetch_tag_colors(self) -> dict[str, str]:
-        """CL #51151+ (H11): {tag: color} batch fetch (활성 섹션)."""
+        """CL #52834+: EntryRepository.tag_colors() 로 위임."""
         session = self.app.session  # type: ignore[attr-defined]
-        try:
-            with tui_data.open_ro() as conn:
-                return core_db.get_tag_colors(
-                    conn, section_id=session.section_id or None,
-                )
-        except Exception:  # pragma: no cover
-            return {}
+        return self._repo.tag_colors(section_id=session.section_id or None)
 
     def _fetch_all_tags_db(self) -> dict[str, int]:
-        """전체 해시태그 사전 — `{tag: count}`. TagsPickerScreen 의 *추천*
-        + *자주 쓰는 태그* 섹션 출처. db 가 비어있으면 빈 사전 (모달은
-        그래도 정상 동작 — 새 태그 만들기만 가능).
-        """
-        try:
-            with tui_data.open_ro() as conn:
-                return core_db.list_hashtags(conn)
-        except Exception:  # pragma: no cover
-            log.exception("fetch_all_tags_db failed")
-            return {}
+        """CL #52834+: EntryRepository.all_tags() 로 위임."""
+        return self._repo.all_tags()
 
     def _persist_local(
         self,
@@ -2467,88 +2433,21 @@ class EntriesScreen(MenuBarMixin, Screen):
         memo: str,
         tags: list[str],
     ) -> None:
-        """후잉 mutation 성공 후 로컬 sqlite 에 memo + 해시태그 동기화.
+        """CL #52834+: EntryRepository.persist() 로 위임.
 
-        memo 는 후잉과 동일값을 그대로 mirror (검색·통계용 로컬 인덱스).
-        tags 는 로컬 전용 (후잉에는 보내지 않는다). 둘 다 비었을 때도
-        annotation row 는 만들어 둬 (set_hashtags 가 FK 위해 강제 생성).
-
-        CL #51107+: db 변경 직후 P4 자동 submit (P4 환경 있을 때만, 없으면
-        silent). description 은 LLM 미관여 mechanical.
+        본 wrapper 의 keyword 시그니처는 후방 호환 — 기존 호출자가 본 이름
+        + kwargs 로 부르기 때문. repo 는 동일 시그니처.
         """
-        if not entry_id:
-            return
-        previous_tags: list[str] = []  # CL #51141+ (H10) — P4 desc diff.
-        try:
-            with tui_data.open_rw() as conn:
-                # 변경 전 hashtag list 회수 — diff 계산.
-                prev = core_db.get_annotations_for(conn, [str(entry_id)])
-                previous_tags = list(
-                    prev.get(str(entry_id), {}).get("hashtags", []) or []
-                )
-                core_db.upsert_annotation(
-                    conn,
-                    entry_id=str(entry_id),
-                    section_id=section_id or None,
-                    note=memo or None,
-                )
-                core_db.set_hashtags(
-                    conn, str(entry_id), list(tags or []),
-                    section_id=section_id or None,
-                )
-        except Exception:  # pragma: no cover
-            log.exception("persist_local annotation/hashtags failed")
-            return
-        # P4 자동 submit.
-        from whooing_tui import p4_sync
-        p4_sync.submit_db_to_p4(
-            tui_data.db_path(),
-            p4_sync.describe_annotation(
-                entry_id=str(entry_id),
-                memo_changed=bool(memo),
-                tags=list(tags or []),
-                previous_tags=previous_tags,  # CL #51141+ (H10) diff.
-            ),
+        self._repo.persist(
+            entry_id=entry_id,
+            section_id=section_id,
+            memo=memo,
+            tags=tags,
         )
 
     def _purge_local(self, entry_id: str) -> None:
-        """삭제된 거래의 annotation / 해시태그 / 첨부 정리.
-
-        CL #51107+: db 변경 직후 P4 자동 submit.
-        CL #51132+ (A1): 종전엔 `entry_attachments` 가 FK 없이 entry_id 만
-        보관 → 거래 삭제 시 row + 디스크 파일이 orphan 으로 남았다. 본 함수가
-        의미적으로 강제 — `purge_attachments_for_entry` 호출 후 사라진 파일들의
-        path 도 P4 submit 에 포함시켜 reconcile -d 가 작동.
-        """
-        if not entry_id:
-            return
-        deleted_files: list = []  # 디스크에서 unlink 된 attachment full path 들.
-        try:
-            from whooing_core import attachments as core_attach
-            root = tui_data.attachments_root()
-            with tui_data.open_rw() as conn:
-                core_db.remove_annotation(conn, str(entry_id))
-                # 첨부도 같이 — 거래가 사라진 이상 파일도 의미 없음.
-                purged = core_attach.purge_attachments_for_entry(
-                    conn, str(entry_id),
-                    attachments_root=root,
-                )
-                for p in purged:
-                    if p.get("file_deleted"):
-                        deleted_files.append(root / p["file_path"])
-        except Exception:  # pragma: no cover
-            log.exception("purge_local annotation/attachments failed")
-            return
-        from whooing_tui import p4_sync
-        # db + 사라진 첨부 파일 path 들을 한 CL 로 submit.
-        paths = [tui_data.db_path(), *deleted_files]
-        p4_sync.submit_files_to_p4(
-            paths,
-            p4_sync.describe_annotation(
-                entry_id=str(entry_id), memo_changed=False, tags=None,
-                deleted=True,
-            ),
-        )
+        """CL #52834+: EntryRepository.purge() 로 위임 — 후방 호환 wrapper."""
+        self._repo.purge(entry_id)
 
     @staticmethod
     def _extract_entry_id(response: Any) -> str | None:

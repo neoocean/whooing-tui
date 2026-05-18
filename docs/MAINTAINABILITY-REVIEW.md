@@ -1,10 +1,25 @@
 # 유지보수성 + LLM 친화도 검토
 
-본 문서는 코드 전체를 1회 감사한 결과 + 구체적 개선 제안. **실행하지
-않은 백로그** — 어느 항목이 가치 있는지는 사용자 / 담당자 합의 후 별
-CL 로 배치. 우선순위는 *영향 / 비용* 비. 본 문서는 의사 결정 자료이며
-시나리오 문서 ([scenarios/](scenarios/)) 와 달리 사용자 가시 기능을
-설명하지 않는다.
+본 문서는 코드 전체를 1회 감사한 결과 + 구체적 개선 제안. 사용자 요청
+으로 **CL #52834 에서 백로그를 일괄 적용** — 각 항목 옆에 `[적용 CL
+#52834]` 또는 `[deferred]` 마크. 후속 검토 시 본 문서는 다시 살아있는
+백로그로 유지.
+
+## 적용 요약 (CL #52834)
+
+| 항목 | 결과 |
+|---|---|
+| 루트 `CLAUDE.md` 진입점 / 모듈 맵 | ✅ `CLAUDE.md` 추가 |
+| `constants.py` 일원화 | ✅ `tui/src/whooing_tui/constants.py` |
+| `@safe_action` 데코레이터 | ✅ `tui/src/whooing_tui/actions.py` (옵트-인) |
+| `text_utils.py` re-export | ✅ `tui/src/whooing_tui/text_utils.py` |
+| `ConfirmModal` 중복 제거 | ✅ `widgets/confirm.ConfirmModal` 으로 일원화 |
+| `EntryRepository` 추출 | ✅ `tui/src/whooing_tui/repository.py` |
+| 응답 TypedDict | ✅ `tui/src/whooing_tui/responses.py` (점진 narrowing 첫 단계) |
+| `client.py` 전체 분리 | 🟡 deferred — 안정적이라 cost > 즉시 가치 |
+| EntriesScreen 추가 분할 (FilterMerger 등) | 🟡 deferred — Repository 단계로 충분한 즉시 가치 |
+
+테스트: 977 → 1004 (+27, 0 regression).
 
 ## 요약
 
