@@ -1053,3 +1053,82 @@ def test_extend_selection_sets_anchor_when_none():
     # _extend_selection_to 가 self.query_one 을 호출하므로 mount 없으면 실패.
     # 본 단위는 anchor 초기값만 확인.
     assert es._selection_anchor is None
+
+
+# ---- CL #52781+ : Esc → selection clear / 시각 강조 / space 갱신 -------
+
+
+@pytest.mark.asyncio
+async def test_esc_clears_selection_when_active():
+    """ESC 가 selection 도 함께 해제. 사용자 요청.
+
+    column / filter / selection 셋 중 하나라도 활성이면 Esc 가 모두 해제.
+    """
+    fake = FakeClient()
+    app = WhooingTuiApp(client=fake)  # type: ignore[arg-type]
+    async with app.run_test() as pilot:
+        es = await _open_entries(app, pilot)
+        es._selected_entry_ids = {"e1"}
+        es._selection_anchor = 0
+        es.action_deactivate_column()
+        await pilot.pause()
+        assert es._selected_entry_ids == set()
+        assert es._selection_anchor is None
+
+
+@pytest.mark.asyncio
+async def test_esc_noop_when_nothing_active():
+    """모두 비활성이면 ESC 가 noop — 앱 종료 X (사용자 명시)."""
+    fake = FakeClient()
+    app = WhooingTuiApp(client=fake)  # type: ignore[arg-type]
+    async with app.run_test() as pilot:
+        es = await _open_entries(app, pilot)
+        # 아무 것도 활성 X.
+        es._column_active = False
+        es._active_filter = None
+        es._selected_entry_ids = set()
+        es.action_deactivate_column()
+        await pilot.pause()
+        # 여전히 EntriesScreen — 앱 종료 안 함.
+        from whooing_tui.screens.entries import EntriesScreen
+        assert isinstance(app.screen, EntriesScreen)
+
+
+@pytest.mark.asyncio
+async def test_space_toggle_unselects_when_already_selected():
+    """이미 선택된 row 위에서 space → 선택 해제. 사용자 보고."""
+    fake = FakeClient()
+    app = WhooingTuiApp(client=fake)  # type: ignore[arg-type]
+    async with app.run_test() as pilot:
+        es = await _open_entries(app, pilot)
+        # 미리 e1 선택.
+        es._selected_entry_ids = {"e1"}
+        # cursor 가 row 0 (e1) — space 누름.
+        es.action_toggle_selection()
+        await pilot.pause()
+        assert "e1" not in es._selected_entry_ids
+
+
+@pytest.mark.asyncio
+async def test_selected_row_is_visually_highlighted():
+    """선택된 row 의 cell 들에 bold reverse markup 적용 — 사용자 요청
+    "선택한 항목이 눈에 더 잘 띄게"."""
+    from textual.widgets import DataTable
+
+    fake = FakeClient(entries=[
+        {"entry_id": "e1", "entry_date": "20260518",
+         "money": 5000, "l_account_id": "x20", "r_account_id": "x11",
+         "item": "test"},
+    ])
+    app = WhooingTuiApp(client=fake)  # type: ignore[arg-type]
+    async with app.run_test() as pilot:
+        es = await _open_entries(app, pilot)
+        es._selected_entry_ids = {"e1"}
+        es._render_table(es._entries)
+        await pilot.pause()
+        table = es.query_one("#entries-table", DataTable)
+        item_cell = str(table.get_cell_at((0, 4)))  # item col
+        # ✅ prefix + bold reverse markup 둘 중 하나는 있어야.
+        assert "✅" in item_cell or "bold" in item_cell or "reverse" in item_cell, (
+            f"선택 시각 강조 없음: {item_cell!r}"
+        )

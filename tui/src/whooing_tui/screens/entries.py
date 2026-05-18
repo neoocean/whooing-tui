@@ -845,7 +845,12 @@ class EntriesScreen(MenuBarMixin, Screen):
     # ---- CL #51145+ (H6) multi-select + batch tagging ------------------
 
     def action_toggle_selection(self) -> None:
-        """현재 cursor 의 entry 를 selection set 에 토글. sentinel 은 무시."""
+        """현재 cursor 의 entry 를 selection set 에 토글. sentinel 은 무시.
+
+        CL #52781+: 토글 후 `_render_table` 호출 — 종전엔 갱신 누락이라
+        사용자가 space 눌러도 화면이 그대로 보여 "안 됐다" 고 인식.
+        cursor 위치는 그대로 유지 (target_cursor 명시).
+        """
         target = self._selected_entry()
         if target is None:
             return
@@ -857,8 +862,15 @@ class EntriesScreen(MenuBarMixin, Screen):
         else:
             self._selected_entry_ids.add(eid)
         n = len(self._selected_entry_ids)
+        # 화면 즉시 갱신 — selection prefix / 색반전 반영.
+        try:
+            table = self.query_one("#entries-table", DataTable)
+            cur_row = table.cursor_row
+        except Exception:  # pragma: no cover
+            cur_row = None
+        self._render_table(self._entries, target_cursor=cur_row)
         self.set_status(
-            f"선택 {n}건. space=토글 / #=일괄 태그 / Esc=해제"
+            f"선택 {n}건. space=토글 / m=메뉴 / #=일괄 태그 / Esc=해제"
         )
 
     def action_batch_tag(self) -> None:
@@ -1440,24 +1452,27 @@ class EntriesScreen(MenuBarMixin, Screen):
                 self._scroll_active_col_into_view()
 
     def action_deactivate_column(self) -> None:
-        """Esc — 활성 컬럼 marker + 활성 필터를 함께 해제. 둘 다 비활성이면
-        noop (앱 종료 X).
+        """Esc — 활성 컬럼 marker + 활성 필터 + multi-select 를 함께 해제.
 
-        사용자 지시:
+        모두 비활성이면 noop (앱 종료 X — 사용자 지시).
+
+        사용자 지시 이력:
           * CL #51064: "ESC를 누르면 오렌지색 커서만 선택취소… 파란색
             커서만 있는 상태에서 ESC는 아무 동작도 하지 않습니다. ESC로
             종료되지 않게 해주세요. 종료키는 q 입니다."
           * CL #51068: "오렌지색 커서로 필터링이 적용된 상태에서 ESC 키
-            를 누르면 커서 하이라이트 해제 및 동시에 필터도 해제되어야
-            합니다."
+            를 누르면 커서 하이라이트 해제 및 동시에 필터도 해제."
+          * CL #52781 (현 변경): "여러 항목이 선택된 상태에서 ESC 키를
+            누르면 선택 항목이 취소되게 해주세요."
 
-        결합 정의: 둘 다 활성 → 둘 다 해제. 한 쪽만 활성 → 그것만 해제.
-        둘 다 비활성 → noop (사용자 명시 — 앱 종료 X).
+        결합 정의: 활성인 것들을 모두 한 번에 해제. 모두 비활성 → noop.
         """
-        if not self._column_active and self._active_filter is None:
-            return  # noop — 둘 다 비활성
-
         had_filter = self._active_filter is not None
+        had_selection = bool(self._selected_entry_ids)
+        if (
+            not self._column_active and not had_filter and not had_selection
+        ):
+            return  # noop — 모두 비활성
 
         if self._column_active:
             self._column_active = False
@@ -1467,15 +1482,30 @@ class EntriesScreen(MenuBarMixin, Screen):
         if had_filter:
             self._active_filter = None
             self._entries = list(self._all_entries)
+
+        # CL #52781+: multi-select 해제 — anchor 도 reset.
+        if had_selection:
+            self._selected_entry_ids.clear()
+            self._selection_anchor = None
+
+        # 변경이 있으면 re-render (필터 / selection 둘 다 셀 갱신 필요).
+        if had_filter or had_selection:
             # _render_table 끝의 _update_active_cell_marker 가 _column_active
             # 비활성이라 marker 재적용 X — 깨끗한 plain table 로 그려진다.
             self._render_table(self._entries)
 
         # status 안내 — 어떤 게 해제됐는지 명시.
-        if had_filter:
-            self.set_status("컬럼 선택 / 필터 해제 — ←/→ 다시 눌러 재활성.")
-        else:
-            self.set_status("컬럼 선택 해제 — ←/→ 다시 눌러 재활성.")
+        parts: list[str] = []
+        if self._column_active is False and had_filter:
+            parts.append("컬럼 / 필터")
+        elif had_filter:
+            parts.append("필터")
+        elif self._column_active is False:
+            parts.append("컬럼")
+        if had_selection:
+            parts.append("선택")
+        if parts:
+            self.set_status(f"{' / '.join(parts)} 해제.")
 
     def on_data_table_row_highlighted(
         self, event: DataTable.RowHighlighted,
@@ -2621,6 +2651,26 @@ class EntriesScreen(MenuBarMixin, Screen):
     # 0 = 무제한 (모든 태그 표시). >0 = 그 개수만 + `#…(N)`.
     _ITEM_TAG_INLINE_LIMIT = 0
 
+    @staticmethod
+    def _highlight_selected_cell(cell: Any) -> Any:
+        """CL #52781+: multi-select 된 row 의 cell 시각 강조.
+
+        Rich `Text` (money) 와 `str` 양쪽 모두 처리:
+          - Text 면 stylize 로 `bold reverse` 적용 (justify 유지).
+          - str 이면 `[bold reverse]...[/]` markup 으로 wrap.
+
+        `▣` prefix 와 함께 row 전체가 background 반전 + bold — 사용자 캡처
+        시 한눈에 구분.
+        """
+        if isinstance(cell, Text):
+            new = cell.copy() if hasattr(cell, "copy") else Text.from_markup(str(cell))
+            new.stylize("bold reverse")
+            return new
+        s = str(cell) if cell is not None else ""
+        if not s:
+            return s
+        return f"[bold reverse]{s}[/bold reverse]"
+
     def _format_cell(self, entry: dict[str, Any], col_index: int) -> Any:
         """entry 와 column index 로부터 cell 의 표시 값을 만든다.
 
@@ -2658,8 +2708,9 @@ class EntriesScreen(MenuBarMixin, Screen):
             # CL #51134+ (A6): 첨부 indicator.
             attach_n = self._entry_attachment_counts.get(eid, 0)
             attach_prefix = f"📎{attach_n} " if attach_n > 0 else ""
-            # CL #51145+ (H6): selection indicator (▣ if selected).
-            sel_prefix = "▣ " if eid in self._selected_entry_ids else ""
+            # CL #51145+ (H6): selection indicator. CL #52781+: 더 시각적
+            # 으로 (`▣` 만으로는 사용자에게 약함, 캡처 보고). emoji + 공백.
+            sel_prefix = "✅ " if eid in self._selected_entry_ids else ""
             attach_prefix = sel_prefix + attach_prefix
             tags = self._entry_tags.get(eid) or []
             if not tags:
@@ -2734,6 +2785,12 @@ class EntriesScreen(MenuBarMixin, Screen):
 
         for e in entries:
             cells = [self._format_cell(e, i) for i in range(len(self._COLUMN_NAMES))]
+            # CL #52781+ (사용자 요청 "선택한 항목이 눈에 더 잘 띄게"):
+            # multi-select 된 row 의 모든 cell 에 reverse 색반전 + bold —
+            # ▣ prefix 외에 row 자체 시각 강조.
+            eid = str(e.get("entry_id") or "")
+            if eid and eid in self._selected_entry_ids:
+                cells = [self._highlight_selected_cell(c) for c in cells]
             table.add_row(*cells)
 
         # cursor 위치 결정:

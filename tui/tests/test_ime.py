@@ -314,3 +314,61 @@ async def test_graceful_quit_double_press_is_idempotent():
         assert after == before, (
             f"중복 push 발생: before={before} after={after}"
         )
+
+
+# ---- CL #52781+ : 한글 자모 조합 (iOS Blink fix) ---------------------
+
+
+@pytest.mark.asyncio
+async def test_hangul_composing_active_in_input():
+    """`enable_hangul_composing()` 이후 textual Input.value 가 자모 → 음절.
+
+    사용자 시나리오 (Blink): IME 가 'ㅎ' → 'ㅏ' → 'ㄴ' 를 순차로 보냄.
+    각 step 마다 Input.value 가 갱신되고 마지막에 '한' 으로 합성.
+    """
+    from textual.app import App
+    from textual.widgets import Input
+
+    from whooing_tui.widgets.hangul_input import (
+        enable_hangul_composing, disable_hangul_composing,
+    )
+
+    enable_hangul_composing()
+    try:
+        class _Probe(App):
+            def compose(self):
+                yield Input(id="i")
+
+        probe = _Probe()
+        async with probe.run_test() as pilot:
+            i = probe.query_one("#i", Input)
+            # 사용자가 'ㅎㅏㄴ' 순으로 입력했다고 가정 — 마지막 value 만 set.
+            i.value = "ㅎㅏㄴ"
+            await pilot.pause()
+            assert i.value == "한"
+            # 이미 음절은 그대로.
+            i.value = "한국"
+            await pilot.pause()
+            assert i.value == "한국"
+            # 자모 단독은 그대로.
+            i.value = "ㅎ"
+            await pilot.pause()
+            assert i.value == "ㅎ"
+    finally:
+        disable_hangul_composing()
+
+
+def test_enable_hangul_composing_is_idempotent():
+    """여러 번 호출해도 한 번만 wrap."""
+    from textual.widgets import Input
+
+    from whooing_tui.widgets.hangul_input import (
+        enable_hangul_composing, disable_hangul_composing,
+    )
+
+    enable_hangul_composing()
+    first = Input.watch_value
+    enable_hangul_composing()
+    second = Input.watch_value
+    assert first is second  # 동일 wrapper
+    disable_hangul_composing()

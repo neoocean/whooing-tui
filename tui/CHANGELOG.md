@@ -5,6 +5,89 @@
 > **0.17.x 이전** (CL #51119 ~ #1) 항목은 분량 정리 차원에서
 > [`CHANGELOG-archive-0.17.md`](./CHANGELOG-archive-0.17.md) 로 분리 보존.
 
+## CL #52781 — 0.63.0 — Blink 한글 조합 + Esc selection / 시각 강조 / space 갱신 (2026-05-18)
+
+배경 (사용자 요청 4건 한 묶음):
+
+1. 아이폰 Blink 앱에서 텍스트박스의 한글이 조합되지 않고 자모가 풀려서
+   입력됨.
+2. 여러 항목 선택 상태에서 Esc 누르면 선택 항목 취소.
+3. 선택한 항목이 눈에 더 잘 띄게.
+4. 선택된 항목 위에서 space 누르면 선택 해제.
+
+### A) 한글 자모 조합 (Blink fix) — `core/hangul.py` + `widgets/hangul_input.py`
+
+**원인**: Blink Shell 등 일부 iOS terminal 이 한국어 IME keystroke 를
+완성 음절이 아니라 **Hangul Compatibility Jamo** (`ㅎ`/`ㅏ`/`ㄴ`,
+U+3130~U+318F) 로 분리해 보냄. textual Input 은 받은 그대로 표시.
+
+**해결**:
+- **`core/hangul.py`** 신규: `compose_hangul(text)` pure 함수.
+  - Compat Jamo → Hangul Jamo (U+1100~) 매핑.
+  - state machine 으로 (초성, 중성, 종성) 단위 합성 — 종성 다음 모음이
+    오면 종성을 다음 음절 초성으로 split (예: `ㅎㅏㄴㄱㅜㄱㅇㅓ → 한국어`).
+  - ASCII / 이미 조합된 음절 / 비한글 unicode 통과.
+- **`widgets/hangul_input.py`** 신규: `enable_hangul_composing()` —
+  `textual.widgets.Input.watch_value` 를 wrap. value 가 변경될 때마다
+  `compose_hangul` 적용 후 `with self.prevent(Input.Changed)` 로 재귀
+  watch 차단. idempotent.
+- `app.py::on_mount` 가 한 번 호출. 이후 모든 Input 위젯에 자동 적용.
+
+검증: 18 단위 (Compat Jamo / Hangul Jamo / 음절+자모 split / 혼합) +
+2 통합 (textual App + Input).
+
+### B) Esc → selection clear (`action_deactivate_column`)
+
+column / filter 와 함께 **multi-select 도 해제**. 셋 모두 비활성이면
+noop (앱 종료 X — 사용자 정책 그대로). status 메시지가 해제된 항목 명시
+("컬럼 / 필터 / 선택 해제." 형식).
+
+### C) 선택 항목 시각 강조
+
+`_render_table` 에서 선택된 row 의 cells 를 `_highlight_selected_cell()`
+로 wrap — Rich `Text` 면 `stylize("bold reverse")`, str 이면 `[bold
+reverse]...[/]` markup. row 전체가 배경 반전 + bold. prefix 도 `▣` →
+`✅` 로 더 시각적.
+
+### D) space 토글 화면 갱신
+
+`action_toggle_selection` 이 토글 후 `_render_table` 호출 — 종전엔 갱신
+누락이라 사용자가 "안 됐다" 인식. 이제 즉시 cell 갱신.
+
+### 수정 파일
+
+- `core/src/whooing_core/hangul.py` — **신규** (~270 줄).
+- `core/tests/test_hangul.py` — **신규** (18 단위).
+- `tui/src/whooing_tui/widgets/hangul_input.py` — **신규** (Input wrap).
+- `tui/src/whooing_tui/app.py` — `on_mount` 에서 `enable_hangul_composing()`.
+- `tui/src/whooing_tui/screens/entries.py`
+  - `action_deactivate_column`: selection 도 함께 해제 + anchor reset
+    + status 통합.
+  - `action_toggle_selection`: `_render_table` 호출 추가 (cursor 유지).
+  - `_render_table`: 선택된 row cells 를 `_highlight_selected_cell` 로 wrap.
+  - 새 `_highlight_selected_cell` static helper (Text / str 분기).
+  - `▣ ` prefix → `✅ ` (더 시각적).
+- `tui/tests/test_entries_mutate.py` — 회귀 방지 +4.
+- `tui/tests/test_ime.py` — 회귀 방지 +2.
+- `tui/pyproject.toml` — 0.62.1 → 0.63.0.
+- `tui/src/whooing_tui/__init__.py` — `__version__` 동기화.
+
+### 검증
+
+- **923 passed** (899 → +24 신규: 18 hangul 단위 + 2 hangul integration
+  + 4 selection/Esc/space/highlight). 회귀 0.
+
+### 사용자 후속 확인
+
+- iPhone Blink 에서 텍스트박스에 한글 입력 — 음절로 합쳐져 보여야.
+- 거래 목록에서 Ctrl/Shift+click + Shift+arrow 로 multi-select 후:
+  - 선택 row 가 **배경 반전 + ✅ prefix** 로 한눈에 구분.
+  - **space** 로 cursor row 토글 (선택/해제, 화면 즉시 갱신).
+  - **Esc** 로 한 번에 전체 해제.
+  - **m** → context menu → "선택 N건 일괄 태그 (#)".
+
+---
+
 ## CL #52777 — 0.62.1 — item 태그 인라인 default 무제한 (모두 표시) (2026-05-18)
 
 배경 (사용자 보고, 캡처): 거래 row 의 item 셀에 태그가 3개인데

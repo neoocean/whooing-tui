@@ -125,6 +125,15 @@ class WhooingTuiApp(App):
         except Exception:
             log.debug("테마 적용 실패 (config.theme=%r) — 무시", cfg.theme)
 
+        # CL #52781+: 한글 자모 조합 활성화 — iOS Blink 같이 자모 단위로
+        # 들어오는 환경에서 Input 의 value 를 음절로 합성.
+        # `enable_hangul_composing` 은 idempotent — 두 번 호출해도 안전.
+        try:
+            from whooing_tui.widgets.hangul_input import enable_hangul_composing
+            enable_hangul_composing()
+        except Exception:  # pragma: no cover
+            log.debug("한글 조합 활성화 실패 — 무시", exc_info=True)
+
         if self._client is None:
             # 정상 부팅 경로에서는 run_app() 이 client 를 주입한다.
             # client 가 None 이면 테스트가 직접 만든 경우이므로 화면도
