@@ -484,6 +484,54 @@ async def test_new_dialog_shows_attach_button_disabled_in_new_mode():
 
 
 @pytest.mark.asyncio
+async def test_edit_dialog_form_grid_has_exactly_2x8_children():
+    """CL #52731 (회귀 fix): form-grid 의 자식 수가 grid-size(2x8)=16 과 정확히
+    일치. 종전엔 Static(f-tags-hint) 가 grid 안에 yield 돼 attach 가 row 8
+    밖으로 밀려나 화면에 안 그려졌다 (사용자 보고). hint 를 grid 밖으로
+    옮긴 변경이 다시 grid 안으로 들어가면 본 테스트가 실패해 알린다.
+    """
+    from textual.containers import Grid
+
+    fake = FakeClient()
+    app = WhooingTuiApp(client=fake)  # type: ignore[arg-type]
+    async with app.run_test() as pilot:
+        es = await _open_entries(app, pilot)
+        es.action_edit_entry()
+        await pilot.pause()
+        dialog = app.screen
+        assert isinstance(dialog, EntryEditDialog)
+        grid = dialog.query_one("#form-grid", Grid)
+        # 2 cols × 8 rows = 16 자식이어야 attach 가 8행에 정확히 자리잡음.
+        assert len(grid.children) == 16, (
+            f"form-grid children count = {len(grid.children)} (expected 16). "
+            f"grid-size:2 8 보다 많으면 마지막 위젯이 layout 에서 빠진다."
+        )
+
+
+@pytest.mark.asyncio
+async def test_edit_dialog_attach_button_is_inside_form_grid():
+    """attach button 이 grid 의 직속 자식 — grid 밖 yield 되면 layout 어긋남."""
+    from textual.containers import Grid
+
+    from whooing_tui.screens.edit_entry import _AttachmentButton
+
+    fake = FakeClient()
+    app = WhooingTuiApp(client=fake)  # type: ignore[arg-type]
+    async with app.run_test() as pilot:
+        es = await _open_entries(app, pilot)
+        es.action_edit_entry()
+        await pilot.pause()
+        dialog = app.screen
+        assert isinstance(dialog, EntryEditDialog)
+        grid = dialog.query_one("#form-grid", Grid)
+        attach_btn = dialog.query_one("#f-attachments", _AttachmentButton)
+        assert attach_btn.parent is grid, (
+            f"attach button parent = {type(attach_btn.parent).__name__} "
+            f"(expected Grid). grid 밖 yield 되면 visual 위치 어긋남."
+        )
+
+
+@pytest.mark.asyncio
 async def test_edit_dialog_attach_button_pushes_browser():
     """수정 모드 + attach button click → AttachmentBrowserScreen push."""
     from textual.widgets import Button

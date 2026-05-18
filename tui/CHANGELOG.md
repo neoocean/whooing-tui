@@ -5,6 +5,56 @@
 > **0.17.x 이전** (CL #51119 ~ #1) 항목은 분량 정리 차원에서
 > [`CHANGELOG-archive-0.17.md`](./CHANGELOG-archive-0.17.md) 로 분리 보존.
 
+## CL #52731 — 0.53.1 — attach row 가 화면에 안 그려진 회귀 fix (2026-05-18)
+
+배경 (사용자 보고): 0.52.0 에서 추가한 attach row 가 실 거래 수정 dialog
+에 안 보임 — 캡처 첨부. 즉 EntryEditDialog 에 attach 버튼을 누를 수 없음.
+
+### 원인
+
+`#form-grid` 의 CSS `grid-size: 2 8` (2 cols × 8 rows = 최대 16 자식) 이
+yield 한 자식 수와 어긋남.
+
+기존 yield 순서 (총 17 자식):
+- 7 × (Label + Input/Button) = 14 자식 (date / money / left / right / item / memo / tags)
+- `Static(id="f-tags-hint")` (CL #51149 의 typing hint) = 15번째 자식 ← 문제
+- Label("attach") + _AttachmentButton = 17번째 자식 (밖으로 밀려남)
+
+`Static(tags-hint)` 가 row 7 의 col 0 자리를 가로채서 `Label("attach")` 가
+row 7 의 col 1 로, `_AttachmentButton` 은 row 8 의 col 0 으로 위치.
+`grid-size: 2 8` 은 row 0~7 만 인정 → row 8 의 button 은 layout 에서 빠짐
+(widget 자체는 mount 돼 query_one 으로 찾을 수 있지만 화면엔 안 그려짐 —
+0.52.0 의 통합 테스트가 통과했던 이유).
+
+### 수정
+
+- `tui/src/whooing_tui/screens/edit_entry.py`
+  - `Static(id="f-tags-hint")` 를 `with Grid` 블록 밖으로 이동, `form-error`
+    Static 바로 위에 배치. Grid 안 자식 수 = 정확히 16 (= grid-size 2 8).
+  - 시각 영향: hint 가 tags Input 바로 아래 한 줄 더 떨어진 위치에 표시.
+    typing 시점에만 의미가 있는 hint 라 위치 영향 미미. `_refresh_tags_hint`
+    가 id 로 조회하므로 Grid 안/밖 위치 무관.
+- `tui/tests/test_entries_mutate.py` — 회귀 방지 2 케이스:
+  - `test_edit_dialog_form_grid_has_exactly_2x8_children` — Grid 의
+    children 수가 16 인지 검증. 다음 사람이 Static 을 다시 grid 안으로
+    yield 하면 fail.
+  - `test_edit_dialog_attach_button_is_inside_form_grid` — attach button
+    의 `parent` 가 Grid 인지 검증.
+- `tui/pyproject.toml` — 0.53.0 → 0.53.1.
+
+### 왜 통합 테스트가 0.52.0 에서 잡지 못했나
+
+`query_one("#f-attachments")` 는 **widget 이 mount 됐는지** 만 확인 — Grid
+의 grid-size 보다 자식이 많을 때 textual 은 자식을 mount 는 하되 *layout
+에서만 제외*. 즉 widget 존재 자체로는 통과. 0.53.1 의 새 테스트는 그
+gap 을 메움 (자식 수 = grid-size).
+
+### 검증
+
+- 합계 — **613 passed** (611 → +2 신규 회귀 방지). 회귀 0.
+
+---
+
 ## CL #52720 — 0.53.0 — IME 단축키 누락 4 곳 — q/ㅂ 종료 회귀 fix (2026-05-18)
 
 배경 (사용자 보고): `q` 로는 앱이 종료되는데 `ㅂ` (두벌식 IME) 로는 안 됨.

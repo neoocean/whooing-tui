@@ -433,10 +433,6 @@ class EntryEditDialog(ModalScreen[EntryDraft | None]):
                     placeholder="해시태그 (로컬 db only). 예: #식비 #저녁",
                     id="f-tags",
                 )
-                # CL #51149+ (H7): typing 중 매칭 태그 hint Static.
-                # Enter 로 TagsPicker 가 정식 picker 지만, hint 가 즉시
-                # 보여주면 사용자가 Picker 안 띄워도 직접 타이핑 완성 가능.
-                yield Static("", id="f-tags-hint")
                 yield Label("attach")
                 entry_id_str = str(self._existing.get("entry_id") or "")
                 yield _AttachmentButton(
@@ -444,6 +440,12 @@ class EntryEditDialog(ModalScreen[EntryDraft | None]):
                     count=self._fetch_attachment_count() if entry_id_str else 0,
                     button_id="f-attachments",
                 )
+            # CL #51149+ (H7): typing 중 매칭 태그 hint Static — Grid 밖으로
+            # (CL #52731+, 아래 attach row 가 grid 안에 들어가도록).
+            # Grid 의 grid-size:2 8 안에 들어가면 col 자리를 가로채 attach 가
+            # 밀려난다. 시각적으론 form 바로 아래 한 줄 — typing 시점에만
+            # 의미가 있는 hint 라 위치 영향 미미.
+            yield Static("", id="f-tags-hint")
             yield Static("", id="form-error")
             with Horizontal(id="button-row"):
                 yield Button("Save (Ctrl+S)", id="btn-save", variant="primary")
