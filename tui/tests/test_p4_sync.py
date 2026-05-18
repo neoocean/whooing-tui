@@ -159,15 +159,43 @@ def test_submit_silent_when_p4_where_fails(monkeypatch, tmp_path):
     p4_sync.submit_db_to_p4(db, "test", blocking=True)
 
 
+def _make_fake_p4(path: Path, log_file: Path, *, where_filter_to: str | None = None,
+                  sleep_before: float | None = None) -> None:
+    """공통 fake p4 sh script. CL #52749+ numbered-CL 흐름 지원:
+
+    - `change -i`: stdin 무시, "Change 90001 created." 출력 (parse 대상).
+    - `opened -c <CL>`: 비빈 출력 (CL 에 파일 있다는 신호).
+    - `where`: where_filter_to 지정 시 그 path arg 일 때만 0, 아니면 1.
+    - 그 외: 모두 0.
+    """
+    sleep_clause = f"sleep {sleep_before}\n" if sleep_before else ""
+    where_clause = ""
+    if where_filter_to is not None:
+        where_clause = (
+            f'if [ "$1" = "where" ] && [ "$2" != "{where_filter_to}" ]; then\n'
+            f"  exit 1\n"
+            f"fi\n"
+        )
+    path.write_text(
+        f"#!/bin/sh\n"
+        f"{sleep_clause}"
+        f'echo "$@" >> {log_file}\n'
+        f"{where_clause}"
+        f'case "$1" in\n'
+        f'  change) [ "$2" = "-i" ] && echo "Change 90001 created." ;;\n'
+        f'  opened) echo "//depot/x#1 - edit default change" ;;\n'
+        f"esac\n"
+        f"exit 0\n",
+    )
+    path.chmod(0o755)
+
+
 def test_submit_async_threads_are_tracked_and_joinable(monkeypatch, tmp_path):
     """CL #51118+: daemon=False + _PENDING 추적 — `wait_for_pending` 으로
     모두 join 됨."""
     log_file = tmp_path / "p4-calls.txt"
     fake_p4 = tmp_path / "p4"
-    fake_p4.write_text(
-        f"#!/bin/sh\nsleep 0.05\necho \"$@\" >> {log_file}\nexit 0\n",
-    )
-    fake_p4.chmod(0o755)
+    _make_fake_p4(fake_p4, log_file, sleep_before=0.05)
     monkeypatch.setenv("WHOOING_P4_BIN", str(fake_p4))
     db = tmp_path / "db.sqlite"
     db.write_bytes(b"")
@@ -176,9 +204,10 @@ def test_submit_async_threads_are_tracked_and_joinable(monkeypatch, tmp_path):
     p4_sync.submit_db_to_p4(db, "test 1", blocking=False)
     p4_sync.submit_db_to_p4(db, "test 2", blocking=False)
     p4_sync.wait_for_pending(timeout_per_thread=5.0)
-    # 두 submit 의 호출이 모두 기록됐는지 확인.
+    # 두 submit 의 호출이 모두 기록됐는지 확인 — CL #52749+ 패턴은
+    # `submit -c <CL>`.
     log_lines = log_file.read_text().splitlines()
-    submit_calls = [l for l in log_lines if l.startswith("submit")]
+    submit_calls = [l for l in log_lines if l.startswith("submit ")]
     assert len(submit_calls) == 2
 
 
@@ -242,42 +271,40 @@ def test_flush_on_exit_waits_then_submits(monkeypatch, tmp_path):
     """flush_on_exit 가 wait_for_pending → blocking submit 순서로 호출."""
     log_file = tmp_path / "p4-calls.txt"
     fake_p4 = tmp_path / "p4"
-    fake_p4.write_text(
-        f"#!/bin/sh\necho \"$@\" >> {log_file}\nexit 0\n",
-    )
-    fake_p4.chmod(0o755)
+    _make_fake_p4(fake_p4, log_file)
     monkeypatch.setenv("WHOOING_P4_BIN", str(fake_p4))
     db = tmp_path / "db.sqlite"
     db.write_bytes(b"")
     p4_sync.flush_on_exit(db)
     log = log_file.read_text().splitlines()
     # where + reconcile + submit 모두 호출 (blocking submit 흐름).
+    # CL #52749+ 패턴: change -i → reconcile -c → submit -c.
     assert any(l.startswith("where ") for l in log)
     assert any("reconcile" in l for l in log)
-    assert any("submit -d" in l for l in log)
+    assert any(l.startswith("submit -c ") for l in log)
 
 
 def test_submit_runs_reconcile_and_submit_when_mapped(monkeypatch, tmp_path):
-    """매핑돼 있으면 reconcile + submit 까지 도달. 호출 명령을 captured 로 검증."""
+    """매핑돼 있으면 reconcile + submit 까지 도달. 호출 명령을 captured 로 검증.
+
+    CL #52749+ 패턴: where → change -i → reconcile -c <CL> → opened -c →
+    submit -c <CL>. desc 는 `change -i` 의 stdin 으로 전달되므로 log args
+    에는 안 보임. submit 자체 args 는 `-c <CL>` 만.
+    """
     log_file = tmp_path / "p4-calls.txt"
     fake_p4 = tmp_path / "p4"
-    # where 는 0, 다른 모든 명령도 0 으로 + 호출 args 를 log 에 append.
-    fake_p4.write_text(
-        f"#!/bin/sh\n"
-        f"echo \"$@\" >> {log_file}\n"
-        f"exit 0\n",
-    )
-    fake_p4.chmod(0o755)
+    _make_fake_p4(fake_p4, log_file)
     monkeypatch.setenv("WHOOING_P4_BIN", str(fake_p4))
     db = tmp_path / "db.sqlite"
     db.write_bytes(b"")
     desc = "[whooing-tui] entry e1 memo upsert"
     p4_sync.submit_db_to_p4(db, desc, blocking=True)
     log_lines = log_file.read_text().strip().splitlines()
-    # where, reconcile, submit 세 호출이 있어야.
-    assert any(line.startswith("where ") for line in log_lines)
-    assert any("reconcile" in line for line in log_lines)
-    assert any("submit -d" in line and desc in line for line in log_lines)
+    # where → change -i → reconcile → opened → submit 5 단계.
+    assert any(l.startswith("where ") for l in log_lines)
+    assert any(l.startswith("change -i") for l in log_lines)
+    assert any("reconcile" in l for l in log_lines)
+    assert any(l.startswith("submit -c ") for l in log_lines)
 
 
 # ---- CL #51124+ 첨부 description / 다중 파일 submit ---------------------
@@ -330,12 +357,14 @@ def test_describe_attachment_delete_dedup_kept():
 def test_submit_files_to_p4_passes_all_paths_to_reconcile_and_submit(
     monkeypatch, tmp_path,
 ):
-    """다중 파일 submit — reconcile / submit 양쪽 명령에 모든 path 가 인자로
-    전달되는지 (한 CL 묶음 보장). 사용자 요청 CL #51124."""
+    """다중 파일 submit — 한 numbered CL 으로 묶임. 사용자 요청 CL #51124.
+
+    CL #52749+: reconcile 의 args 에 모든 path + `-c <CL>`, submit 은
+    `-c <CL>` 만 (path X — submit 의 file arg 는 절대 path 못 받음).
+    """
     log_file = tmp_path / "p4-calls.txt"
     fake_p4 = tmp_path / "p4"
-    fake_p4.write_text(f"#!/bin/sh\necho \"$@\" >> {log_file}\nexit 0\n")
-    fake_p4.chmod(0o755)
+    _make_fake_p4(fake_p4, log_file)
     monkeypatch.setenv("WHOOING_P4_BIN", str(fake_p4))
     db = tmp_path / "db.sqlite"
     db.write_bytes(b"")
@@ -349,45 +378,34 @@ def test_submit_files_to_p4_passes_all_paths_to_reconcile_and_submit(
     assert len(where_lines) == 2
     assert any(str(db) in l for l in where_lines)
     assert any(str(att) in l for l in where_lines)
-    # reconcile 한 번에 두 path 다 포함.
+    # reconcile 한 번에 두 path 다 + `-c <CL>` 옵션.
     reconcile = next(l for l in lines if "reconcile" in l)
+    assert "-c " in reconcile
     assert str(db) in reconcile
     assert str(att) in reconcile
-    # submit 한 번에 두 path 다 + description.
-    submit = next(l for l in lines if "submit -d" in l)
-    assert desc in submit
-    assert str(db) in submit
-    assert str(att) in submit
+    # submit 은 `-c <CL>` — paths 안 들어감 (P4 syntax 제약).
+    submit = next(l for l in lines if l.startswith("submit "))
+    assert submit.startswith("submit -c ")
 
 
 def test_submit_files_to_p4_skips_unmapped_paths(monkeypatch, tmp_path):
-    """매핑 안 된 path 는 silent skip — 매핑된 path 만 reconcile/submit 인자."""
+    """매핑 안 된 path 는 silent skip — 매핑된 path 만 reconcile 인자."""
     log_file = tmp_path / "p4-calls.txt"
     fake_p4 = tmp_path / "p4"
-    # where: 첫 인자가 db 면 0, 그 외 path 면 1 (매핑 외).
     db = tmp_path / "db.sqlite"
     db.write_bytes(b"")
     att = tmp_path / "x.pdf"
     att.write_bytes(b"PDF")
-    fake_p4.write_text(
-        f"#!/bin/sh\n"
-        f"echo \"$@\" >> {log_file}\n"
-        f"if [ \"$1\" = \"where\" ] && [ \"$2\" != \"{db}\" ]; then\n"
-        f"  exit 1\n"
-        f"fi\n"
-        f"exit 0\n",
-    )
-    fake_p4.chmod(0o755)
+    _make_fake_p4(fake_p4, log_file, where_filter_to=str(db))
     monkeypatch.setenv("WHOOING_P4_BIN", str(fake_p4))
     p4_sync.submit_files_to_p4([db, att], "test", blocking=True)
     lines = log_file.read_text().strip().splitlines()
-    # reconcile/submit 모두 db 만 포함, att 는 빠짐.
+    # reconcile 에 db 만 포함, att 는 빠짐. submit 은 `-c <CL>` 만 (paths 없음).
     reconcile = next(l for l in lines if "reconcile" in l)
     assert str(db) in reconcile
     assert str(att) not in reconcile
-    submit = next(l for l in lines if "submit -d" in l)
-    assert str(db) in submit
-    assert str(att) not in submit
+    submit = next(l for l in lines if l.startswith("submit "))
+    assert submit.startswith("submit -c ")
 
 
 def test_submit_files_to_p4_silent_when_no_paths_mapped(monkeypatch, tmp_path):
@@ -429,14 +447,16 @@ def test_submit_db_to_p4_still_works_via_files_wrapper(monkeypatch, tmp_path):
     호출자 (entries 의 _persist_local) 회귀 보호."""
     log_file = tmp_path / "p4-calls.txt"
     fake_p4 = tmp_path / "p4"
-    fake_p4.write_text(f"#!/bin/sh\necho \"$@\" >> {log_file}\nexit 0\n")
-    fake_p4.chmod(0o755)
+    _make_fake_p4(fake_p4, log_file)
     monkeypatch.setenv("WHOOING_P4_BIN", str(fake_p4))
     db = tmp_path / "db.sqlite"
     db.write_bytes(b"")
     p4_sync.submit_db_to_p4(db, "[whooing-tui] entry e1 memo upsert", blocking=True)
     lines = log_file.read_text().strip().splitlines()
-    assert any("submit -d" in l and str(db) in l for l in lines)
+    # CL #52749+: submit 은 `-c <CL>`, db path 는 reconcile 에만.
+    assert any(l.startswith("submit -c ") for l in lines)
+    reconcile = next(l for l in lines if "reconcile" in l)
+    assert str(db) in reconcile
 
 
 # ---- CL #51136+ (A4) on_complete callback ------------------------------
@@ -469,10 +489,14 @@ def test_submit_callback_invoked_with_status_unmapped(monkeypatch, tmp_path):
 
 
 def test_submit_callback_invoked_with_status_ok(monkeypatch, tmp_path):
-    """모든 단계 OK → 'ok'."""
+    """모든 단계 OK → 'ok'.
+
+    CL #52749+: numbered CL 흐름이라 fake_p4 가 `change -i` 응답으로 CL
+    번호를 출력해야 + `opened -c <CL>` 가 비빈 출력이어야 status = "ok".
+    """
     fake_p4 = tmp_path / "p4"
-    fake_p4.write_text("#!/bin/sh\nexit 0\n")
-    fake_p4.chmod(0o755)
+    log_file = tmp_path / "p4-calls.txt"
+    _make_fake_p4(fake_p4, log_file)
     monkeypatch.setenv("WHOOING_P4_BIN", str(fake_p4))
     statuses = []
     db = tmp_path / "x.sqlite"
@@ -490,3 +514,35 @@ def test_submit_callback_with_empty_paths_returns_noop(tmp_path):
         [], "test", blocking=True, on_complete=statuses.append,
     )
     assert statuses == ["noop"]
+
+
+# ---- CL #52749+ : submit 절대경로-인자 회귀 방지 + numbered CL 정책 -----
+
+
+def test_submit_uses_numbered_cl_not_default():
+    """`p4_sync._do_submit_multi` source 가 numbered CL 패턴인지 검증.
+
+    종전 (≤0.53.3) 버그: `p4 submit -d <desc> <local-abs-paths>` 호출 —
+    P4 submit 의 file arg 는 절대 경로 syntax 를 안 받아 'Usage:' 에러로
+    fail. 사용자 보고로 발견 (CL #52749). 이 검증은 source 안에 새 패턴
+    keyword 가 있는지로 회귀 방지.
+    """
+    import inspect
+
+    from whooing_tui import p4_sync
+
+    src = inspect.getsource(p4_sync._do_submit_multi)
+    # numbered CL 만들고 거기에 submit
+    assert "_create_numbered_change" in src, (
+        "_do_submit_multi 가 numbered CL 패턴 (회귀 방지)"
+    )
+    # submit -c <CL> 호출 — paths 없음
+    assert '"submit", "-c", cl' in src or "['submit', '-c', cl" in src, (
+        "submit 은 -c <CL> 만 — 절대 경로 paths 전달 X"
+    )
+
+
+def test_create_numbered_change_helper_exists():
+    """CL 생성 helper 가 export 되어 다른 호출자도 같은 정책 따를 수 있도록."""
+    from whooing_tui import p4_sync
+    assert hasattr(p4_sync, "_create_numbered_change")

@@ -5,6 +5,69 @@
 > **0.17.x 이전** (CL #51119 ~ #1) 항목은 분량 정리 차원에서
 > [`CHANGELOG-archive-0.17.md`](./CHANGELOG-archive-0.17.md) 로 분리 보존.
 
+## CL #52749 — 0.53.4 — P4 submit 절대경로 인자 회귀 + numbered CL 정책 (2026-05-18)
+
+배경 (사용자 보고): 첨부 추가 후 "P4 submit 실패" notify. db row + 디스크
+파일은 정상 (사용자 데이터 보존됨) 이나 P4 head 에 안 올라감.
+
+### 원인
+
+`p4_sync._do_submit_multi` 가 `p4 submit -d <desc> <local-abs-paths>` 를
+호출. P4 의 submit 명령은 file argument 로 **절대 경로를 안 받음** —
+depot/client syntax 또는 None (default CL 전체) 만. 결과: `Usage:
+submit ...` 에러 → returncode != 0 → status="error".
+
+추가로 — 우리 워크스페이스의 운영 규칙 (`tui/MEMORY.md` §5.1) 이 "default
+CL 금지, numbered CL 사용" 인데, 종전 흐름은 default CL 으로 reconcile +
+submit 이라 정책도 위배. 다른 client (`@office`, `@playground`) 의 동시
+작업과 격리도 안 됐음.
+
+### 수정
+
+`_do_submit_multi` 가 numbered CL 패턴으로:
+
+1. `p4 change -i` 로 description 포함 새 CL 생성, 번호 parse.
+2. `p4 reconcile -c <CL> -e -a -d <paths>` — 그 CL 로 직접 open.
+3. `p4 opened -c <CL>` — 비빈 출력 (= 실제 변경 있음) 인지 확인.
+   비었으면 빈 CL 삭제 (`p4 change -d <CL>`) 후 status="no-changes".
+4. `p4 submit -c <CL>` — paths 인자 X. 정확히 그 CL 만 atomically submit.
+5. 실패 시 best-effort 로 빈 CL 정리.
+
+### 사용자 데이터 처리
+
+사용자가 진행 중이던 첨부 (entry 1712609, cloudflare-invoice-2026-05-16
+.pdf, 30.7 KB) + 그에 따른 db row 변경분이 P4 의 default CL 에 opened
+상태로 stuck 됐던 것을 같은 작업에서 **CL #52747 로 ad-hoc submit** 해
+보존. 사용자 데이터 손실 없음.
+
+### 수정 파일
+
+- `tui/src/whooing_tui/p4_sync.py`
+  - 새 helper `_create_numbered_change(bin, desc, cwd)` — CL 생성 + 번호 parse.
+  - `_do_submit_multi` 흐름 numbered CL 로 재작성. 빈 CL best-effort 정리.
+- `tui/tests/test_p4_sync.py`
+  - 공통 helper `_make_fake_p4(path, log, where_filter_to, sleep_before)`
+    — `change -i` / `opened -c` / `where` 모두 처리하는 fake sh script.
+  - 7 기존 테스트의 fake_p4 / assertion 을 새 흐름에 맞게 갱신.
+  - 회귀 방지 +2:
+    * `test_submit_uses_numbered_cl_not_default` — source 에 numbered CL
+      keyword 가 있는지. 다시 default CL 패턴으로 돌아가면 fail.
+    * `test_create_numbered_change_helper_exists` — helper export 검증.
+- `tui/pyproject.toml` — 0.53.3 → 0.53.4.
+- `tui/src/whooing_tui/__init__.py` — `__version__` 동기화.
+
+### 검증
+
+- **621 passed** (619 + 2 신규). 회귀 0.
+
+### 후속 사용자 검증 필요
+
+다음 첨부 추가 시 status notify 가 "P4 submit 완료" 로 보여야 합니다.
+"P4 submit 실패" 가 다시 보이면 로그 (`log.warning` 라인) 확인 후 보고
+요망.
+
+---
+
 ## CL #52746 — 0.53.3 — action_add NoActiveWorker fix (2026-05-18)
 
 배경 (사용자 보고): `a` 키 누르면 traceback `NoActiveWorker: push_screen

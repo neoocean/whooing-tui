@@ -126,11 +126,55 @@ def is_file_in_p4(path: Path) -> bool:
     return proc.returncode == 0
 
 
+def _create_numbered_change(
+    bin_path: str, description: str, cwd: str,
+) -> str | None:
+    """`p4 change -i` 로 numbered CL 을 만들고 CL 번호 반환. 실패 시 None.
+
+    CL #52749+: 사용자 워크스페이스 규칙 (MEMORY.md §5.1 default CL 금지)
+    + `p4 submit -d <desc> <local-path>` 가 P4 syntax 오류라는 사실
+    (path 인자는 depot/client syntax 만 허용) 을 동시에 해결.
+
+    `description` 의 각 라인은 spec format 대로 \\t 들여쓰기 필요.
+    """
+    spec_lines = ["Change: new", f"Client: {os.environ.get('P4CLIENT', '')}",
+                  "Status: new", "Description:"]
+    for line in description.splitlines() or [""]:
+        spec_lines.append(f"\t{line}" if line else "\t")
+    spec = "\n".join(spec_lines) + "\n"
+    proc = subprocess.run(
+        [bin_path, "change", "-i"],
+        input=spec, cwd=cwd, capture_output=True,
+        text=True, encoding="utf-8", errors="replace",
+        timeout=10, check=False,
+    )
+    if proc.returncode != 0:
+        log.warning(
+            "p4 change -i failed (rc=%d): %s",
+            proc.returncode, (proc.stderr or "").strip(),
+        )
+        return None
+    # 출력: "Change NNNNN created."
+    for tok in (proc.stdout or "").split():
+        if tok.isdigit():
+            return tok
+    log.warning("p4 change -i: CL 번호 parse 실패 — stdout=%r", proc.stdout)
+    return None
+
+
 def _do_submit_multi(paths: list[Path], description: str) -> str:
     """본 함수는 worker thread 에서 실행. 모든 실패는 로그만.
 
     CL #51124+: 여러 파일을 한 번의 reconcile + submit 으로 묶는다.
     CL #51136+ (A4): return 값으로 status string — caller 가 사용자 알림.
+    CL #52749+: numbered CL 패턴 채택 (사용자 보고: submit 실패).
+      종전: reconcile → `p4 submit -d <desc> <local-paths>`. 이 호출은
+            P4 의 submit 문법 오류 (`Usage: submit ... [file]`) — file
+            arg 는 절대 local path 가 아닌 depot/client syntax 만.
+            결과로 모든 첨부 submit 이 fail status 반환.
+      신규: change 먼저 만들고 → reconcile -c <CL> → submit -c <CL>.
+            이 패턴은 우리 MEMORY.md §5.1 "default CL 금지" 정책과도
+            일치하고 다른 client 의 동시 작업과 격리.
 
     return 값:
       'ok'         — submit 성공.
@@ -161,10 +205,15 @@ def _do_submit_multi(paths: list[Path], description: str) -> str:
         log.debug("매핑된 path 0개 — silent skip")
         return "unmapped"
 
-    # reconcile.
+    # numbered CL 생성. 실패하면 submit 단계도 skip.
+    cl = _create_numbered_change(bin_path, description, cwd=cwd)
+    if cl is None:
+        return "error"
+
+    # reconcile — 그 CL 로 directly open. -e edit / -a add / -d delete.
     rec = _run_p4(
         bin_path,
-        ["reconcile", "-e", "-a", "-d", *mapped],
+        ["reconcile", "-c", cl, "-e", "-a", "-d", *mapped],
         cwd=cwd,
         timeout=10,
     )
@@ -173,12 +222,21 @@ def _do_submit_multi(paths: list[Path], description: str) -> str:
             "p4 reconcile failed (rc=%d): %s",
             rec.returncode, (rec.stderr or "").strip(),
         )
+        # 빈 CL 정리 시도 (best-effort) — 파일 안 들어간 CL 은 무가치.
+        _run_p4(bin_path, ["change", "-d", cl], cwd=cwd, timeout=5)
         return "error"
 
-    # submit.
+    # CL 에 실제로 열린 파일이 있는지 확인 — 변경이 아예 없으면 빈 CL 삭제 후 no-changes.
+    opened = _run_p4(bin_path, ["opened", "-c", cl], cwd=cwd, timeout=5)
+    if (opened.stdout or "").strip() == "":
+        log.debug("CL %s 에 opened 파일 0 — 변경 없음, 빈 CL 삭제", cl)
+        _run_p4(bin_path, ["change", "-d", cl], cwd=cwd, timeout=5)
+        return "no-changes"
+
+    # submit — `-c <CL>` 로 정확히 그 CL 만.
     sub = _run_p4(
         bin_path,
-        ["submit", "-d", description, *mapped],
+        ["submit", "-c", cl],
         cwd=cwd,
         timeout=30,
     )
@@ -186,10 +244,12 @@ def _do_submit_multi(paths: list[Path], description: str) -> str:
         msg = (sub.stderr or "").strip()
         if "no files to submit" in msg.lower() or "nothing to submit" in msg.lower():
             log.debug("p4 submit: 변경 없음 — skip")
+            # 빈 CL 정리.
+            _run_p4(bin_path, ["change", "-d", cl], cwd=cwd, timeout=5)
             return "no-changes"
         log.warning("p4 submit failed (rc=%d): %s", sub.returncode, msg)
         return "error"
-    log.info("p4 submit 완료 (%d파일): %s", len(mapped), description)
+    log.info("p4 submit 완료 (CL %s, %d파일): %s", cl, len(mapped), description)
     return "ok"
 
 
