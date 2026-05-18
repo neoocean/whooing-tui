@@ -5,6 +5,43 @@
 > **0.17.x 이전** (CL #51119 ~ #1) 항목은 분량 정리 차원에서
 > [`CHANGELOG-archive-0.17.md`](./CHANGELOG-archive-0.17.md) 로 분리 보존.
 
+## CL #52746 — 0.53.3 — action_add NoActiveWorker fix (2026-05-18)
+
+배경 (사용자 보고): `a` 키 누르면 traceback `NoActiveWorker: push_screen
+must be run from a worker when wait_for_dismiss is True`.
+
+### 원인
+
+textual 의 `App.push_screen_wait(...)` 는 worker context 안에서만 호출
+가능 — 일반 async 메서드에서 호출하면 `NoActiveWorker` raise. 같은 화면의
+`action_edit_note` 는 이미 `@work(exclusive=True, group="attach", name=
+"edit_note")` 데코레이터로 wrap 되어 있었으나, **새로 만든 `action_add` /
+`action_add_by_path` 는 이 데코레이터를 빠뜨림** (0.53.2 의 회귀).
+
+종전 (0.52.0 이전) `action_add` 도 같은 잠재 버그였으나, 사용자가 `a`
+키 안 누르고 paste 만 썼다면 trigger 안 됨 — 이번 사용자 보고로 처음
+드러남.
+
+### 수정
+
+- `tui/src/whooing_tui/screens/attachment_browser.py`
+  - `action_add` 에 `@work(exclusive=True, group="attach", name="add")`.
+  - `action_add_by_path` 에 `@work(exclusive=True, group="attach", name=
+    "add_by_path")`.
+  - 같은 group `attach` 로 `action_edit_note` 와 직렬화 — 동시에 두 modal
+    이 뜨는 race 방지.
+- `tui/tests/test_attachment_browser.py` — 회귀 방지:
+  - `test_action_add_methods_are_decorated_as_workers` — 두 메서드의
+    source 에 `@work` 가 있는지 확인. 누락 시 fail.
+- `tui/pyproject.toml` — 0.53.2 → 0.53.3.
+- `tui/src/whooing_tui/__init__.py` — `__version__` 동기화.
+
+### 검증
+
+- **619 passed** (618 + 1 신규). 회귀 0.
+
+---
+
 ## CL #52739 — 0.53.2 — AttachmentBrowser UX + __version__ sync (2026-05-18)
 
 배경 (사용자 보고): 거래 수정의 attach 버튼은 정상 동작해 첨부 브라우저까지

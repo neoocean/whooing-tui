@@ -476,6 +476,26 @@ def test_action_add_by_path_uses_pathmodal():
     assert "_AddPathModal" in code
 
 
+def test_action_add_methods_are_decorated_as_workers():
+    """CL #52746+: `push_screen_wait` 는 worker context 안에서만 호출 가능.
+    `@work` 데코레이터 누락 시 NoActiveWorker 로 즉시 raise (사용자 보고).
+    textual 의 @work 가 함수를 wrap 하면 원본은 `__wrapped__` 또는 함수의
+    `__name__` 이 변경되며 module-level 의 `_work_decorator` flag 가 붙는다.
+    가장 안전한 검증: source 에 `@work` 데코레이션이 포함됐는지.
+    """
+    import inspect
+
+    from whooing_tui.screens.attachment_browser import AttachmentBrowserScreen
+
+    for name in ("action_add", "action_add_by_path"):
+        method = getattr(AttachmentBrowserScreen, name)
+        src = inspect.getsource(method)
+        assert "@work" in src, (
+            f"{name} 가 @work 데코레이션 누락 — push_screen_wait 호출 시 "
+            f"NoActiveWorker raise (CL #52746 fix 회귀)"
+        )
+
+
 @pytest.mark.asyncio
 async def test_empty_list_status_shows_usage_hint(isolated):
     """첨부 0개 상태에서 status Static 메시지에 추가 방법 안내가 보임."""

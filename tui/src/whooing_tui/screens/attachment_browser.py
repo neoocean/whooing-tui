@@ -515,12 +515,18 @@ class AttachmentBrowserScreen(Screen):
             )
         self.query_one("#ab_status", Static).update(msg)
 
+    @work(exclusive=True, group="attach", name="add")
     async def action_add(self) -> None:
         """CL #52739+: 파일 탐색기 (FilePickerScreen) 직접 진입.
 
         종전엔 `_AddPathModal` (path 직접 입력) 이 기본이었으나 사용자에게
         부담스러운 UX 라는 보고 — 파일 탐색기가 더 직관적이라 그것을 default
         로. 경로 직접 타이핑은 새 키 `p` (`action_add_by_path`).
+
+        CL #52746+: `@work` 필수 — `push_screen_wait` 가 worker context 안
+        에서만 호출 가능 (`NoActiveWorker` 회피). 종전 `action_add` 가 일반
+        async 였던 흔적은 0.52.0~0.53.2 모두 같은 잠재 버그 — 실 trigger 는
+        본 fix 의 사용자 보고로 드러남.
         """
         from whooing_tui.screens.file_picker import FilePickerScreen
 
@@ -531,6 +537,7 @@ class AttachmentBrowserScreen(Screen):
             return
         self._add_path(path)
 
+    @work(exclusive=True, group="attach", name="add_by_path")
     async def action_add_by_path(self) -> None:
         """경로 직접 입력 — `p` 키 (CL #52739+ 분리).
 
