@@ -508,18 +508,40 @@ class WhooingClient:
     async def delete_entry(self, *, section_id: str, entry_id: str) -> dict[str, Any]:
         """거래 영구 삭제. 후잉은 soft-delete 가 아니므로 복구 불가.
 
-        CL #52979+ (사용자 보고 2026-05-19): 중복 일괄 삭제 시 "`section_id`
-        parameter is required." 로 거절. 후잉 server 가 DELETE 의 query
-        param 만으로는 section_id 를 인식 못함 — POST/PUT (CL #52918, 52928)
-        과 동일하게 form-urlencoded body 도 필수. query 와 body 양쪽 send
-        (belt-and-suspenders).
+        구현 정책 (CL #53015+ — 사용자 보고 2026-05-19 *2회 재발*):
+        후잉 REST `DELETE /entries/{id}.json` 가 section_id 를 어떤 방식
+        (query / form body / 양쪽) 으로 보내도 "`section_id` parameter is
+        required." 로 거절. CL #52979 의 form-body 추가 시도도 실서버에서
+        실패 (httpx 가 정확히 body 를 보내는 건 unit-test 로 검증됐으나
+        server 가 DELETE body 를 안 읽는 듯).
+
+        **→ 본 메서드는 공식 후잉 MCP server (`tools/call` →
+        `entries-delete`) 로 위임.** 보고서 / 통계 endpoint (CL #52755+)
+        와 동일 정책. MCP server 는 같은 동작을 안정적으로 처리한다.
+
+        MCP 호출이 실패하면 (네트워크 일시 장애 / 토큰 만료 등) REST
+        DELETE 를 fallback 으로 시도 — 정상 동작 환경 확보 + 단일 보호.
         """
-        results = await self._delete(
-            self._entry_path(entry_id),
-            params={"section_id": section_id},
-            form_data={"section_id": section_id},
-        )
-        return _coerce_dict(results)
+        from whooing_tui.official_mcp import OfficialMcpError
+        try:
+            results = await self.call_official_tool(
+                "entries-delete",
+                {"section_id": section_id, "entry_id": entry_id},
+            )
+            return _coerce_dict(results)
+        except OfficialMcpError as e:
+            log.warning(
+                "delete_entry via official MCP failed (%s) — REST fallback",
+                e,
+            )
+            # Fallback — 적어도 한 번 더 시도. 본 서버가 form-body 를 안 읽으면
+            # 여전히 같은 에러 — 사용자에게 MCP 오류 진단 정보로 활용.
+            results = await self._delete(
+                self._entry_path(entry_id),
+                params={"section_id": section_id},
+                form_data={"section_id": section_id},
+            )
+            return _coerce_dict(results)
 
     # ---- accounts CRUD ---------------------------------------------------
     #

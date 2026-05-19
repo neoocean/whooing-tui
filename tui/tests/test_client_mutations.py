@@ -110,42 +110,68 @@ async def test_update_entry_puts_only_changed_fields():
 
 
 @respx.mock
-async def test_delete_entry_uses_delete_method_with_section_query():
-    route = respx.delete("https://whooing.com/api/entries/e123.json").mock(
-        return_value=Response(200, json={"code": 200, "results": {}})
+async def test_delete_entry_delegates_to_official_mcp():
+    """CL #53015+: delete_entry 가 후잉 공식 MCP `entries-delete` 로 위임.
+
+    사용자 2회 보고 (2026-05-19): REST DELETE 가 어떤 방식으로 section_id
+    를 보내도 "section_id parameter is required" 로 거절. 보고서 endpoint
+    들과 동일하게 공식 MCP server 로 위임 — `tools/call` JSON-RPC.
+    """
+    route = respx.post("https://whooing.com/mcp").mock(
+        return_value=Response(
+            200,
+            json={
+                "jsonrpc": "2.0",
+                "id": 1,
+                "result": {
+                    "structuredContent": {"deleted": True},
+                },
+            },
+        )
     )
     c = _client()
-    out = await c.delete_entry(section_id="s1", entry_id="e123")
+    out = await c.delete_entry(section_id="s7", entry_id="e999")
     assert isinstance(out, dict)
     assert route.call_count == 1
-    # section_id 는 query param 으로
-    req = route.calls[0].request
-    assert req.method == "DELETE"
-    assert b"section_id=s1" in req.url.query
+    # JSON-RPC body: method=tools/call + name=entries-delete + arguments.
+    import json
+    body = json.loads(route.calls[0].request.content)
+    assert body["method"] == "tools/call"
+    assert body["params"]["name"] == "entries-delete"
+    args = body["params"]["arguments"]
+    assert args == {"section_id": "s7", "entry_id": "e999"}
 
 
 @respx.mock
-async def test_delete_entry_sends_section_id_in_form_body():
-    """CL #52979+: DELETE 도 form-body 에 section_id 동봉.
-
-    사용자 보고 (2026-05-19, 중복 일괄 삭제 0건/3건 실패): query 만으로는
-    후잉 server 가 "section_id parameter is required" 로 거절. POST/PUT
-    (CL #52918, 52928) 와 동일하게 form-urlencoded body 에도 동봉해야.
-    """
-    route = respx.delete("https://whooing.com/api/entries/e999.json").mock(
+async def test_delete_entry_falls_back_to_rest_when_mcp_fails():
+    """MCP 가 JSON-RPC error 반환 → 본 메서드는 REST DELETE fallback 시도."""
+    # MCP 첫 호출 — JSON-RPC error 반환.
+    respx.post("https://whooing.com/mcp").mock(
+        return_value=Response(
+            200,
+            json={
+                "jsonrpc": "2.0",
+                "id": 1,
+                "error": {"code": -32601, "message": "Method not found"},
+            },
+        )
+    )
+    # REST DELETE fallback — 정상 응답.
+    delete_route = respx.delete(
+        "https://whooing.com/api/entries/e1.json",
+    ).mock(
         return_value=Response(200, json={"code": 200, "results": {}})
     )
     c = _client()
-    await c.delete_entry(section_id="s7", entry_id="e999")
-    assert route.call_count == 1
-    req = route.calls[0].request
-    # Query param.
-    assert b"section_id=s7" in req.url.query
-    # form-urlencoded body.
-    assert req.headers.get("Content-Type", "").startswith(
-        "application/x-www-form-urlencoded"
-    )
-    assert b"section_id=s7" in req.content
+    out = await c.delete_entry(section_id="s1", entry_id="e1")
+    assert isinstance(out, dict)
+    # REST DELETE 도 호출됨 (fallback path).
+    assert delete_route.call_count == 1
+    req = delete_route.calls[0].request
+    assert req.method == "DELETE"
+    assert b"section_id=s1" in req.url.query
+    # form-body 도 함께.
+    assert b"section_id=s1" in req.content
 
 
 @respx.mock

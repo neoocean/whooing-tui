@@ -5,6 +5,74 @@
 > **0.17.x 이전** (CL #51119 ~ #1) 항목은 분량 정리 차원에서
 > [`CHANGELOG-archive-0.17.md`](./CHANGELOG-archive-0.17.md) 로 분리 보존.
 
+## CL #53015 — 0.77.3 — delete_entry 공식 MCP 위임 (REST DELETE 의 section_id 회귀 2회 재발) (2026-05-19)
+
+배경 (사용자 보고 *2회 재발*, 2026-05-19): "또 다시 중복 제거에 실패했습니다."
+스크린샷의 에러 — `0건 삭제, 3건 실패 — 첫 실패: 1713072 `section_id`
+parameter is required.`
+
+### 회귀 추적
+
+1. **CL #52963** (0.76.0) — 중복 일괄 삭제 도입.
+2. **CL #52979** (0.76.3) — 첫 보고. REST DELETE 의 form-body 에 section_id
+   동봉. 단위 테스트로 httpx 가 정확히 `Content-Type: application/x-www-
+   form-urlencoded` + body `section_id=...` 를 보내는 것 확인.
+3. **CL #53015** (현재) — *같은 에러 재발*. 단위 테스트로는 request 가
+   정상 발사되지만 실 후잉 server 는 여전히 거절. → **후잉 서버가 DELETE
+   body 를 안 읽는 것으로 판단**.
+
+POST/PUT 의 form-body 패턴 (CL #52918, 52928) 은 정상 동작 — 같은 Content-
+Type 의 DELETE 만 거절되는 이유는 일부 framework (PHP 의 일부 버전,
+Sinatra 등) 가 method 별로 body 파싱 정책이 달라서일 가능성.
+
+### 수정 — 공식 후잉 MCP 위임
+
+`client.py · delete_entry` 가 보고서 / 통계 (CL #52755+) 와 동일한 정책으로
+공식 후잉 MCP server (`https://whooing.com/mcp`) 의 `tools/call →
+entries-delete` 로 위임:
+
+```python
+async def delete_entry(self, *, section_id, entry_id):
+    try:
+        results = await self.call_official_tool(
+            "entries-delete",
+            {"section_id": section_id, "entry_id": entry_id},
+        )
+        return _coerce_dict(results)
+    except OfficialMcpError:
+        # MCP 실패 (네트워크 일시 장애 / 토큰 만료 등) → REST fallback.
+        results = await self._delete(
+            self._entry_path(entry_id),
+            params={"section_id": section_id},
+            form_data={"section_id": section_id},
+        )
+        return _coerce_dict(results)
+```
+
+공식 MCP 가 같은 후잉 데이터에 대한 delete 작업을 안정적으로 수행하므로
+section_id 거절 문제를 우회. fallback REST 는 환경 안전망 (MCP server
+일시 불통 시 적어도 시도).
+
+### 영향 범위
+
+`WhooingClient.delete_entry` 는 두 호출자가 사용:
+- `DuplicateEvalScreen` (m 메뉴 → 선택 평가) — `_delete_via_client`.
+- `DuplicateScanScreen` (입력 메뉴 → 일괄 스캔) — `_delete_many` callback.
+
+둘 다 자동으로 fix 혜택. `delete_account` / `delete_monthly` /
+`delete_budget` 은 REST 그대로 유지 (사용자 보고 없음 — 같은 회귀
+재현되면 같은 패턴 적용).
+
+### 테스트 (-2 + 2 = +0, total 1118 통과 유지)
+
+기존 `test_delete_entry_uses_delete_method_with_section_query` 와
+`test_delete_entry_sends_section_id_in_form_body` 는 REST 검증이라 제거.
+신규:
+- `test_delete_entry_delegates_to_official_mcp` — POST /mcp + `tools/call`
+  + `entries-delete` + arguments 검증.
+- `test_delete_entry_falls_back_to_rest_when_mcp_fails` — MCP JSON-RPC
+  error 시 REST DELETE 시도 (네트워크 일시 장애 시나리오).
+
 ## CL #53010 — 0.77.2 — 중복 검사 진행 popup 의 chunk-별 실시간 갱신 (2026-05-19)
 
 배경 (사용자 요청, 2026-05-19): "이 화면에서 구체적으로 지금 무엇을
