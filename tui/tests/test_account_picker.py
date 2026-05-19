@@ -346,3 +346,40 @@ async def test_picker_hides_purpose_when_not_provided():
         await pilot.pause()
         purpose_widget = app.screen.query_one("#picker-purpose", Static)
         assert "hidden" in purpose_widget.classes
+
+
+# ---- CL #52929+ : default_expanded_type + mouse click override --------
+
+
+@pytest.mark.asyncio
+async def test_picker_expands_default_type_when_no_current():
+    """`default_expanded_type` 가 주어지고 current_id 매칭 없으면 그
+    카테고리가 펼쳐져야.
+    """
+    fake = FakeClient()
+    app = WhooingTuiApp(client=fake)  # type: ignore[arg-type]
+    async with app.run_test() as pilot:
+        await _open_entries(app)
+        from textual.widgets import Tree
+
+        await app.push_screen(AccountPickerScreen(
+            app.session, side="right",
+            default_expanded_type="expenses",  # FakeClient 의 expenses 가 비어있지 않음.
+        ))
+        await pilot.pause()
+        tree = app.screen.query_one("#acc-tree", Tree)
+        # expenses 카테고리 노드 찾아 펼쳐졌는지.
+        for cat in tree.root.children:
+            if cat.data == "expenses":
+                assert cat.is_expanded
+                break
+        else:
+            raise AssertionError("expenses 카테고리 노드 없음")
+
+
+def test_tree_subclass_overrides_click():
+    """_HighlightOnClickTree 가 Tree 의 _on_click 을 override."""
+    from whooing_tui.screens.account_picker import _HighlightOnClickTree
+    from textual.widgets import Tree
+    assert issubclass(_HighlightOnClickTree, Tree)
+    assert _HighlightOnClickTree._on_click is not Tree._on_click

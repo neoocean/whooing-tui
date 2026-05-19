@@ -147,3 +147,25 @@ def save_last_section_id(section_id: str) -> None:
     state["last_section_id"] = section_id
     state.setdefault("version", 1)
     save_state(state)
+
+
+# CL #52929+: FilePicker 시작 디렉토리 영구화. 사용자 요청 — 처음 호출 시
+# `~` 가 아니라 마지막으로 *열었던* 디렉토리에서 시작.
+
+
+def load_last_file_picker_dir() -> str | None:
+    """마지막에 사용했던 file picker 디렉토리. 한 번도 저장 안 됐으면 None."""
+    val = (load_state().get("last_file_picker_dir") or "").strip()
+    return val or None
+
+
+def save_last_file_picker_dir(dir_path: str) -> None:
+    """file picker 가 닫힐 때 호출 — 다음 picker 의 시작 디렉토리로 복원."""
+    if not dir_path:
+        return
+    state = load_state()
+    if state.get("last_file_picker_dir") == dir_path:
+        return  # 같은 값 — write skip.
+    state["last_file_picker_dir"] = dir_path
+    state.setdefault("version", 1)
+    save_state(state)

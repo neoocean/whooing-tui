@@ -123,3 +123,53 @@ def test_picker_action_toggle_hidden_flips_flag():
     assert sc._show_hidden is True
     sc.action_toggle_hidden()
     assert sc._show_hidden is False
+
+
+# ---- CL #52929+ : 마지막 디렉토리 영구화 -------------------------------
+
+
+def test_picker_uses_last_file_picker_dir_when_no_start_dir(monkeypatch, tmp_path):
+    """state.json 의 last_file_picker_dir 이 있으면 그걸 시작 dir 로."""
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "xdg"))
+    from whooing_tui.state import save_last_file_picker_dir
+    target = tmp_path / "Downloads"
+    target.mkdir()
+    save_last_file_picker_dir(str(target))
+    # start_dir 명시하지 않음 — state 에서 복원.
+    sc = FilePickerScreen()
+    assert sc.current == target.resolve()
+
+
+def test_picker_falls_back_to_home_when_saved_dir_missing(monkeypatch, tmp_path):
+    """state 에 저장된 path 가 사라졌으면 home 으로 fallback."""
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "xdg"))
+    from whooing_tui.state import save_last_file_picker_dir
+    ghost = tmp_path / "does_not_exist"
+    save_last_file_picker_dir(str(ghost))
+    sc = FilePickerScreen()
+    assert sc.current == Path.home().resolve()
+
+
+def test_picker_explicit_start_dir_overrides_saved(monkeypatch, tmp_path):
+    """caller 가 명시 start_dir 주면 그게 우선."""
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "xdg"))
+    from whooing_tui.state import save_last_file_picker_dir
+    saved = tmp_path / "saved"
+    saved.mkdir()
+    explicit = tmp_path / "explicit"
+    explicit.mkdir()
+    save_last_file_picker_dir(str(saved))
+    sc = FilePickerScreen(start_dir=explicit)
+    assert sc.current == explicit.resolve()
+
+
+# ---- CL #52929+ : mouse click = highlight only -------------------------
+
+
+def test_option_list_subclass_overrides_click():
+    """_HighlightOnClickOptionList 가 OptionList 의 _on_click 을 override."""
+    from whooing_tui.screens.file_picker import _HighlightOnClickOptionList
+    from textual.widgets import OptionList
+    assert issubclass(_HighlightOnClickOptionList, OptionList)
+    # _on_click 메서드가 *재정의됨* (부모와 다른 객체).
+    assert _HighlightOnClickOptionList._on_click is not OptionList._on_click

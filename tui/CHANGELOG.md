@@ -5,6 +5,83 @@
 > **0.17.x 이전** (CL #51119 ~ #1) 항목은 분량 정리 차원에서
 > [`CHANGELOG-archive-0.17.md`](./CHANGELOG-archive-0.17.md) 로 분리 보존.
 
+## CL #52929 — 0.74.0 — picker UX: 부채 자동 펼침 / 마지막 디렉토리 / click=highlight (2026-05-19)
+
+배경 (사용자 요청 3 항목):
+1. 카드 명세서 import 의 계정 picker — 카드는 보통 "부채" 계정이므로 그
+   카테고리를 default 로 펼침.
+2. 파일 picker — 마지막에 열었던 디렉토리에서 시작.
+3. picker (파일 / 계정) 에서 mouse click 은 *highlight 만*, 실제 선택은
+   버튼 클릭 또는 Enter 키.
+
+### 1. AccountPicker `default_expanded_type`
+
+`AccountPickerScreen.__init__` 에 새 kwarg `default_expanded_type: str |
+None`. `current_id` 매칭이 없는 신규 picker 진입 시 이 카테고리를 펼침
++ cursor 도 그 카테고리 노드로.
+
+`EntriesScreen._import_card_statement_wizard` 의 2단계 호출:
+```python
+AccountPickerScreen(
+    session, side="right",
+    purpose="...",
+    default_expanded_type="liabilities",  # 카드 = 부채.
+)
+```
+
+### 2. FilePicker 마지막 디렉토리 영구화
+
+`whooing_tui.state` 에 두 새 함수:
+- `load_last_file_picker_dir() -> str | None`
+- `save_last_file_picker_dir(dir_path: str) -> None`
+
+`state.json` 의 `last_file_picker_dir` 키로 저장. `~/.config/whooing-tui/
+state.json` 의 다른 키 (last_section_id) 와 공존.
+
+`FilePickerScreen.__init__`:
+- caller 가 `start_dir` 명시 안 하면 `load_last_file_picker_dir()` 우선,
+  없으면 home.
+- 저장된 path 가 사라졌으면 home fallback.
+
+`_activate` 가 파일 선택 dismiss 직전에 `save_last_file_picker_dir(
+str(self.current))` 호출 → 다음 picker 가 같은 디렉토리에서 시작.
+
+### 3. Mouse click = highlight only
+
+두 신규 위젯 서브클래스:
+
+**`_HighlightOnClickOptionList`** (`screens/file_picker.py`):
+- `_on_click` override — 단일 클릭은 `highlighted` 만 갱신, `action_
+  select()` 호출 X. 더블 클릭 (`event.chain >= 2`) 만 명시 선택.
+
+**`_HighlightOnClickTree`** (`screens/account_picker.py`):
+- `_on_click` override — 토글 영역 (`meta.get("toggle")`) 은 그대로 펼침/
+  접힘 (mouse 친화). 노드 body 단일 클릭은 cursor 만 이동, 더블 클릭은
+  `run_action("select_cursor")` (Enter 동등).
+
+각 picker 의 hint 텍스트도 업데이트:
+- "Enter / 더블클릭=선택 · 클릭=하이라이트만 · ..."
+
+### 테스트 (+ 6)
+
+- `test_picker_uses_last_file_picker_dir_when_no_start_dir`
+- `test_picker_falls_back_to_home_when_saved_dir_missing`
+- `test_picker_explicit_start_dir_overrides_saved`
+- `test_option_list_subclass_overrides_click`
+- `test_picker_expands_default_type_when_no_current`
+- `test_tree_subclass_overrides_click`
+
+총 1038 → 1044 (+6, 0 regression).
+
+### Backward compat
+
+- `AccountPickerScreen` 의 `default_expanded_type` 는 optional kwarg —
+  EntryEditDialog 의 기존 호출은 변경 없음.
+- `FilePickerScreen` 의 `start_dir` 명시 caller 도 영향 없음. 명시 안
+  하던 caller 만 디렉토리 기억 동작 enable.
+- mouse click 동작은 *제한적인* 변경 — Textual 기본의 즉시 선택은 안
+  되지만 더블 클릭 / Enter 로 동등한 선택 가능. UX 향상.
+
 ## CL #52918 — 0.73.2 — create/update_entry: form-urlencoded body (2026-05-19)
 
 배경 (사용자 보고 재현): CL #52911 (query 로도 section_id 전송) 적용 후

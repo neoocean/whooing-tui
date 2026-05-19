@@ -20,13 +20,34 @@ import logging
 from pathlib import Path
 from typing import Iterable
 
-from textual import on
+from textual import events, on
 from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Container, Horizontal
 from textual.screen import ModalScreen
 from textual.widgets import Button, Input, Label, OptionList, Static
 from textual.widgets.option_list import Option
+
+
+class _HighlightOnClickOptionList(OptionList):
+    """CL #52929+: mouse click 은 *highlight 만*, 실제 선택은 Enter 키 또는
+    버튼 클릭에서만. 종전 OptionList 는 click 으로 `OptionSelected` 까지
+    즉시 발사해 사용자가 디렉토리 들어갈 의도 없이 잘못 클릭해도 선택.
+
+    사용자 요청: "마우스 클릭은 하이라이트로만 동작하고 실제 선택은 버튼
+    클릭 또는 엔터 키를 누를 때만".
+    """
+
+    async def _on_click(self, event: events.Click) -> None:
+        # Textual `OptionList._on_click` 가 highlight + action_select 양쪽
+        # 수행하던 동작에서 *단일 click 은 highlight 만*. 더블 클릭은 명시적
+        # 선택 (Enter 동등).
+        clicked_option: int | None = event.style.meta.get("option")
+        if clicked_option is not None and not self._options[clicked_option].disabled:
+            self.highlighted = clicked_option
+            if event.chain >= 2:
+                self.action_select()
+        event.stop()
 
 log = logging.getLogger(__name__)
 
@@ -125,9 +146,21 @@ class FilePickerScreen(ModalScreen[str | None]):
             tuple(e.lower() for e in extensions) if extensions else None
         )
         # start_dir 정규화.
-        sd = Path(start_dir).expanduser() if start_dir else Path.home()
-        # 시작 dir 이 존재 안 하면 home 으로 fallback.
-        if not sd.is_dir():
+        # CL #52929+: caller 미지정 시 *마지막에 사용했던 디렉토리* 를 복원
+        # (state.json). 처음 사용이거나 해당 path 가 사라졌으면 home 으로
+        # fallback.
+        sd: Path | None = None
+        if start_dir:
+            sd = Path(start_dir).expanduser()
+        else:
+            try:
+                from whooing_tui.state import load_last_file_picker_dir
+                last = load_last_file_picker_dir()
+                if last:
+                    sd = Path(last).expanduser()
+            except Exception:  # pragma: no cover — state.json 로드 실패는 silent.
+                log.debug("load_last_file_picker_dir failed", exc_info=True)
+        if sd is None or not sd.is_dir():
             sd = Path.home()
         self.current: Path = sd.resolve()
         self._all_children: list[Path] = []
@@ -139,9 +172,10 @@ class FilePickerScreen(ModalScreen[str | None]):
             yield Label(f"[bold]{self._title}[/bold]")
             yield Static(str(self.current), id="fp_path")
             yield Input(placeholder="필터 (파일명 부분 일치)", id="fp_filter")
-            yield OptionList(id="fp_list")
+            yield _HighlightOnClickOptionList(id="fp_list")
             yield Static(
-                "Enter=선택/들어감 / ←=부모 / →=자식 / Ctrl+H=숨김 토글 / Esc=취소",
+                "Enter / 더블클릭=선택 · 클릭=하이라이트만 · "
+                "←=부모 / →=자식 / Ctrl+H=숨김 / Esc=취소",
                 id="fp_hint",
             )
 
@@ -251,6 +285,12 @@ class FilePickerScreen(ModalScreen[str | None]):
             self.query_one("#fp_filter", Input).value = ""
             self._refresh_list()
         elif oid.startswith(_FILE):
+            # CL #52929+: 다음 호출 시 같은 디렉토리에서 시작하도록 저장.
+            try:
+                from whooing_tui.state import save_last_file_picker_dir
+                save_last_file_picker_dir(str(self.current))
+            except Exception:  # pragma: no cover — state.json 저장 실패 silent.
+                log.debug("save_last_file_picker_dir failed", exc_info=True)
             self.dismiss(oid[len(_FILE):])
 
     def action_cancel(self) -> None:

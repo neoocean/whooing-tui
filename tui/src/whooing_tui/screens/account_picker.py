@@ -31,11 +31,36 @@ from __future__ import annotations
 import logging
 from typing import Any
 
+from textual import events
 from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Vertical
 from textual.screen import ModalScreen
 from textual.widgets import Static, Tree
+
+
+class _HighlightOnClickTree(Tree):
+    """CL #52929+: mouse 단일 클릭은 *highlight 만*, 실제 선택은 Enter 키 또는
+    더블 클릭. 종전 Tree 는 click 으로 즉시 `NodeSelected` 발사 → 디렉토리
+    탐색 의도 없이 잘못 누르면 picker 가 닫혀 사용자가 당황.
+
+    토글 영역 (펼침/접힘 화살표) 클릭은 그대로 — mouse 친화.
+    """
+
+    async def _on_click(self, event: events.Click) -> None:
+        async with self.lock:
+            meta = event.style.meta
+            if "line" in meta:
+                cursor_line = meta["line"]
+                if meta.get("toggle", False):
+                    node = self.get_node_at_line(cursor_line)
+                    if node is not None:
+                        self._toggle_node(node)
+                else:
+                    self.cursor_line = cursor_line
+                    # 더블 클릭 = 명시적 선택 (Enter 동등).
+                    if event.chain >= 2:
+                        await self.run_action("select_cursor")
 
 from whooing_tui.ime import bind_ko
 from whooing_tui.state import SessionState
@@ -121,19 +146,22 @@ class AccountPickerScreen(ModalScreen[tuple[str, str, str] | None]):
         side: str,
         current_id: str | None = None,
         purpose: str | None = None,
+        default_expanded_type: str | None = None,
     ) -> None:
         """`side` = "left" / "right" — 모달 타이틀 라벨용.
 
         `current_id` 가 주어지면 해당 항목 카테고리만 자동 펼침 + cursor 위치.
-        `purpose` (CL #52906+) 가 주어지면 제목 아래 한 줄 안내로 표시 —
-        wizard 의 중간 단계에서 사용자에게 "왜 이 picker 가 떴는가" 를 즉시
-        알려준다 (예: 카드 명세서 import 의 2 단계).
+        `purpose` (CL #52906+) 가 주어지면 제목 아래 한 줄 안내로 표시.
+        `default_expanded_type` (CL #52929+): `current_id` 매칭이 없을 때 *기본*
+        으로 펼칠 카테고리 key (예: 카드 명세서 import 의 2단계는 "liabilities").
+        지정 안 하면 첫 비어있지 않은 카테고리.
         """
         super().__init__()
         self._session = session
         self._side = side
         self._current = current_id
         self._purpose = purpose
+        self._default_expanded_type = default_expanded_type
 
     def compose(self) -> ComposeResult:
         side_label = "차변 (left)" if self._side == "left" else "대변 (right)"
@@ -150,10 +178,13 @@ class AccountPickerScreen(ModalScreen[tuple[str, str, str] | None]):
                 purpose_static.add_class("hidden")
             yield purpose_static
             yield Static(
-                "↑/↓ 이동 / ←/→ 접힘·펼침 / Enter 선택 / Esc 취소",
+                "↑/↓ 이동 · Enter / 더블클릭=선택 · 클릭=하이라이트만 · "
+                "Esc 취소",
                 id="picker-hint",
             )
-            tree: Tree[tuple[str, str, str] | str] = Tree("계정과목", id="acc-tree")
+            tree: Tree[tuple[str, str, str] | str] = _HighlightOnClickTree(
+                "계정과목", id="acc-tree",
+            )
             tree.show_root = False  # 가짜 루트 숨김 — 카테고리가 시각상 최상위.
             tree.guide_depth = 3
             yield tree
@@ -180,12 +211,29 @@ class AccountPickerScreen(ModalScreen[tuple[str, str, str] | None]):
                 if aid and aid == self._current:
                     target_leaf = leaf
                     cat_node.expand()
-        # 현재 선택이 없거나 못 찾으면 첫 카테고리만 펼침 (시작점 가시화).
+        # 현재 선택이 없거나 못 찾으면:
+        #   1. CL #52929+: `default_expanded_type` 지정돼있고 그 카테고리에
+        #      항목이 있으면 그것을 펼침 (예: 카드 명세서 → "liabilities").
+        #   2. 그 외엔 첫 비어있지 않은 카테고리.
         if target_leaf is None:
-            for child in tree.root.children:
-                if child.children:
-                    child.expand()
-                    break
+            preferred = None
+            if self._default_expanded_type:
+                for child in tree.root.children:
+                    if (
+                        child.data == self._default_expanded_type
+                        and child.children
+                    ):
+                        preferred = child
+                        break
+            if preferred is not None:
+                preferred.expand()
+                # cursor 도 그 카테고리로 — 사용자가 즉시 ↓ 로 항목 진입.
+                tree.move_cursor(preferred)
+            else:
+                for child in tree.root.children:
+                    if child.children:
+                        child.expand()
+                        break
         else:
             # cursor 를 target leaf 로 — `select_node` 는 `NodeSelected`
             # 이벤트를 발사해 모달이 즉시 dismiss 되므로 `move_cursor`.
