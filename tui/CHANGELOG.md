@@ -5,6 +5,81 @@
 > **0.17.x 이전** (CL #51119 ~ #1) 항목은 분량 정리 차원에서
 > [`CHANGELOG-archive-0.17.md`](./CHANGELOG-archive-0.17.md) 로 분리 보존.
 
+## CL #52940 — 0.75.0 — 하나카드 명세서 파서 재작성 (테이블 구조 기반) (2026-05-19)
+
+배경 (사용자 보고): 하나카드 HTML 명세서 (`hanacard_20260527.html`) import
+시 결과가 다수 잘못됨:
+- "USA" / "일시불" / "할인구분" 이 가맹점으로 잡힘.
+- `4,029,357,733` 같은 absurd 금액 (실은 PAYPAL 카드번호 ID).
+- 같은 거래가 중복 추출.
+
+### 원인
+
+종전 parser 는 `splitlines()` 으로 평문화한 뒤 `MM/DD` 패턴 오프셋으로
+row 를 추출 — HTML 의 *table 컨텍스트* 를 모름. 결과적으로:
+1. 외화 거래표 (`이용일자 / 국가 / 도시 / 가맹점`) 에서 col=1 의 국가
+   ("USA") 가 cell[+1] 로 잡혀 가맹점으로.
+2. PAYPAL 가맹점의 외화 ID (`4029357733`) 가 col=2 라 가맹점 cell+2 로
+   가는 amount 자리에 들어가 13자리 숫자로 파싱.
+3. "일시불/할부" 명세서 헤더 / "할부 상세" 등 비-거래 row 에서 MM/DD 가
+   다시 등장 → "일시불" 이 cell+1 (가맹점) 으로.
+
+### 재작성: 테이블 구조 기반 (`extract_rows_from_decrypted`)
+
+`splitlines()` 폐기, `BeautifulSoup` 의 `find_all("table")` 로 leaf 테이블
+(중첩 outer 제외) 만 iter:
+
+1. `_classify_table(table)` 가 첫 3 row 의 헤더 텍스트로 분류:
+   - `"cancellation"` — "취소일자" 포함.
+   - `"foreign"` — "환율" + "이용원금" 포함 → **건너뜀** (메인 표가 KRW
+     환산 row 이미 포함, 이중 추출 방지).
+   - `"main"` — "이용가맹점" + ("이번 달 결제" / "이용금액") 포함.
+   - 그 외 — `"other"` (skip).
+2. `_parse_main_table`: cells[0]=date, cells[1]=merchant,
+   cells[2]=이용금액, cells[7]=이용혜택, cells[8]=혜택금액. "할인"
+   row 는 혜택금액 (음수) 을 effective amount 로.
+3. `_parse_cancellation_table`: cells[0]=이용일자, cells[2]=가맹점,
+   cells[4]=음수 금액.
+4. 비-MM/DD 첫 cell row 는 모두 skip — 섹션 헤더 / 소계 / 합계 / "이용
+   가맹점 상세정보" 같은 row 자연스럽게 무시.
+
+### 연도 추정
+
+`_detect_year(soup)`: "YYYY년 MM월 DD일" 패턴에서 연도. row 의 MM 이
+명세서 월 + 1 보다 큰 경우 작년으로 추정 (예: 5월 명세서에 "11/30" 거래 →
+작년 11월).
+
+### 검증 결과 (실제 사용자 sample)
+
+```
+종전: 136건 추출 (다수 오류: USA 가맹점 / 4,029,357,733 / 일시불)
+신규: 69건 추출 (VISA 39건 + MASTER 29건 + 매출취소 1건 = 69 ✓
+      = 카드소계 39 + 29 + 1)
+나쁜 가맹점 ("USA"/"일시불"/"할인구분"): 0건
+absurd 금액 (> 100M): 0건
+```
+
+### 테스트 (+15 신규)
+
+`core/tests/test_hanacard_secure_mail.py` — 합성 HTML 으로 각 시나리오 검증:
+- 단순 거래 / 할인 (음수) / 부분 취소 / 매출취소 표
+- 해외 표 건너뜀 / 메인+해외 중복 방지
+- 다중 카드 섹션 / 비-거래 row skip
+- 연도 추정 (명세서 동일 / 작년 roll-back)
+- 빈 HTML / 거래 외 table / dedup
+
+실제 사용자 명세서 fixture 는 P4/GitHub 에 올리지 않는다 (개인 결제정보).
+
+총 1046 → 1061 (+15, 0 regression).
+
+### Backward compat
+
+- `extract_rows_from_decrypted(html: str) -> list[CSVRow]` — public API
+  (종전 `_extract_rows_from_decrypted` 은 alias 로 남김).
+- `parse_html` / `parse_html_async` 시그니처 동일 — caller (`screens/
+  statement_import.py`) 영향 없음.
+- 추출 결과의 CSVRow 형식 동일 (date YYYYMMDD, amount int, merchant str).
+
 ## CL #52935 — 0.74.1 — 명세서 import 확정 키를 Ctrl+S 로 (2026-05-19)
 
 배경 (사용자 보고): "이 화면에서 Ctrl+Enter 를 눌러도 아무 일도 일어나지
