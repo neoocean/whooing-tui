@@ -385,3 +385,31 @@ def test_suspect_merchant_similar_amount_off():
     suspect = _compute_suspect_map(rows, ledger)
     assert 0 in suspect
     assert "가맹점 유사" in suspect[0]
+
+
+# ---- CL #52935+ : confirm 키 바인딩 ------------------------------------
+
+
+def test_statement_import_confirm_bindings_include_ctrl_s():
+    """ctrl+enter 는 대부분 터미널에서 안 옴 — ctrl+s / f5 도 confirm 에
+    바인딩돼있어야 사용자가 실제로 입력 확정 가능.
+    """
+    from whooing_tui.screens.statement_import import StatementImportScreen
+    actions = [
+        (b.key, b.action) for b in StatementImportScreen.BINDINGS
+    ]
+    confirm_keys = [k for k, a in actions if a == "confirm"]
+    # 적어도 ctrl+s + ctrl+enter + f5 셋 다 노출.
+    assert "ctrl+s" in confirm_keys
+    assert "ctrl+enter" in confirm_keys
+    assert "f5" in confirm_keys
+
+
+def test_statement_import_confirm_bindings_priority_true():
+    """confirm 키들은 priority=True — DataTable 의 default 키 처리 보다 우선."""
+    from whooing_tui.screens.statement_import import StatementImportScreen
+    for b in StatementImportScreen.BINDINGS:
+        if b.action == "confirm":
+            assert b.priority is True, (
+                f"confirm key {b.key!r} priority=False — DataTable 가 가로채면 안 됨"
+            )

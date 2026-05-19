@@ -438,7 +438,15 @@ class StatementImportScreen(ModalScreen[None]):
 
     BINDINGS = [
         Binding("escape", "back", "뒤로"),
-        Binding("ctrl+enter", "confirm", "입력 확정"),
+        # CL #52935+: ctrl+enter 는 대부분 터미널 (macOS Terminal / iTerm
+        # default / Linux xterm 등) 에서 distinct 키로 안 옴 — 사용자 보고:
+        # "ctrl+enter 눌러도 아무 일도 안 일어남". 같은 의미의 ctrl+s 를
+        # 주력 키로 (Save 컨벤션 + 모든 터미널 지원). ctrl+enter / f5 는
+        # alias 로 priority=True (DataTable 보다 우선).
+        Binding("ctrl+s", "confirm", "입력 확정 (Ctrl+S)",
+                show=True, priority=True),
+        Binding("ctrl+enter", "confirm", "", show=False, priority=True),
+        Binding("f5", "confirm", "", show=False, priority=True),
         # CL #52912+: 선택 토글 / 일괄 선택 / 일괄 해제 / 의심만 해제.
         Binding("space", "toggle_select", "선택 토글", show=True, priority=True),
         Binding("ctrl+a", "select_all", "전체 선택", show=True),
@@ -529,7 +537,7 @@ class StatementImportScreen(ModalScreen[None]):
             yield DataTable(id="preview", zebra_stripes=True)
             yield Static(
                 "Space 선택 토글 · Ctrl+A 전체 · Ctrl+D 해제 · Ctrl+U 의심 해제 · "
-                "Ctrl+Enter 입력 · Esc 닫기",
+                "Ctrl+S 입력 · Esc 닫기",
                 id="import_foot",
             )
 
@@ -636,7 +644,7 @@ class StatementImportScreen(ModalScreen[None]):
         self._set_status(
             f"{len(self.rows)} 건 추출 → {len(self.matched)} 기존 ledger"
             f"{prev_part} / {len(self.proposals)} 신규{suspect_part} "
-            f"(Space 선택 토글 · Ctrl+Enter 입력)"
+            f"(Space 선택 토글 · Ctrl+S 입력)"
         )
         self._populate_table()
 
@@ -845,7 +853,7 @@ class StatementImportScreen(ModalScreen[None]):
             f"{len(self.rows)} 건 추출 → {len(self.matched)} 기존 ledger / "
             f"{len(self.previously_imported)} 이미 import / "
             f"{len(self.proposals)} 신규 (선택 {sel}/{len(self.proposals)}) "
-            f"· Space 토글 · Ctrl+Enter 입력"
+            f"· Space 토글 · Ctrl+S 입력"
         )
 
     def action_toggle_select(self) -> None:

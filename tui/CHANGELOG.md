@@ -5,6 +5,45 @@
 > **0.17.x 이전** (CL #51119 ~ #1) 항목은 분량 정리 차원에서
 > [`CHANGELOG-archive-0.17.md`](./CHANGELOG-archive-0.17.md) 로 분리 보존.
 
+## CL #52935 — 0.74.1 — 명세서 import 확정 키를 Ctrl+S 로 (2026-05-19)
+
+배경 (사용자 보고): "이 화면에서 Ctrl+Enter 를 눌러도 아무 일도 일어나지
+않습니다." 화면 hint 와 status 메시지는 "Ctrl+Enter 입력" 으로 안내하지만
+실제로 동작 안 함.
+
+### 원인
+
+대부분 터미널 (macOS Terminal / iTerm2 default / Linux xterm 등) 이
+`Ctrl+Enter` 를 distinct escape sequence 로 전송 안 함 — 그냥 Enter 와
+같은 코드 또는 무시. Textual 의 `Binding("ctrl+enter", ...)` 는 binding
+은 등록되지만 키 이벤트가 도달 못 함.
+
+### 수정
+
+`StatementImportScreen.BINDINGS`:
+- **`Ctrl+S`** 주력 (Save 컨벤션 + 모든 터미널 지원) — Footer 에 노출.
+- `Ctrl+Enter` / `F5` 는 alias 로 `show=False` — 지원 환경에서 사용 가능.
+- 세 키 모두 `priority=True` — DataTable 의 default Enter 핸들러 (cell
+  select 등) 보다 우선.
+
+화면 hint + status 메시지 갱신:
+- "Space 선택 토글 · Ctrl+A 전체 · ... · **Ctrl+S 입력** · Esc 닫기"
+- "(Space 선택 토글 · **Ctrl+S 입력**)"
+
+### 회귀 테스트 (+2)
+
+- `test_statement_import_confirm_bindings_include_ctrl_s` — 세 키
+  (ctrl+s / ctrl+enter / f5) 모두 confirm 액션에 매핑.
+- `test_statement_import_confirm_bindings_priority_true` — 모두
+  priority=True (DataTable 가 가로채지 못함).
+
+총 1044 → 1046 (+2, 0 regression).
+
+### Backward compat
+
+`Ctrl+Enter` binding 그대로 유지 — iTerm2 같이 명시 설정한 환경에서는
+계속 작동. 새 `Ctrl+S` 가 추가됐을 뿐.
+
 ## CL #52929 — 0.74.0 — picker UX: 부채 자동 펼침 / 마지막 디렉토리 / click=highlight (2026-05-19)
 
 배경 (사용자 요청 3 항목):
