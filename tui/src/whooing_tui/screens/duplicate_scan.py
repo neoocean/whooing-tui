@@ -444,7 +444,7 @@ class DuplicateScanScreen(ModalScreen[bool]):
             )
             self.query_one("#scan-progress", Static).add_class("different")
             self.query_one("#scan-hint", Static).update(
-                "지난 3년 거래에서 중복으로 보이는 거래를 찾지 못했습니다. "
+                "선택한 기간의 거래에서 중복으로 보이는 거래를 찾지 못했습니다. "
                 "Esc / Enter 로 닫기.",
             )
             self.query_one("#scan-table", DataTable).styles.display = "none"

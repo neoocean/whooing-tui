@@ -276,7 +276,7 @@ class EntriesScreen(MenuBarMixin, Screen):
                     MenuItem("카드 명세서 import…", "import_card_statement"),
                     MenuItem("PDF 영수증/인보이스 첨부…", "attach_receipt"),
                     MenuItem("매월입력 거래 관리…", "open_monthly"),
-                    MenuItem("중복 거래 검사… (지난 3년)", "scan_duplicates"),
+                    MenuItem("중복 거래 검사…", "scan_duplicates"),
                 ),
             ),
             MenuSpec(
