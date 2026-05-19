@@ -733,47 +733,61 @@ class EntriesScreen(MenuBarMixin, Screen):
             self.set_status("활성 섹션이 없습니다 — `s` 로 먼저 선택하세요.", error=True)
             return
 
-        # 1단계 — 파일 경로.
-        path = await self.app.push_screen_wait(_FilePathModal(
-            title="카드 명세서 파일 경로",
-            placeholder="/Users/me/Downloads/statement.html",
-        ))
-        if not path:
-            self.set_status("명세서 import 취소됨.")
-            return
+        # CL #52952+: import 화면에서 Esc → 파일 선택부터 다시. 본 wizard 는
+        # 사용자가 "done" 으로 명시 종료할 때까지 반복.
+        picked: tuple | None = None
+        while True:
+            # 1단계 — 파일 경로.
+            path = await self.app.push_screen_wait(_FilePathModal(
+                title="카드 명세서 파일 경로",
+                placeholder="/Users/me/Downloads/statement.html",
+            ))
+            if not path:
+                self.set_status("명세서 import 취소됨.")
+                return
 
-        # 2단계 — 카드 계정 선택 (대변).
-        # CL #52906+: picker 에 purpose 안내. CL #52929+: 카드는 보통 "부채"
-        # 계정이므로 default 로 그 카테고리를 펼침.
-        picked = await self.app.push_screen_wait(
-            AccountPickerScreen(
-                session, side="right",
-                purpose=(
-                    "선택한 명세서 안의 거래들을 어느 카드 계정으로 분류할지 "
-                    "선택하세요.\n"
-                    "(import wizard 2/3 단계 · Esc 로 취소)"
-                ),
-                default_expanded_type="liabilities",
-            ),
-        )
-        if not picked:
-            self.set_status("카드 계정 미선택 — import 취소.")
-            return
-        # AccountPickerScreen 의 dismiss = (account_id, type, title).
-        try:
-            r_account_id = picked[0]
-        except Exception:  # pragma: no cover
-            self.set_status("카드 계정 형식 오류 — import 취소.", error=True)
-            return
+            # 2단계 — 카드 계정 선택 (대변). 이전 wizard iteration 에서 picked
+            # 했으면 재사용 (사용자가 같은 카드의 다른 명세서를 연달아 import
+            # 하는 케이스 — 매번 picker 띄우는 건 거추장스러움).
+            if picked is None:
+                picked = await self.app.push_screen_wait(
+                    AccountPickerScreen(
+                        session, side="right",
+                        purpose=(
+                            "선택한 명세서 안의 거래들을 어느 카드 계정으로 분류할지 "
+                            "선택하세요.\n"
+                            "(import wizard 2/3 단계 · Esc 로 1단계 (파일 선택) 으로)"
+                        ),
+                        default_expanded_type="liabilities",
+                    ),
+                )
+                if not picked:
+                    # 카드 선택을 취소했으면 wizard 종료 (1단계 재시도는
+                    # 사용자가 또 메뉴를 띄워서).
+                    self.set_status("카드 계정 미선택 — import 취소.")
+                    return
+            # AccountPickerScreen 의 dismiss = (account_id, type, title).
+            try:
+                r_account_id = picked[0]
+                card_label = picked[2] if len(picked) > 2 else None
+            except Exception:  # pragma: no cover
+                self.set_status("카드 계정 형식 오류 — import 취소.", error=True)
+                return
 
-        # 3단계 — StatementImportScreen push (이후 흐름은 그 화면이 책임).
-        self.app.push_screen(StatementImportScreen(
-            client=self._client,
-            section_id=session.section_id,
-            r_account_id=r_account_id,
-            file_path=path,
-            card_label=picked[2] if len(picked) > 2 else None,
-        ))
+            # 3단계 — StatementImportScreen. 결과 값:
+            #   "done" → 사용자가 결과 modal 의 OK 를 눌렀음 → wizard 종료.
+            #   "back" / None → 사용자가 Esc → 파일 선택부터 다시.
+            result = await self.app.push_screen_wait(StatementImportScreen(
+                client=self._client,
+                section_id=session.section_id,
+                r_account_id=r_account_id,
+                file_path=path,
+                card_label=card_label,
+            ))
+            if result == "done":
+                return
+            # "back" / None — loop back to file picker. picked 는 유지.
+            self.set_status("파일 선택으로 돌아갑니다…")
 
     def _dispatch_menu_action(self, action_id: str) -> None:
         """메뉴 항목 선택 → 기존 action_* 메서드 또는 신규 액션으로 위임.

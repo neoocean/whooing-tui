@@ -5,6 +5,88 @@
 > **0.17.x 이전** (CL #51119 ~ #1) 항목은 분량 정리 차원에서
 > [`CHANGELOG-archive-0.17.md`](./CHANGELOG-archive-0.17.md) 로 분리 보존.
 
+## CL #52956 — 0.75.2 — 명세서 추출 진행 status + Esc 로 파일 picker 복귀 (2026-05-19)
+
+배경 (사용자 보고): "카드 import 화면에서 로딩에 시간이 걸릴 때 무엇을 하고
+있는지 표시해주세요. 카드 import 화면에서 ESC를 누르면 파일 선택 화면으로
+돌아가주세요."
+
+### 원인 1 — 추출 단계 침묵
+
+CL #52946 의 진행 피드백은 **저장 단계** (`action_confirm`) 에 한정. 화면
+진입 직후 `_kick_off_extract` (형식 감지 → 비밀번호 → Playwright 복호화 →
+파싱 → ledger 조회 → 중복 검사) 가 3 ~ 15 초 걸려도 status 는 빈 채. 사용자
+입장에서 "화면이 멈췄나" 라고 느낌.
+
+### 원인 2 — Esc = 전체 취소
+
+`StatementImportScreen` 의 Esc binding 이 `self.dismiss(None)` 만 호출 →
+EntriesScreen 으로 즉시 복귀. 파일 경로 오타 / 잘못된 명세서 같은 흔한
+실수에서 wizard 3 단계 (파일 → 카드 → import) 를 통째 다시 돌아야 함.
+2 단계 (카드 계정) 는 같은 카드 다른 명세서를 연속 import 할 때도 매번
+재선택해야 했음.
+
+### 수정 1 — `_kick_off_extract` progress status
+
+`screens/statement_import.py` — 각 단계 시작 전 status 갱신 + `await
+asyncio.sleep(0)` 으로 한 frame 양보:
+
+```
+🔍 명세서 형식 감지 중…
+🔍 감지 완료: kind=html issuer=hanacard
+🔑 보안메일 비밀번호 입력 대기…
+🔓 보안메일 복호화 + 파싱 중… (Playwright 헤드리스 브라우저 · issuer=hanacard)
+📄 추출 완료: 69 건. 후잉 ledger 조회 준비…
+📊 후잉 ledger 조회 중… (2026-04-19 ~ 2026-05-26)
+🔍 중복 검사 중… ledger 142 건 / import_log 조회
+```
+
+### 수정 2 — Esc → "back" sentinel, wizard 가 loop
+
+`screens/statement_import.py`:
+
+- `class StatementImportScreen(ModalScreen[str | None])` — generic 변경.
+- `action_back` → `self.dismiss("back")` (was `None`).
+- `_on_result_close` → `self.dismiss("done")` (성공/실패 modal OK).
+- Docstring 에 dismiss 값 의미 명시 (`"done"` / `"back"` / `None`).
+
+`screens/entries.py · _import_card_statement_wizard`:
+
+```python
+picked: tuple | None = None
+while True:
+    path = await self.app.push_screen_wait(_FilePathModal(...))
+    if not path:
+        return  # 1단계 취소 = wizard 종료
+    if picked is None:
+        picked = await self.app.push_screen_wait(AccountPickerScreen(...))
+        if not picked:
+            return
+    result = await self.app.push_screen_wait(StatementImportScreen(...))
+    if result == "done":
+        return
+    # "back" / None → loop: 파일 picker 재진입, 카드 계정 재사용
+```
+
+AccountPicker 결과는 `picked` 에 cache → 같은 카드 다른 명세서를 연속
+import 할 때 카드 선택 단계 skip. 파일 picker 만 다시 띄움.
+
+`AccountPickerScreen` purpose 문구 갱신: `"Esc 로 1단계 (파일 선택) 으로"`
+(was `"Esc 로 취소"`).
+
+### 결과
+
+| 단계 | Esc | Cancel 버튼 | OK / 결과 modal |
+|---|---|---|---|
+| 1. 파일 경로 | wizard 종료 | wizard 종료 | 2 단계로 |
+| 2. 카드 계정 | wizard 종료 | wizard 종료 | 3 단계로 |
+| 3. StatementImport | 1 단계로 복귀 | (없음) | wizard 종료 |
+
+### 테스트
+
+기존 1064 건 전부 통과. `StatementImportScreen[str \| None]` 타입 변경은
+test 에서 dismiss 값을 검사하지 않으므로 호환.
+
 ## CL #52946 — 0.75.1 — 명세서 import 진행 피드백 + 성공 modal (2026-05-19)
 
 배경 (사용자 보고): "이 단계에서 Ctrl+S 를 눌러도 아무 피드백이 없습니다.

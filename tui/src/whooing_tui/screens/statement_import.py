@@ -508,12 +508,20 @@ def _compute_suspect_map(
 # ---- Main screen ----------------------------------------------------
 
 
-class StatementImportScreen(ModalScreen[None]):
+class StatementImportScreen(ModalScreen[str | None]):
     """카드 명세서 import 화면 (CL #52841+ ModalScreen 으로 변경).
 
     종전엔 Screen 전체를 차지 — 사용자 요청으로 popup 모달 형태. 화면
     가운데 큰 frame, 뒷 화면 (EntriesScreen) 은 background 로 살짝 보임.
     진입 시 file_path 필수.
+
+    dismiss 값 (CL #52952+):
+      - `"done"`  — import 완료 (성공 또는 부분 실패 OK 후). 사용자가
+                    결과 modal 의 확인을 눌러 명시 종료.
+      - `"back"`  — 사용자가 Esc / q 로 *다른 파일을 골라 다시 시도* 의도.
+                    wizard 가 file picker 단계로 돌아가야.
+      - `None`    — 종전과 동등 (단순 닫기). caller 는 None == back 으로
+                    안전하게 처리.
     """
 
     BINDINGS = [
@@ -630,6 +638,11 @@ class StatementImportScreen(ModalScreen[None]):
 
     @work(exclusive=True)
     async def _kick_off_extract(self) -> None:
+        # CL #52952+ 사용자 요청: 로딩 진행 상황 단계별 표시. 종전엔 적게는
+        # 5-10 초 (HTML decrypt + parse + ledger fetch + dedup) 동안 status
+        # 는 정적인 file path 만 보여 사용자가 "멈춰 있는지" 분간 어려움.
+        self._set_status("🔍 명세서 형식 감지 중…")
+        await asyncio.sleep(0)
         try:
             self.kind, self.issuer = _detect_format(self.file_path)
         except (FileNotFoundError, ValueError) as ex:
@@ -638,7 +651,8 @@ class StatementImportScreen(ModalScreen[None]):
         if not self.issuer:
             self._set_status(f"❌ {self.kind!r} 자동 detect 실패 — issuer 명시 필요.")
             return
-        self._set_status(f"detect: kind={self.kind} issuer={self.issuer}")
+        self._set_status(f"🔍 감지 완료: kind={self.kind} issuer={self.issuer}")
+        await asyncio.sleep(0)
 
         # password (HTML only)
         password: str | None = None
@@ -650,6 +664,7 @@ class StatementImportScreen(ModalScreen[None]):
             ).strip()
             if not password:
                 # ask via modal
+                self._set_status("🔑 보안메일 비밀번호 입력 대기…")
                 password = await self.app.push_screen_wait(
                     PasswordModal()
                 )
@@ -657,7 +672,18 @@ class StatementImportScreen(ModalScreen[None]):
                     self._set_status("password 미입력 — 중단.")
                     return
 
-        # extract
+        # extract — HTML 은 Playwright 헤드리스 브라우저 시작 + 페이지 렌더
+        # 까지 3-10 초 소요 가능. 그동안 무엇을 하고 있는지 명시.
+        if self.kind == "html":
+            self._set_status(
+                f"🔓 보안메일 복호화 + 파싱 중… "
+                f"(Playwright 헤드리스 브라우저 · issuer={self.issuer})"
+            )
+        else:
+            self._set_status(
+                f"📄 {self.kind!r} 파일 파싱 중… (issuer={self.issuer})"
+            )
+        await asyncio.sleep(0)
         try:
             self.rows = await _extract_rows(
                 self.file_path, self.kind, self.issuer, password,
@@ -668,6 +694,8 @@ class StatementImportScreen(ModalScreen[None]):
         if not self.rows:
             self._set_status("⚠️ 거래 0건 — 명세서 형식이 바뀌었을 가능성.")
             return
+        self._set_status(f"📄 추출 완료: {len(self.rows)} 건. 후잉 ledger 조회 준비…")
+        await asyncio.sleep(0)
 
         # dedup
         # CL #52832+ crash audit: adapter 가 잘못된 date 문자열 (예: 빈문자
@@ -694,11 +722,20 @@ class StatementImportScreen(ModalScreen[None]):
         # 지연 등으로 며칠 차이로 들어왔는지 fuzzy 검사.
         d0w = d0 - timedelta(days=5)
         d1w = d1 + timedelta(days=5)
+        self._set_status(
+            f"📊 후잉 ledger 조회 중… ({d0w.strftime('%Y-%m-%d')} ~ "
+            f"{d1w.strftime('%Y-%m-%d')})"
+        )
+        await asyncio.sleep(0)
         ledger = await self.client.list_entries(
             section_id=self.section_id,
             start_date=d0w.strftime("%Y%m%d"),
             end_date=d1w.strftime("%Y%m%d"),
         )
+        self._set_status(
+            f"🔍 중복 검사 중… ledger {len(ledger)} 건 / import_log 조회"
+        )
+        await asyncio.sleep(0)
         # CL #51129+: 3-tuple — (ledger 매칭, import_log 매칭, 신규).
         self.matched, self.previously_imported, self.proposals = _dedup(
             self.rows, ledger, section_id=self.section_id,
@@ -923,9 +960,9 @@ class StatementImportScreen(ModalScreen[None]):
             )
 
         def _on_result_close(_result=None) -> None:
-            # 결과 modal 닫히면 본 import 화면도 자동 dismiss.
-            # 실패가 있더라도 사용자가 OK 를 명시했으므로 닫는다.
-            self.dismiss(None)
+            # CL #52952+: 결과 modal 닫히면 "done" 으로 dismiss — wizard
+            # 가 file picker 로 돌아가지 않고 entries 화면으로 복귀.
+            self.dismiss("done")
 
         self.app.push_screen(modal, _on_result_close)
 
@@ -954,9 +991,10 @@ class StatementImportScreen(ModalScreen[None]):
         return log_path
 
     def action_back(self) -> None:
-        # CL #52841+: ModalScreen 이므로 dismiss. pop_screen 도 동작하지만
-        # dismiss 가 modal 의 표준 종료 path (callback 호출 등 포함).
-        self.dismiss(None)
+        # CL #52952+ 사용자 요청: Esc 는 *파일 선택 화면으로 복귀*. wizard
+        # 가 "back" 을 받으면 file picker 단계로 되돌아간다. caller (wizard)
+        # 가 None 을 받으면 같은 의미 — None == back 안전.
+        self.dismiss("back")
 
     # ---- CL #52912+ : 선택 토글 / 일괄 선택 ----------------------------------
 
