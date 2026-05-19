@@ -5,6 +5,64 @@
 > **0.17.x 이전** (CL #51119 ~ #1) 항목은 분량 정리 차원에서
 > [`CHANGELOG-archive-0.17.md`](./CHANGELOG-archive-0.17.md) 로 분리 보존.
 
+## CL #52968 — 0.76.1 — 중복 거래 검사 진입 피드백 + 실키 dispatch 테스트 (2026-05-19)
+
+배경 (사용자 보고, CL #52963 직후): "중복 거래 검사를 눌러도 아무 일도 안
+일어납니다."
+
+### 원인 가설
+
+세 가지 가능성 — 셋 다 사용자가 *피드백 없음* 으로 같이 보임:
+
+1. **dispatch 실패** — `_dispatch_menu_action("scan_duplicates")` 가
+   `action_scan_duplicates` 를 찾지 못함. → 테스트 추가로 검증.
+2. **worker 즉시 사망** — 첫 await (list_entries) 까지 도달 못함.
+3. **status 늦은 paint** — `set_status` 한 직후 긴 await 가 들어가
+   사용자에게는 진입이 "조용한 정지" 로 보임.
+
+### 검증 — 실키 dispatch 테스트 추가
+
+`test_duplicate_scan.py · test_menu_popup_enter_press_dispatches_
+scan_duplicates`:
+
+- `app.run_test()` 안에서 `F10 → →(입력 메뉴) → OptionList.highlighted =
+  scan_duplicates → Enter` 순으로 **실제 키 이벤트** 발사.
+- 기존 테스트는 `popup.dismiss(action_id)` 를 직접 호출 (dispatch 의
+  upstream 만 검증) — 본 테스트는 `OptionList.OptionSelected` → popup
+  dismiss → menu loop `_dispatch_menu_action` → action 메서드 → worker
+  → DuplicateScanScreen push 전 경로 검증.
+- 통과 — dispatch 자체는 정상.
+
+### 수정 — 진입 즉시 sync status + log + frame yield
+
+`entries.py · action_scan_duplicates`:
+
+```python
+def action_scan_duplicates(self) -> None:
+    log.info("action_scan_duplicates invoked")
+    self.set_status("⏳ 중복 거래 검사 시작 — 거래 fetch 중…")
+    self._scan_duplicates_worker()
+```
+
+- **동기 set_status** — worker schedule 전에 status 갱신. 사용자가 메뉴
+  닫힌 직후 즉시 피드백.
+- **log.info** — worker 호출이 dispatch 됐는지 로그로 확인 가능
+  (`~/.cache/whooing-tui/` 로그 파일).
+- worker 본체 첫 await 직전에도 `await asyncio.sleep(0)` — status 가
+  list_entries 의 긴 HTTP await 에 묻히지 않고 paint 됨.
+
+### 결과
+
+- 사용자가 menu 항목 클릭한 직후 status 영역에 "⏳ 중복 거래 검사 시작"
+  반드시 보임 (이게 안 보이면 dispatch 자체가 실패).
+- worker 가 실제로 시작했는지 log 로 확인 가능.
+- 3년 ledger fetch 가 수십 초 걸려도 사용자가 침묵으로 오인하지 않음.
+
+### 테스트 (+1, total 1088 → 1090, 통과)
+
+- `test_menu_popup_enter_press_dispatches_scan_duplicates` — 키 이벤트
+  실제 발사 path 검증.
+
 ## CL #52963 — 0.76.0 — 입력 메뉴: 지난 3년 거래 일괄 중복 스캔 (2026-05-19)
 
 배경 (사용자 보고): "거래내력에 중복으로 보이는 항목들이 많이 생겼습니다.

@@ -112,6 +112,107 @@ def test_scan_duplicates_in_input_menu():
 
 
 @pytest.mark.asyncio
+async def test_menu_popup_enter_press_dispatches_scan_duplicates():
+    """실제 키보드 Enter 로 '중복 거래 검사' 선택 → DuplicateScanScreen 떠야.
+
+    CL #52968: 사용자 보고 "중복 거래 검사를 눌러도 아무 일도 안 일어납니다"
+    의 회귀. 단순 popup.dismiss(action_id) 직접 호출은 통과하지만 실제 키
+    이벤트 (OptionList → OptionSelected → dismiss) 경로도 검증.
+    """
+    from whooing_tui.widgets.menubar import MenuPopup
+    from textual.widgets import OptionList
+    fake = FakeClient()
+    app = WhooingTuiApp(client=fake)  # type: ignore[arg-type]
+    async with app.run_test() as pilot:
+        await _open_entries(app)
+        es = app.screen
+        assert isinstance(es, EntriesScreen)
+        es.action_open_menu()
+        await _wait_for(
+            lambda: isinstance(app.screen, MenuPopup), timeout=2.0,
+        )
+        # "입력" 으로 이동.
+        menus = es._build_menus()
+        target = next(i for i, m in enumerate(menus) if m.name == "입력")
+        for _ in range(target):
+            await pilot.press("right")
+            await pilot.pause()
+        popup = app.screen
+        assert isinstance(popup, MenuPopup)
+        assert popup.spec.name == "입력"
+        # OptionList 의 highlighted 를 "scan_duplicates" 로 옮기고 Enter.
+        ol = popup.query_one("#menupopup_list", OptionList)
+        idx = next(
+            i for i, opt in enumerate(popup.spec.items)
+            if opt.action_id == "scan_duplicates"
+        )
+        ol.highlighted = idx
+        await pilot.pause()
+        await pilot.press("enter")
+        # DuplicateScanScreen 이 떠야.
+        ok = await _wait_for(
+            lambda: isinstance(app.screen, DuplicateScanScreen),
+            timeout=5.0,
+        )
+        assert ok, (
+            f"DuplicateScanScreen not pushed. "
+            f"Current: {type(app.screen).__name__}, "
+            f"status={es.last_status!r}"
+        )
+
+
+@pytest.mark.asyncio
+async def test_menu_popup_dispatches_scan_duplicates():
+    """메뉴 popup → '중복 거래 검사' 선택 → DuplicateScanScreen 떠야.
+
+    CL #52963 직후 사용자 보고: "중복 거래 검사를 눌러도 아무 일도 안
+    일어납니다." direct action_scan_duplicates 호출은 통과 (다른 테스트),
+    하지만 menu popup 의 dismiss(action_id) → _dispatch_menu_action 경로가
+    실제로 worker 까지 도달하는지 검증.
+    """
+    from whooing_tui.widgets.menubar import MenuPopup
+    fake = FakeClient()
+    app = WhooingTuiApp(client=fake)  # type: ignore[arg-type]
+    async with app.run_test() as pilot:
+        await _open_entries(app)
+        es = app.screen
+        assert isinstance(es, EntriesScreen)
+        # 메뉴바 진입 — _open_menu_loop_async 가 worker 로 popup 띄움.
+        es.action_open_menu()
+        await _wait_for(
+            lambda: isinstance(app.screen, MenuPopup), timeout=2.0,
+        )
+        popup = app.screen
+        assert isinstance(popup, MenuPopup)
+        # "입력" 메뉴까지 ← / → 로 이동.
+        menus = es._build_menus()
+        target = next(i for i, m in enumerate(menus) if m.name == "입력")
+        cur = next(i for i, m in enumerate(menus) if m.name == popup.spec.name)
+        while cur != target:
+            direction = "right" if cur < target else "left"
+            popup.dismiss(("nav", direction))
+            await _wait_for(
+                lambda: isinstance(app.screen, MenuPopup)
+                and app.screen is not popup, timeout=2.0,
+            )
+            popup = app.screen
+            cur = next(i for i, m in enumerate(menus) if m.name == popup.spec.name)
+        assert popup.spec.name == "입력"
+        # "중복 거래 검사" 선택 = popup 이 action_id 로 dismiss.
+        popup.dismiss("scan_duplicates")
+        # worker → list_entries → find_clusters → push DuplicateScanScreen.
+        ok = await _wait_for(
+            lambda: isinstance(app.screen, DuplicateScanScreen),
+            timeout=5.0,
+        )
+        assert ok, (
+            f"DuplicateScanScreen not pushed. "
+            f"Current: {type(app.screen).__name__}, "
+            f"status={es.last_status!r}"
+        )
+
+
+@pytest.mark.asyncio
 async def test_scan_finds_two_clusters_and_opens_screen():
     """fake 3년 ledger 안 cluster 2개 — DuplicateScanScreen 이 떠야."""
     fake = FakeClient()

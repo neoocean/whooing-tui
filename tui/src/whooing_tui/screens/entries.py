@@ -1036,7 +1036,15 @@ class EntriesScreen(MenuBarMixin, Screen):
 
         사용자 요청 — 거래내력에 중복 항목이 늘어났으니 메뉴로 한 번에
         스캔해 cluster 마다 삭제/보존 선택. 실제 흐름은 worker 안.
+
+        CL #52968+: 동기 진입점에서 즉시 status 갱신 — 사용자가 메뉴 클릭
+        후 worker 가 schedule 되는 동안에도 "스캔 시작" 피드백을 즉시 본다.
+        worker 자체는 `_scan_duplicates_worker` 의 첫 await 에서 비로소
+        실행되므로, sync 단계에서 status 를 미리 set 해 두면 사용자가
+        "눌러도 아무 반응 없음" 으로 오인할 여지 없음.
         """
+        log.info("action_scan_duplicates invoked")
+        self.set_status("⏳ 중복 거래 검사 시작 — 거래 fetch 중…")
         self._scan_duplicates_worker()
 
     @work(exclusive=True, group="dupe_scan", name="scan_duplicates")
@@ -1046,9 +1054,11 @@ class EntriesScreen(MenuBarMixin, Screen):
         성공한 cluster 한 건이라도 있으면 entries 재로드. cluster 발견
         못 하면 status 만 안내 (화면 띄우지 않음 — 작업 흐름 끊김 최소화).
         """
+        import asyncio
         from whooing_core.dupes import find_duplicate_clusters
         from whooing_tui.screens.duplicate_scan import DuplicateScanScreen
 
+        log.info("scan_duplicates worker started")
         session = self.app.session  # type: ignore[attr-defined]
         if not session.section_id:
             self.set_status(
@@ -1056,12 +1066,15 @@ class EntriesScreen(MenuBarMixin, Screen):
             )
             return
         end_date = today_yyyymmdd()
-        # 365 * 3 + 1 — 3년 윈도우. list_entries 가 split_yearly_ranges
-        # 로 1년 단위 분할 호출, 100-cap 도 bisection 처리.
+        # 365 * 3 — 3년 윈도우. list_entries 가 split_yearly_ranges 로
+        # 1년 단위 분할 호출, 100-cap 도 bisection 처리.
         start_date = days_ago_yyyymmdd(365 * 3)
         self.set_status(
-            f"⏳ 중복 검사 — 거래 fetch 중… ({start_date} ~ {end_date})",
+            f"⏳ 중복 검사 — 거래 fetch 중… ({start_date} ~ {end_date}, "
+            "3년치)",
         )
+        # frame yield — status 가 fetch await 전에 반드시 한 번 paint.
+        await asyncio.sleep(0)
         try:
             entries = await self._client.list_entries(
                 section_id=session.section_id,
@@ -1073,11 +1086,14 @@ class EntriesScreen(MenuBarMixin, Screen):
                 f"거래 조회 실패 [{e.kind}] {e.message}", error=True,
             )
             return
-        except Exception as e:  # pragma: no cover
+        except Exception as e:
             log.exception("scan_duplicates fetch failed")
             self.set_status(f"거래 조회 실패 (INTERNAL): {e}", error=True)
             return
-        self.set_status(f"🔍 중복 cluster 검색 중… (거래 {len(entries):,} 건)")
+        self.set_status(
+            f"🔍 중복 cluster 검색 중… (거래 {len(entries):,} 건)",
+        )
+        await asyncio.sleep(0)
         # pure func — sync 로 충분히 빠르지만 큰 부담은 worker 컨텍스트 이라 OK.
         clusters = find_duplicate_clusters(entries, date_window_days=7)
         if not clusters:
