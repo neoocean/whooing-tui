@@ -5,6 +5,74 @@
 > **0.17.x 이전** (CL #51119 ~ #1) 항목은 분량 정리 차원에서
 > [`CHANGELOG-archive-0.17.md`](./CHANGELOG-archive-0.17.md) 로 분리 보존.
 
+## CL #52912 — 0.73.0 — 명세서 import: 의심 매칭 표시 + Space 선택/해제 (2026-05-19)
+
+배경 (사용자 요청 두 항목):
+1. import 화면에서 중복 가능성이 있는 항목에 표시.
+2. Space 로 항목 선택/해제 — Ctrl+Enter 시 선택된 항목만 import.
+
+### Fuzzy 의심 매칭 — `_compute_suspect_map`
+
+`_dedup` 의 strict 매칭 (날짜 ±2일 + 정확 금액) 을 통과한 proposal 중 다음
+fuzzy 조건에 걸리는 항목에 의심 표시:
+
+- **같은 금액 + 날짜 3~7일 차** — 가맹점 처리 지연 가능 (카드사가 결제일과
+  매입일을 다르게 보고하는 케이스).
+- **금액 ±1% (수수료/환율 차이) + 날짜 ±2일** — 같은 거래의 변형 가능
+  (해외 결제 수수료, 부가세 처리 등).
+
+ledger fetch 윈도우도 함께 확장: 종전 ±2일 → ±7일. fuzzy 검사가 의미
+있는 범위를 커버.
+
+### UI 변화
+
+`#preview` DataTable 에 새 첫 컬럼 "✓":
+- proposal 선택됨: `✓`.
+- proposal 선택 해제: 공백.
+- matched / prev row: 항상 공백 (자동 skip).
+
+note 컬럼에 의심 표시: `⚠️ 의심: 같은 금액, 4일 차 ledger e123`.
+
+### 새 키 바인딩
+
+- **Space** — 현재 cursor 의 proposal row 선택/해제 토글. matched/prev row
+  위에서는 안내 status.
+- **Ctrl+A** — 전체 proposal 선택.
+- **Ctrl+D** — 전체 proposal 선택 해제.
+- **Ctrl+U** — ⚠️ 의심 표시된 row 만 일괄 해제. 안전한 자동 정리 단축.
+
+### `action_confirm` 흐름
+
+```python
+selected = [r for i, r in enumerate(self.proposals) if self._selected[i]]
+if not selected:
+    set_status("선택된 항목이 없습니다 — Space 로 1건 이상 선택하세요.")
+    return
+... 선택된 것만 client.create_entry ...
+```
+
+미선택 항목은 skipped 카운트로 status 에 노출:
+```
+입력 완료: 8 성공 / 0 실패 (3 건 ledger dedup / 미선택 4 건 skip)
+```
+
+### 테스트 (+4)
+
+- `test_suspect_same_amount_at_5day_diff` — 같은 금액 + 5일 차 → 의심 표시.
+- `test_suspect_amount_within_1pct_at_close_date` — 0.5% 차이 + 2일 차 → 의심.
+- `test_suspect_skips_when_no_close_ledger` — 30일 차 → 의심 X.
+- `test_suspect_skips_when_amount_exact_and_within_strict_window` — strict
+  매칭 영역은 fuzzy detector 가 안 잡음 (이미 `matched_existing` 에서 처리).
+
+총 1025 → 1029 (+4, 0 regression).
+
+### Backward compat
+
+- `_dedup` API 변경 없음 — 기존 호출자 / 테스트 그대로.
+- `CSVRow` 데이터 클래스 변경 없음.
+- proposals 의 default 선택 상태는 *전체 True* — Space 안 눌러도 종전과
+  동일하게 모두 import.
+
 ## CL #52911 — 0.72.3 — create/update_entry: section_id 를 query 로도 전송 (2026-05-19)
 
 배경 (사용자 보고 + 직전 CL 의 에러 모달 결과): 카드 명세서 일괄 import

@@ -246,3 +246,70 @@ def test_error_log_writes_lines_to_tmp_path(tmp_path, monkeypatch):
     assert "x153" in text
     assert "err1" in text
     assert "err2: detail" in text
+
+
+# ---- CL #52912+ : suspect detection + 선택 토글 -------------------------
+
+
+def test_suspect_same_amount_at_5day_diff():
+    """같은 금액 + 3~7일 차이 → fuzzy 의심 매칭."""
+    from whooing_tui.screens.statement_import import _compute_suspect_map
+    rows = [
+        CSVRow(date="20260520", merchant="스타벅스", amount=12000, raw={}),
+    ]
+    ledger = [
+        {"entry_id": "e1", "entry_date": "20260515", "money": 12000,
+         "l_account_id": "x20", "r_account_id": "x11", "item": "스타벅스"},
+    ]
+    suspect = _compute_suspect_map(rows, ledger)
+    assert 0 in suspect
+    assert "ledger e1" in suspect[0]
+
+
+def test_suspect_amount_within_1pct_at_close_date():
+    """금액 ±1% + 날짜 ±2일 → 의심 (수수료/환율 차)."""
+    from whooing_tui.screens.statement_import import _compute_suspect_map
+    rows = [
+        CSVRow(date="20260520", merchant="네이버페이", amount=10_000, raw={}),
+    ]
+    ledger = [
+        # 10,050 = 10,000 * 1.005 — 0.5% 차이, 이틀 차.
+        {"entry_id": "e2", "entry_date": "20260522", "money": 10_050,
+         "l_account_id": "x20", "r_account_id": "x11", "item": "네이버페이"},
+    ]
+    suspect = _compute_suspect_map(rows, ledger)
+    assert 0 in suspect
+    assert "유사" in suspect[0]
+
+
+def test_suspect_skips_when_no_close_ledger():
+    """ledger 가 비어있거나 거리가 멀면 의심 X — strict matching 영역도 아님."""
+    from whooing_tui.screens.statement_import import _compute_suspect_map
+    rows = [
+        CSVRow(date="20260520", merchant="X", amount=5000, raw={}),
+    ]
+    ledger = [
+        # 30일 차 — 너무 멀어.
+        {"entry_id": "e3", "entry_date": "20260420", "money": 5000,
+         "l_account_id": "x20", "r_account_id": "x11", "item": "X"},
+    ]
+    suspect = _compute_suspect_map(rows, ledger)
+    assert 0 not in suspect
+
+
+def test_suspect_skips_when_amount_exact_and_within_strict_window():
+    """같은 금액 + ±2일 = strict dedup 영역. 본 fuzzy detector 는 잡지 않음
+    (이미 _dedup 의 matched_existing 으로 분류돼야).
+    """
+    from whooing_tui.screens.statement_import import _compute_suspect_map
+    rows = [
+        CSVRow(date="20260520", merchant="X", amount=5000, raw={}),
+    ]
+    ledger = [
+        {"entry_id": "e4", "entry_date": "20260521", "money": 5000,
+         "l_account_id": "x20", "r_account_id": "x11", "item": "X"},
+    ]
+    # day_diff=1 + same money — fuzzy detector 조건 (3~7 또는 ±1% 비-동일) 에
+    # 안 맞으므로 의심 X.
+    suspect = _compute_suspect_map(rows, ledger)
+    assert 0 not in suspect

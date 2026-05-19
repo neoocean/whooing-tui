@@ -304,6 +304,63 @@ def _dedup(
     return matched, previously_imported, new
 
 
+def _compute_suspect_map(
+    proposals: list[CSVRow],
+    ledger: list[dict[str, Any]],
+) -> dict[int, str]:
+    """CL #52912+: strict dedup 을 통과한 proposal 중 *fuzzy* 의심 매칭.
+
+    proposal 은 정의상 `_dedup` 의 ledger ±2일 strict 매칭을 통과한 것.
+    그래도 다음 케이스는 잠재적 중복:
+      - 같은 금액 + 날짜 3~7일 차 (지연된 카드 처리).
+      - 비슷한 금액 (±1%) + 날짜 ±2일 (수수료 / 환율 차).
+
+    return: `{proposal_index: reason_text}`. 매칭 없는 proposal 은 key 미포함.
+    fuzzy 매칭은 사용자에게 안내일 뿐 자동 skip 하지 않는다 — UI 가 의심
+    표시만 보이고 사용자가 space 로 deselect 가능.
+    """
+    from datetime import datetime
+
+    def _parse(d: str) -> datetime | None:
+        try:
+            return datetime.strptime(d, "%Y%m%d")
+        except (ValueError, TypeError):
+            return None
+
+    suspect: dict[int, str] = {}
+    for idx, r in enumerate(proposals):
+        rdate = _parse(r.date)
+        if not rdate:
+            continue
+        for e in ledger:
+            edate = _parse(str(e.get("entry_date") or ""))
+            if not edate:
+                continue
+            day_diff = abs((edate - rdate).days)
+            try:
+                emoney = int(e.get("money") or 0)
+            except (ValueError, TypeError):
+                continue
+            eid = str(e.get("entry_id") or "?")
+            # 1) 같은 금액 + 3~7일 차이 — 가맹점 처리 지연 가능.
+            if emoney == r.amount and 2 < day_diff <= 7:
+                suspect[idx] = (
+                    f"같은 금액, {day_diff}일 차 ledger {eid}"
+                )
+                break
+            # 2) 금액 ±1% (수수료 / 환율) + 날짜 ±2일.
+            if (
+                day_diff <= 2 and r.amount > 0
+                and abs(emoney - r.amount) / r.amount <= 0.01
+                and emoney != r.amount
+            ):
+                suspect[idx] = (
+                    f"금액 유사 ({emoney:,}) {day_diff}일 차 ledger {eid}"
+                )
+                break
+    return suspect
+
+
 # ---- Main screen ----------------------------------------------------
 
 
@@ -318,6 +375,11 @@ class StatementImportScreen(ModalScreen[None]):
     BINDINGS = [
         Binding("escape", "back", "뒤로"),
         Binding("ctrl+enter", "confirm", "입력 확정"),
+        # CL #52912+: 선택 토글 / 일괄 선택 / 일괄 해제 / 의심만 해제.
+        Binding("space", "toggle_select", "선택 토글", show=True, priority=True),
+        Binding("ctrl+a", "select_all", "전체 선택", show=True),
+        Binding("ctrl+d", "deselect_all", "전체 해제", show=True),
+        Binding("ctrl+u", "deselect_suspect", "의심만 해제", show=True),
     ]
 
     DEFAULT_CSS = """
@@ -386,6 +448,12 @@ class StatementImportScreen(ModalScreen[None]):
         self.matched: list[dict[str, Any]] = []
         self.previously_imported: list[CSVRow] = []   # CL #51129+: import_log dedup.
         self.proposals: list[CSVRow] = []
+        # CL #52912+: 사용자 요청 — proposal 별 선택 상태 + 의심 표시.
+        # `_selected[i]` 가 True 면 Ctrl+Enter 시 입력. 기본 True (의심도
+        # 자동 선택, 사용자가 보고 명시 deselect). `_suspect[i]` 는 fuzzy
+        # 매칭으로 ledger 와 유사한 거래가 있을 때의 안내 문구.
+        self._selected: list[bool] = []
+        self._suspect: dict[int, str] = {}
 
     def compose(self) -> ComposeResult:
         with Vertical(id="import_frame"):
@@ -396,13 +464,16 @@ class StatementImportScreen(ModalScreen[None]):
             )
             yield DataTable(id="preview", zebra_stripes=True)
             yield Static(
-                "Ctrl+Enter 입력 확정 · Esc 닫기",
+                "Space 선택 토글 · Ctrl+A 전체 · Ctrl+D 해제 · Ctrl+U 의심 해제 · "
+                "Ctrl+Enter 입력 · Esc 닫기",
                 id="import_foot",
             )
 
     def on_mount(self) -> None:
         table = self.query_one("#preview", DataTable)
-        table.add_columns("type", "date", "merchant", "amount", "note")
+        # CL #52912+: 맨 앞 컬럼 "✓" = proposal 의 선택 상태. matched/prev
+        # 행은 항상 비어있음 (skip 대상).
+        table.add_columns("✓", "type", "date", "merchant", "amount", "note")
         self._kick_off_extract()
 
     @work(exclusive=True)
@@ -466,45 +537,72 @@ class StatementImportScreen(ModalScreen[None]):
         except ValueError as ex:
             self._set_status(f"⚠️ 날짜 파싱 실패: {ex}")
             return
+        # CL #52912+: fuzzy 의심 매칭을 위해 ledger 윈도우를 ±7일로 확장.
+        # 종전 ±2일 (strict dedup 용) 보다 넓게 — 같은 거래가 가맹점 처리
+        # 지연 등으로 며칠 차이로 들어왔는지 fuzzy 검사.
+        d0w = d0 - timedelta(days=5)
+        d1w = d1 + timedelta(days=5)
         ledger = await self.client.list_entries(
             section_id=self.section_id,
-            start_date=d0.strftime("%Y%m%d"),
-            end_date=d1.strftime("%Y%m%d"),
+            start_date=d0w.strftime("%Y%m%d"),
+            end_date=d1w.strftime("%Y%m%d"),
         )
         # CL #51129+: 3-tuple — (ledger 매칭, import_log 매칭, 신규).
         self.matched, self.previously_imported, self.proposals = _dedup(
             self.rows, ledger, section_id=self.section_id,
         )
 
+        # CL #52912+: proposals (strict dedup 통과) 중 fuzzy 의심 케이스를
+        # 사용자에게 표시. Strict 통과 = 같은 날 ±2일 + 정확 금액 매칭 없음.
+        # Fuzzy 검사:
+        #   - 같은 금액 + 날짜 3~7일 차 (지연된 카드 처리 가능).
+        #   - 금액 ±1% + 날짜 ±2일 + 같은 일자에 비슷한 거래 (수수료/환율).
+        self._suspect = _compute_suspect_map(self.proposals, ledger)
+        # 모든 proposal 을 default selected — 사용자가 의심 항목을 보고
+        # 명시 deselect 하도록.
+        self._selected = [True] * len(self.proposals)
+
         prev_part = (
             f" / {len(self.previously_imported)} 이미 import"
             if self.previously_imported else ""
         )
+        suspect_part = (
+            f" / {len(self._suspect)} 의심 ⚠️" if self._suspect else ""
+        )
         self._set_status(
             f"{len(self.rows)} 건 추출 → {len(self.matched)} 기존 ledger"
-            f"{prev_part} / {len(self.proposals)} 신규 (Ctrl+Enter 로 입력)"
+            f"{prev_part} / {len(self.proposals)} 신규{suspect_part} "
+            f"(Space 선택 토글 · Ctrl+Enter 입력)"
         )
         self._populate_table()
 
     def _populate_table(self) -> None:
+        # CL #52912+: 선택 표시 (✓) + 의심 매칭 표기. proposal row 는
+        # key 로 `prop:<idx>` 부여 — space 핸들러가 row → index 매핑.
         table = self.query_one("#preview", DataTable)
         table.clear()
         for m in self.matched:
             r = m["row"]; e = m["ledger"]
             table.add_row(
-                "matched", r.date, r.merchant[:30],
+                " ", "matched", r.date, r.merchant[:30],
                 f"{r.amount:,}", f"= entry {e.get('entry_id')}",
             )
         for r in self.previously_imported:
-            # CL #51129+: import_log 매칭 — 이미 import 된 거래.
             table.add_row(
-                "prev", r.date, r.merchant[:30],
+                " ", "prev", r.date, r.merchant[:30],
                 f"{r.amount:,}", "(이미 import 됨 — skip)",
             )
-        for r in self.proposals:
+        for idx, r in enumerate(self.proposals):
+            mark = "✓" if (idx < len(self._selected) and self._selected[idx]) else " "
+            suspect_note = self._suspect.get(idx)
+            if suspect_note:
+                note = f"⚠️ 의심: {suspect_note}"
+            else:
+                note = "(신규)"
             table.add_row(
-                "new", r.date, r.merchant[:30],
-                f"{r.amount:,}", "(신규)",
+                mark, "new", r.date, r.merchant[:30],
+                f"{r.amount:,}", note,
+                key=f"prop:{idx}",
             )
 
     def _set_status(self, text: str) -> None:
@@ -517,21 +615,32 @@ class StatementImportScreen(ModalScreen[None]):
         if not self.proposals:
             self._set_status("입력할 신규 거래 없음.")
             return
+        # CL #52912+: 사용자가 Space 로 선택 / 해제 한 proposal 만 import.
+        selected = [
+            r for i, r in enumerate(self.proposals)
+            if i < len(self._selected) and self._selected[i]
+        ]
+        if not selected:
+            self._set_status(
+                "선택된 항목이 없습니다 — Space 로 1건 이상 선택하세요.",
+            )
+            return
+        skipped = len(self.proposals) - len(selected)
         # accounts-list 로 r_account type 결정 (보통 liabilities)
         accounts = await self.client.list_accounts(self.section_id)
         r_type = _find_account_type(accounts, self.r_account_id) or "liabilities"
         l_default = "x50"  # 식비 fallback
         l_type = "expenses"
 
-        period_start = self.proposals[0].date
-        period_end = self.proposals[-1].date
+        period_start = selected[0].date
+        period_end = selected[-1].date
         inserted = 0
         failed = 0
         # CL #52910+: 사용자 가시 에러 모음 — log.exception 만 호출하면 stderr
         # 로 가서 TUI 화면 뒤로 깜빡이고 사라진다 (사용자 보고). 모든 실패
         # 메시지를 모아 import 끝난 뒤 modal + 파일로 보여준다.
         error_lines: list[str] = []
-        for idx, r in enumerate(self.proposals, 1):
+        for idx, r in enumerate(selected, 1):
             try:
                 # Direct REST call — TUI 가 직접 entries CRUD (DESIGN.md 정책)
                 resp = await self.client.create_entry(
@@ -577,10 +686,13 @@ class StatementImportScreen(ModalScreen[None]):
                 )
                 log.exception("entry insert failed: %s", ex)
 
-        # 결과 status — 항상 표시.
+        # 결과 status — 항상 표시. CL #52912+ 부터 skipped 카운트도 포함.
+        skip_extra = (
+            f" / 미선택 {skipped} 건 skip" if skipped else ""
+        )
         self._set_status(
             f"입력 완료: {inserted} 성공 / {failed} 실패. "
-            f"({len(self.matched)} 건은 dedup 으로 skip)"
+            f"({len(self.matched)} 건 ledger dedup{skip_extra})"
         )
 
         # CL #52910+: 실패 있으면 modal + log 파일.
@@ -593,7 +705,7 @@ class StatementImportScreen(ModalScreen[None]):
             self.app.push_screen(_ErrorReportModal(
                 title=f"카드 명세서 import — {failed}건 실패",
                 summary=(
-                    f"전체 {len(self.proposals)} 건 중 {inserted} 건 성공, "
+                    f"선택된 {len(selected)} 건 중 {inserted} 건 성공, "
                     f"{failed} 건 실패. 아래는 실패 내역 (mouse 로 선택 가능)."
                 ),
                 body="\n".join(error_lines),
@@ -628,6 +740,75 @@ class StatementImportScreen(ModalScreen[None]):
         # CL #52841+: ModalScreen 이므로 dismiss. pop_screen 도 동작하지만
         # dismiss 가 modal 의 표준 종료 path (callback 호출 등 포함).
         self.dismiss(None)
+
+    # ---- CL #52912+ : 선택 토글 / 일괄 선택 ----------------------------------
+
+    def _cursor_proposal_idx(self) -> int | None:
+        """현재 cursor row 가 proposal 이면 그 index, 아니면 None."""
+        try:
+            table = self.query_one("#preview", DataTable)
+            row = table.cursor_row
+            if row is None or row < 0:
+                return None
+            key = table.coordinate_to_cell_key((row, 0)).row_key.value
+        except Exception:  # pragma: no cover
+            return None
+        if not key or not str(key).startswith("prop:"):
+            return None
+        try:
+            return int(str(key)[len("prop:"):])
+        except ValueError:  # pragma: no cover
+            return None
+
+    def _refresh_select_marks(self) -> None:
+        """`#preview` table 의 ✓ 컬럼만 갱신 — 전체 row 재렌더 X."""
+        try:
+            table = self.query_one("#preview", DataTable)
+        except Exception:  # pragma: no cover
+            return
+        # proposal row 들은 matched / prev 다음에 위치. row index 계산.
+        first_proposal_row = len(self.matched) + len(self.previously_imported)
+        for idx in range(len(self.proposals)):
+            row = first_proposal_row + idx
+            mark = "✓" if self._selected[idx] else " "
+            try:
+                table.update_cell_at((row, 0), mark)
+            except Exception:  # pragma: no cover — row 가 cleared 상태 등.
+                pass
+        # status 의 선택 수 갱신.
+        sel = sum(1 for s in self._selected if s)
+        self._set_status(
+            f"{len(self.rows)} 건 추출 → {len(self.matched)} 기존 ledger / "
+            f"{len(self.previously_imported)} 이미 import / "
+            f"{len(self.proposals)} 신규 (선택 {sel}/{len(self.proposals)}) "
+            f"· Space 토글 · Ctrl+Enter 입력"
+        )
+
+    def action_toggle_select(self) -> None:
+        idx = self._cursor_proposal_idx()
+        if idx is None:
+            # proposal 이 아닌 row (matched/prev) — 사용자 안내.
+            self._set_status(
+                "선택 가능한 항목 (신규) 위에서 Space — matched / prev 는 항상 skip.",
+            )
+            return
+        self._selected[idx] = not self._selected[idx]
+        self._refresh_select_marks()
+
+    def action_select_all(self) -> None:
+        self._selected = [True] * len(self.proposals)
+        self._refresh_select_marks()
+
+    def action_deselect_all(self) -> None:
+        self._selected = [False] * len(self.proposals)
+        self._refresh_select_marks()
+
+    def action_deselect_suspect(self) -> None:
+        """⚠️ 의심 표시된 row 만 일괄 deselect — 자주 쓰는 단축."""
+        for i in self._suspect.keys():
+            if 0 <= i < len(self._selected):
+                self._selected[i] = False
+        self._refresh_select_marks()
 
 
 def _find_account_type(accounts: dict, account_id: str) -> str | None:
