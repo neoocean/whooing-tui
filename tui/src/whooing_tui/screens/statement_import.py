@@ -51,6 +51,86 @@ log = logging.getLogger(__name__)
 # 보존. log.exception 만 호출하면 stderr 로 가서 TUI 화면에 깜빡이고
 # 사라짐 — 사용자 보고: "에러메시지들이 지나가고 사라집니다".
 
+class _ImportSuccessModal(ModalScreen[None]):
+    """일괄 import *완전 성공* 결과 modal — 녹색 border + OK 버튼.
+
+    CL #52946+: 사용자 보고 — Ctrl+S 눌러도 아무 피드백 없음. import 완료
+    후 명시 popup 으로 "N 건 입력 완료" 안내 + OK 로 entries 화면 복귀.
+    """
+
+    DEFAULT_CSS = """
+    _ImportSuccessModal { align: center middle; }
+    #success-frame {
+        width: 95%;
+        max-width: 60;
+        min-width: 40;
+        height: auto;
+        padding: 1 2;
+        border: thick $success;
+        background: $surface;
+        layout: vertical;
+    }
+    #success-title {
+        height: 1;
+        content-align: center middle;
+        color: $success;
+    }
+    #success-summary {
+        height: auto;
+        padding: 1 0;
+    }
+    #success-extra {
+        height: auto;
+        padding: 0 0 1 0;
+        color: $text-muted;
+    }
+    #success-foot {
+        height: 3;
+        align: center middle;
+    }
+    #success-foot Button { min-width: 16; }
+    """
+
+    BINDINGS = [
+        Binding("escape", "close", "OK", show=True),
+        Binding("enter", "close", "", show=False),
+    ]
+
+    def __init__(
+        self,
+        *,
+        inserted: int,
+        summary_extra: str = "",
+    ) -> None:
+        super().__init__()
+        self._inserted = inserted
+        self._summary_extra = summary_extra
+
+    def compose(self) -> ComposeResult:
+        yield from self._compose_frame()
+
+    def _compose_frame(self):
+        with Vertical(id="success-frame"):
+            yield Static("[bold]✓ 입력 완료[/bold]", id="success-title")
+            yield Static(
+                f"[bold]{self._inserted}[/bold] 건의 거래가 후잉에 입력 됐습니다.",
+                id="success-summary",
+            )
+            if self._summary_extra:
+                yield Static(self._summary_extra, id="success-extra")
+            with Horizontal(id="success-foot"):
+                yield Button(
+                    "확인 (Enter/Esc)", id="success-ok", variant="success",
+                )
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "success-ok":
+            self.dismiss(None)
+
+    def action_close(self) -> None:
+        self.dismiss(None)
+
+
 class _ErrorReportModal(ModalScreen[None]):
     """일괄 import 실패 메시지를 보여주는 modal — 닫기 + log 파일 경로 안내.
 
@@ -698,8 +778,25 @@ class StatementImportScreen(ModalScreen[None]):
             )
             return
         skipped = len(self.proposals) - len(selected)
+        # CL #52946+: 사용자 보고 — Ctrl+S 누른 직후 아무 피드백 없음. 시작
+        # 즉시 status 갱신 + 매 row 후 진행률 갱신 + 종료 시 popup.
+        self._set_status(
+            f"⏳ 저장 시작 — 선택 {len(selected)} 건 처리 중…"
+        )
+        # 첫 줄 status 가 잠깐이라도 보이게 한 frame 양보.
+        await asyncio.sleep(0)
         # accounts-list 로 r_account type 결정 (보통 liabilities)
-        accounts = await self.client.list_accounts(self.section_id)
+        try:
+            accounts = await self.client.list_accounts(self.section_id)
+        except Exception as ex:
+            self._set_status(f"❌ accounts-list 실패: {ex}")
+            self._show_result_modal(
+                inserted=0, failed=0, total=len(selected),
+                error_lines=[
+                    f"accounts-list 실패 ({type(ex).__name__}): {ex}"
+                ],
+            )
+            return
         r_type = _find_account_type(accounts, self.r_account_id) or "liabilities"
         l_default = "x50"  # 식비 fallback
         l_type = "expenses"
@@ -713,6 +810,15 @@ class StatementImportScreen(ModalScreen[None]):
         # 메시지를 모아 import 끝난 뒤 modal + 파일로 보여준다.
         error_lines: list[str] = []
         for idx, r in enumerate(selected, 1):
+            # CL #52946+: 매 N row 마다 진행률 status 갱신 — 사용자에게
+            # 멈춰있지 않다는 시각 신호. 매 row 마다 set_status 호출은 redraw
+            # 비용 부담 → 매 5 또는 마지막 row.
+            if idx == 1 or idx % 5 == 0 or idx == len(selected):
+                self._set_status(
+                    f"⏳ 저장 중… {idx}/{len(selected)} · "
+                    f"성공 {inserted} 실패 {failed} · "
+                    f"{r.date} {r.merchant[:24]}"
+                )
             try:
                 # Direct REST call — TUI 가 직접 entries CRUD (DESIGN.md 정책)
                 resp = await self.client.create_entry(
@@ -762,27 +868,66 @@ class StatementImportScreen(ModalScreen[None]):
         skip_extra = (
             f" / 미선택 {skipped} 건 skip" if skipped else ""
         )
+        icon = "✓" if not error_lines else "⚠️"
         self._set_status(
-            f"입력 완료: {inserted} 성공 / {failed} 실패. "
+            f"{icon} 입력 완료: {inserted} 성공 / {failed} 실패. "
             f"({len(self.matched)} 건 ledger dedup{skip_extra})"
         )
 
-        # CL #52910+: 실패 있으면 modal + log 파일.
+        # CL #52946+: 결과 popup — 성공/실패 양쪽 모두. 사용자 OK 누르면
+        # 본 화면도 dismiss 해 EntriesScreen 으로 자동 복귀.
+        self._show_result_modal(
+            inserted=inserted,
+            failed=failed,
+            total=len(selected),
+            error_lines=error_lines,
+        )
+
+    def _show_result_modal(
+        self,
+        *,
+        inserted: int,
+        failed: int,
+        total: int,
+        error_lines: list[str],
+    ) -> None:
+        """결과 popup. OK 누르면 본 화면 dismiss → EntriesScreen 복귀.
+
+        성공만 / 실패만 / 부분 성공 — 세 경우 모두 같은 modal 재사용 (제목 /
+        border 색은 verdict 에 따라).
+        """
         if error_lines:
+            # 실패 (전부 또는 일부) — error report modal (빨간 border).
             log_path = self._write_error_log(error_lines)
             self._set_status(
-                f"입력 완료: {inserted} 성공 / {failed} 실패 — "
+                f"⚠️ 입력 완료: {inserted} 성공 / {failed} 실패 — "
                 f"자세한 내용: {log_path}"
             )
-            self.app.push_screen(_ErrorReportModal(
+            modal = _ErrorReportModal(
                 title=f"카드 명세서 import — {failed}건 실패",
                 summary=(
-                    f"선택된 {len(selected)} 건 중 {inserted} 건 성공, "
+                    f"선택된 {total} 건 중 {inserted} 건 성공, "
                     f"{failed} 건 실패. 아래는 실패 내역 (mouse 로 선택 가능)."
                 ),
                 body="\n".join(error_lines),
                 log_path=str(log_path),
-            ))
+            )
+        else:
+            # 전체 성공 — 녹색 border + 격려 메시지.
+            modal = _ImportSuccessModal(
+                inserted=inserted,
+                summary_extra=(
+                    f"명세서: {self.file_path}\n"
+                    f"카드: {self.r_account_id}"
+                ),
+            )
+
+        def _on_result_close(_result=None) -> None:
+            # 결과 modal 닫히면 본 import 화면도 자동 dismiss.
+            # 실패가 있더라도 사용자가 OK 를 명시했으므로 닫는다.
+            self.dismiss(None)
+
+        self.app.push_screen(modal, _on_result_close)
 
     def _write_error_log(self, lines: list[str]) -> Path:
         """import 실패 내역을 timestamp 가 붙은 임시 파일로 — 사용자가 cat

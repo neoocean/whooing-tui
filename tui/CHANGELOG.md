@@ -5,6 +5,68 @@
 > **0.17.x 이전** (CL #51119 ~ #1) 항목은 분량 정리 차원에서
 > [`CHANGELOG-archive-0.17.md`](./CHANGELOG-archive-0.17.md) 로 분리 보존.
 
+## CL #52946 — 0.75.1 — 명세서 import 진행 피드백 + 성공 modal (2026-05-19)
+
+배경 (사용자 보고): "이 단계에서 Ctrl+S 를 눌러도 아무 피드백이 없습니다.
+키가 눌렸는지, 저장 했는지, 저장에 실패했는지 등을 피드백 하고 저장했다면
+저장했다는 팝업 메시지를 보여주고 확인을 눌러 거래내역으로 돌아오게
+해주세요."
+
+### 원인
+
+`action_confirm` 이 background worker 라 결과는 status text 한 줄로만 표시,
+사용자가 못 알아챔. 성공 시엔 popup 도 없어 "아무 일도 안 일어났다" 처럼
+보임.
+
+### 수정
+
+`screens/statement_import.py`:
+
+**1. Ctrl+S 즉시 피드백** — worker 진입 직후:
+```
+⏳ 저장 시작 — 선택 69 건 처리 중…
+```
+`await asyncio.sleep(0)` 로 한 frame 양보 → status 가 잠깐이라도 보임.
+
+**2. 진행률 status** — 매 5 row + 첫/마지막 row 마다 갱신:
+```
+⏳ 저장 중… 25/69 · 성공 24 실패 1 · 20260420 카카오T일반택시_0
+```
+
+**3. accounts-list 실패 → 즉시 modal** — list_accounts 실패 시 종전엔
+loop 진입 못해 무한 침묵. 이제 결과 modal 로 노출.
+
+**4. `_ImportSuccessModal` 신규** — 전체 성공 시:
+- 녹색 border + "✓ 입력 완료" 제목 + "N 건의 거래가 후잉에 입력 됐습니다".
+- 명세서 path + 카드 id 안내.
+- "확인 (Enter/Esc)" 버튼 + Esc / Enter 키로 닫기.
+
+**5. 자동 dismiss** — 결과 modal (성공이든 실패든) 닫히면 본 import 화면도
+자동 dismiss → EntriesScreen 으로 복귀. 사용자가 한 번의 OK 로 모든 단계
+종료.
+
+### 결과 modal 분기
+
+| 케이스 | 모달 | 닫기 후 |
+|---|---|---|
+| 전체 성공 | `_ImportSuccessModal` (녹색) | EntriesScreen 복귀 |
+| 부분 / 전체 실패 | `_ErrorReportModal` (빨간) | EntriesScreen 복귀 |
+| accounts-list 실패 (loop 미진입) | `_ErrorReportModal` (단일 에러 row) | EntriesScreen 복귀 |
+
+### 테스트 (+3)
+
+- `test_import_success_modal_class_exists` — `ModalScreen` 상속 검증.
+- `test_import_success_modal_stores_inserted_count` — 생성자 인자 보관.
+- `test_import_success_modal_has_close_bindings` — Esc / Enter close 매핑.
+
+총 1061 → 1064 (+3, 0 regression).
+
+### Backward compat
+
+- `action_confirm` 시그니처 동일.
+- `_ErrorReportModal` 그대로 유지 — 실패 case 흐름 동일.
+- StatementImportScreen 의 dismiss(None) 은 종전 Esc 동작과 동일.
+
 ## CL #52940 — 0.75.0 — 하나카드 명세서 파서 재작성 (테이블 구조 기반) (2026-05-19)
 
 배경 (사용자 보고): 하나카드 HTML 명세서 (`hanacard_20260527.html`) import

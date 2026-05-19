@@ -413,3 +413,29 @@ def test_statement_import_confirm_bindings_priority_true():
             assert b.priority is True, (
                 f"confirm key {b.key!r} priority=False — DataTable 가 가로채면 안 됨"
             )
+
+
+# ---- CL #52946+ : 진행 status + 결과 modal --------------------------
+
+
+def test_import_success_modal_class_exists():
+    """_ImportSuccessModal 이 ModalScreen 으로 정의."""
+    from textual.screen import ModalScreen
+    from whooing_tui.screens.statement_import import _ImportSuccessModal
+    assert issubclass(_ImportSuccessModal, ModalScreen)
+
+
+def test_import_success_modal_stores_inserted_count():
+    """생성자 인자 — _inserted attribute 보관 + summary 안에 숫자 표시."""
+    from whooing_tui.screens.statement_import import _ImportSuccessModal
+    m = _ImportSuccessModal(inserted=12, summary_extra="명세서: x.html")
+    assert m._inserted == 12
+    assert m._summary_extra == "명세서: x.html"
+
+
+def test_import_success_modal_has_close_bindings():
+    """Esc / Enter 둘 다 close 액션."""
+    from whooing_tui.screens.statement_import import _ImportSuccessModal
+    actions = {b.key: b.action for b in _ImportSuccessModal.BINDINGS}
+    assert actions.get("escape") == "close"
+    assert actions.get("enter") == "close"
