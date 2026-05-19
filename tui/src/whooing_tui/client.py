@@ -1111,6 +1111,32 @@ class CachedWhooingClient:
     async def call_official_tool(self, name: str, arguments: dict[str, Any]) -> Any:
         return await self._inner.call_official_tool(name, arguments)
 
+    # CL #52896+: 매월입력 / 예산 / 목표 mutation 메서드 pass-through. 누락
+    # 시 `'CachedWhooingClient' object has no attribute 'list_monthly'` 등
+    # AttributeError — 사용자 보고 (MonthlyEntriesScreen). 같은 패턴의 회귀
+    # (call_official_tool 누락 / CL #52765) 와 동일 원인 — Cached wrapper
+    # 가 새 endpoint 마다 명시 노출 필요.
+    async def list_monthly(self, **kwargs) -> list[dict[str, Any]]:
+        return await self._inner.list_monthly(**kwargs)
+
+    async def create_monthly(self, **kwargs) -> dict[str, Any]:
+        return await self._inner.create_monthly(**kwargs)
+
+    async def delete_monthly(self, **kwargs) -> dict[str, Any]:
+        return await self._inner.delete_monthly(**kwargs)
+
+    async def set_budget(self, **kwargs) -> Any:
+        return await self._inner.set_budget(**kwargs)
+
+    async def delete_budget(self, **kwargs) -> Any:
+        return await self._inner.delete_budget(**kwargs)
+
+    async def set_budget_goal(self, **kwargs) -> Any:
+        return await self._inner.set_budget_goal(**kwargs)
+
+    async def set_goal(self, **kwargs) -> Any:
+        return await self._inner.set_goal(**kwargs)
+
     # 사용자가 'r' 누르면 호출 — 화면이 직접 강제 재로드 가능.
     def invalidate_section(self, section_id: str) -> None:
         self._store.invalidate_accounts(section_id)

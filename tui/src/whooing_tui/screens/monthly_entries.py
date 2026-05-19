@@ -1,4 +1,4 @@
-"""MonthlyEntriesScreen — 매월 입력 (정기/반복) 거래 list + 추가/삭제.
+﻿"""MonthlyEntriesScreen — 매월 입력 (정기/반복) 거래 list + 추가/삭제.
 
 CL #51152+. 후잉의 "매월입력 거래" 기능 — 매달 같은 날 같은 패턴 (월세 /
 통신비 / 보험 등) 의 자동 후보. 사용자가 등록해 두면 후잉이 그 날짜에 입력
@@ -163,8 +163,12 @@ from whooing_tui.widgets import ConfirmModal as _ConfirmModal  # 호환 alias.
 # ---- Main screen --------------------------------------------------------
 
 
-class MonthlyEntriesScreen(MenuBarMixin, Screen):
-    """매월 입력 거래 list + 추가/삭제."""
+class MonthlyEntriesScreen(MenuBarMixin, ModalScreen[None]):
+    """매월 입력 거래 list + 추가/삭제.
+
+    CL #52896+: 사용자 요청 — 전체 화면 Screen → ModalScreen 으로 변경.
+    뒷 화면 (EntriesScreen) 이 살짝 보이는 popup 형태.
+    """
 
     BINDINGS = [
         *menubar_bindings(),
@@ -176,14 +180,37 @@ class MonthlyEntriesScreen(MenuBarMixin, Screen):
     ]
 
     DEFAULT_CSS = """
-    MonthlyEntriesScreen { layout: vertical; }
+    MonthlyEntriesScreen { align: center middle; }
+    #m_frame {
+        width: 95%;
+        max-width: 140;
+        min-width: 50;
+        height: 90%;
+        max-height: 45;
+        min-height: 16;
+        padding: 1 2;
+        border: thick $accent;
+        background: $surface;
+        layout: vertical;
+    }
+    #m_title {
+        height: 1;
+        content-align: center middle;
+        color: $accent;
+    }
     #m_status {
         height: auto;
-        padding: 1;
-        background: $boost;
+        padding: 1 0;
+        background: transparent;
     }
     #m_status.error { color: $error; }
     #m_status.warn  { color: $warning; }
+    #m_table { height: 1fr; }
+    #m_foot {
+        height: 1;
+        content-align: center middle;
+        color: $text-muted;
+    }
     """
 
     @staticmethod
@@ -215,13 +242,17 @@ class MonthlyEntriesScreen(MenuBarMixin, Screen):
         self._rows: list[dict[str, Any]] = []
 
     def compose(self) -> ComposeResult:
-        yield Header()
-        yield MenuBar(self._build_menus(), id="monthly-menubar")
-        yield Static("", id="m_status")
-        yield Vertical(
-            DataTable(id="m_table", zebra_stripes=True, cursor_type="row"),
-        )
-        yield Footer()
+        # CL #52896+: ModalScreen 으로 — 가운데 정렬 #m_frame 안에 menubar
+        # / 상태 / 표 / footer hint. Header / Footer 는 modal 안에서 무의미.
+        with Vertical(id="m_frame"):
+            yield Static("[bold]매월 입력 거래[/bold]", id="m_title")
+            yield MenuBar(self._build_menus(), id="monthly-menubar")
+            yield Static("", id="m_status")
+            yield DataTable(id="m_table", zebra_stripes=True, cursor_type="row")
+            yield Static(
+                "n 새 매월거래 · d 삭제 · r 재로드 · Esc/q 닫기",
+                id="m_foot",
+            )
 
     def on_mount(self) -> None:
         table = self.query_one("#m_table", DataTable)
@@ -231,7 +262,8 @@ class MonthlyEntriesScreen(MenuBarMixin, Screen):
     # ---- actions ---------------------------------------------------------
 
     def action_back(self) -> None:
-        self.app.pop_screen()
+        # CL #52896+: ModalScreen 의 표준 종료 path — dismiss.
+        self.dismiss(None)
 
     def action_refresh(self) -> None:
         self._refresh_worker()

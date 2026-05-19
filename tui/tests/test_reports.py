@@ -666,3 +666,25 @@ async def test_reports_screen_auto_fetches_on_highlight_change():
             timeout=3.0,
         )
         assert fake.last_mcp_call["name"] == "report-get"
+
+
+# ---- CL #52896+ : 같은 회귀 패턴 — 매월/예산/목표 mutation pass-through ---
+
+
+def test_cached_client_has_monthly_budget_goal_methods():
+    """CL #52896: CachedWhooingClient 가 list_monthly / create_monthly /
+    delete_monthly / set_budget / delete_budget / set_budget_goal / set_goal
+    모두 wrap. 사용자 보고 ("매월입력 화면이 동작 안 함") 의 회귀 가드.
+
+    같은 종류의 회귀: WhooingClient 에 endpoint 추가 후 Cached wrapper 누락.
+    """
+    from whooing_tui.client import CachedWhooingClient
+    for m in (
+        "list_monthly", "create_monthly", "delete_monthly",
+        "set_budget", "delete_budget",
+        "set_budget_goal", "set_goal",
+    ):
+        assert hasattr(CachedWhooingClient, m), (
+            f"CachedWhooingClient 가 {m} 을 wrap 안 함 — "
+            f"매월입력 / 예산 / 목표 화면 회귀"
+        )

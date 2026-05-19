@@ -5,6 +5,64 @@
 > **0.17.x 이전** (CL #51119 ~ #1) 항목은 분량 정리 차원에서
 > [`CHANGELOG-archive-0.17.md`](./CHANGELOG-archive-0.17.md) 로 분리 보존.
 
+## CL #52896 — 0.71.3 — 매월입력관리 회귀 수정 + 팝업화 (2026-05-19)
+
+배경 (사용자 보고 두 건):
+1. 매월입력 화면이 동작 안 함:
+   ```
+   매월거래 조회 실패: 'CachedWhooingClient' object has no attribute 'list_monthly'
+   ```
+2. 매월입력관리 화면을 팝업 형태로.
+
+### 원인 (1) — Cached wrapper 누락
+
+`CachedWhooingClient` 는 모든 endpoint 를 명시 pass-through 로 노출하는
+패턴. 종전 CL #52765 (call_official_tool 누락) 와 *동일한 회귀*:
+`WhooingClient` 에 새 endpoint 추가 시 Cached wrapper 도 함께 추가해야
+하는데, monthly / budget mutation 군이 누락돼있었음.
+
+### 수정 — 7개 pass-through 추가
+
+`tui/src/whooing_tui/client.py` 의 `CachedWhooingClient` 에:
+- `list_monthly`, `create_monthly`, `delete_monthly` (매월입력).
+- `set_budget`, `delete_budget` (예산 입력/삭제).
+- `set_budget_goal`, `set_goal` (장기/월별 목표).
+
+모두 `_inner` 로 단순 delegation — 캐시 invalidation 은 caller (mutation
+후 명시 `invalidate_section`) 책임 그대로.
+
+### 수정 (2) — MonthlyEntriesScreen 팝업화
+
+`class MonthlyEntriesScreen(MenuBarMixin, Screen)` →
+`class MonthlyEntriesScreen(MenuBarMixin, ModalScreen[None])`.
+
+CSS:
+- `align: center middle` + `#m_frame` (width 95%/max 140, height 90%/
+  max 45) — 가운데 정렬 popup.
+- border `thick $accent`, background `$surface`.
+
+`compose` 가 Vertical `#m_frame` 안에 제목 / MenuBar / 상태 / DataTable
+/ footer hint. Header / Footer 위젯은 modal 안에서 무의미하므로 제거
+(import 는 그대로).
+
+`action_back` 이 `pop_screen()` → `dismiss(None)` 으로 — modal 표준
+종료 path.
+
+### 회귀 가드 (+1)
+
+`tui/tests/test_reports.py::test_cached_client_has_monthly_budget_goal_methods`
+— 7 메서드 모두 `hasattr` 검증. 같은 회귀가 또 발생하면 (`WhooingClient`
+에만 endpoint 추가하고 Cached 누락) 즉시 fail.
+
+총 1015 → 1016 (+1, 0 regression).
+
+### 영향
+
+- 매월입력 화면 (`screens/monthly_entries.py`), 예산 편집 (`budget_edit.py`),
+  목표 편집 (`goal_edit.py`) 이 *production default* CachedWhooingClient
+  하에서 정상 동작 — 종전 Cached 우회 path (raw WhooingClient 직접 주입)
+  의 일부 dev/test 시나리오에서만 동작하던 회귀 해소.
+
 ## CL #52859 — 0.71.2 — 필터 5년 확장 + AccountEditDialog int crash 수정 (2026-05-19)
 
 본 CL 은 사용자 보고 두 건을 동시 처리.
