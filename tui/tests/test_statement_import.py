@@ -313,3 +313,75 @@ def test_suspect_skips_when_amount_exact_and_within_strict_window():
     # 안 맞으므로 의심 X.
     suspect = _compute_suspect_map(rows, ledger)
     assert 0 not in suspect
+
+
+# ---- CL #52917+ : dedup 강화 (merchant 유사, within-batch) ---------------
+
+
+def test_dedup_within_batch_dedup_same_normalized():
+    """같은 명세서 안에서 (date + amount + 정규화 merchant) 동일 row 가 두
+    번 추출되면 첫 1건만 proposals, 나머지는 previously_imported.
+    """
+    rows = [
+        CSVRow(date="20260520", merchant="스타벅스 강남점", amount=4500, raw={}),
+        # 정규화 후 동일 (공백 차이만).
+        CSVRow(date="20260520", merchant="스타벅스강남점", amount=4500, raw={}),
+        # 다른 거래 — 같은 가맹점이지만 다른 amount.
+        CSVRow(date="20260520", merchant="스타벅스 강남점", amount=5000, raw={}),
+    ]
+    matched, prev, new = _dedup(rows, ledger=[], check_import_log=False)
+    assert len(new) == 2  # 첫 4500 + 다른 amount 5000.
+    assert len(prev) == 1  # 두 번째 4500 (정규화 동일) → prev 로.
+    assert len(matched) == 0
+
+
+def test_dedup_ledger_match_prefers_merchant_similar():
+    """ledger 에 같은 (date, amount) 후보가 여러 개일 때 *merchant 유사*
+    한 entry 를 우선 채택.
+    """
+    rows = [
+        CSVRow(date="20260520", merchant="스타벅스 강남점", amount=4500, raw={}),
+    ]
+    ledger = [
+        # 첫 후보: 같은 금액·날짜지만 다른 가맹점.
+        {"entry_id": "e_other", "entry_date": "20260520", "money": 4500,
+         "l_account_id": "x20", "r_account_id": "x11", "item": "버거킹"},
+        # 두 번째: 같은 금액·날짜 + 가맹점도 유사.
+        {"entry_id": "e_starbucks", "entry_date": "20260520", "money": 4500,
+         "l_account_id": "x20", "r_account_id": "x11", "item": "스타벅스"},
+    ]
+    matched, prev, new = _dedup(rows, ledger, check_import_log=False)
+    # merchant 유사 ledger entry 가 채택돼야.
+    assert len(matched) == 1
+    assert matched[0]["ledger"]["entry_id"] == "e_starbucks"
+    assert len(new) == 0
+
+
+def test_dedup_ledger_first_candidate_when_no_merchant_match():
+    """ledger 후보 중 merchant 유사 없으면 기존 동작 (첫 후보 채택)."""
+    rows = [
+        CSVRow(date="20260520", merchant="네이버페이", amount=4500, raw={}),
+    ]
+    ledger = [
+        {"entry_id": "e1", "entry_date": "20260520", "money": 4500,
+         "l_account_id": "x20", "r_account_id": "x11", "item": "버거킹"},
+    ]
+    matched, prev, new = _dedup(rows, ledger, check_import_log=False)
+    assert len(matched) == 1
+    assert matched[0]["ledger"]["entry_id"] == "e1"
+
+
+def test_suspect_merchant_similar_amount_off():
+    """merchant 유사 + 금액 ±10% + 날짜 ±7일 → 의심."""
+    from whooing_tui.screens.statement_import import _compute_suspect_map
+    rows = [
+        CSVRow(date="20260520", merchant="스타벅스 강남점", amount=5000, raw={}),
+    ]
+    ledger = [
+        # 같은 가맹점 표기 변형 + 5% 차이 + 3일 차.
+        {"entry_id": "e1", "entry_date": "20260523", "money": 5250,
+         "l_account_id": "x20", "r_account_id": "x11", "item": "스타벅스"},
+    ]
+    suspect = _compute_suspect_map(rows, ledger)
+    assert 0 in suspect
+    assert "가맹점 유사" in suspect[0]

@@ -1,4 +1,4 @@
-"""SQLite schema + 연결 helper — annotations / hashtags / entry_attachments /
+﻿"""SQLite schema + 연결 helper — annotations / hashtags / entry_attachments /
 statement_import_log.
 
 소유 정책 (DESIGN §4):
@@ -852,6 +852,38 @@ def find_imports_by_natural_key(
         f"AND status IN ({placeholders})"
     )
     params: list[Any] = [entry_date, int(total_amount), merchant, *statuses]
+    if section_id is not None:
+        sql += " AND section_id = ?"
+        params.append(section_id)
+    sql += " ORDER BY imported_at"
+    cur = conn.execute(sql, params)
+    return [dict(r) for r in cur.fetchall()]
+
+
+def find_imports_by_date_amount(
+    conn: sqlite3.Connection,
+    *,
+    entry_date: str,
+    total_amount: int,
+    section_id: str | None = None,
+    statuses: tuple[str, ...] = ("inserted", "matched_existing"),
+) -> list[dict[str, Any]]:
+    """CL #52917+: 자연키의 *완화* 형 — merchant 제외 (date + amount).
+
+    caller 가 결과의 `merchant` 컬럼을 자체 normalize / 유사도 비교로 한 번
+    더 거른다 (`whooing_core.dupes.merchant_similar`). 종전 `find_imports_
+    by_natural_key` 가 merchant 정확 매칭이라 표기 변경 (예: "스타벅스" ↔
+    "스타벅스강남점") 을 못 잡던 한계 해소.
+    """
+    if not statuses:
+        return []
+    placeholders = ",".join("?" * len(statuses))
+    sql = (
+        "SELECT * FROM statement_import_log "
+        f"WHERE entry_date = ? AND total_amount = ? "
+        f"AND status IN ({placeholders})"
+    )
+    params: list[Any] = [entry_date, int(total_amount), *statuses]
     if section_id is not None:
         sql += " AND section_id = ?"
         params.append(section_id)

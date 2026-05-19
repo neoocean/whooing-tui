@@ -161,3 +161,38 @@ def test_dupe_report_is_frozen_dataclass():
     except Exception:
         raised = True
     assert raised
+
+
+# ---- CL #52917+ : public normalize_text / merchant_similar -------------
+
+
+def test_normalize_text_strips_whitespace_and_punct():
+    from whooing_core.dupes import normalize_text
+    assert normalize_text("스타벅스 강남점") == normalize_text("스타벅스강남점")
+    assert normalize_text("GS25-방배점") == normalize_text("GS25 방배점")
+
+
+def test_normalize_text_handles_none():
+    from whooing_core.dupes import normalize_text
+    assert normalize_text(None) == ""
+
+
+def test_merchant_similar_substring_match():
+    from whooing_core.dupes import merchant_similar
+    assert merchant_similar("스타벅스", "스타벅스 강남점") is True
+    assert merchant_similar("스타벅스 강남점", "스타벅스") is True
+    assert merchant_similar("스타벅스강남점", "스타벅스 강남점") is True
+
+
+def test_merchant_similar_unrelated():
+    from whooing_core.dupes import merchant_similar
+    assert merchant_similar("스타벅스", "버거킹") is False
+
+
+def test_merchant_similar_empty_or_short():
+    from whooing_core.dupes import merchant_similar
+    assert merchant_similar("", "스타벅스") is False
+    assert merchant_similar("스타벅스", "") is False
+    # 정규화 후 < 3자: 정확 일치만.
+    assert merchant_similar("GS", "GS25") is False
+    assert merchant_similar("AB", "AB") is True

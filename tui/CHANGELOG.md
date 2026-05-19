@@ -5,6 +5,86 @@
 > **0.17.x 이전** (CL #51119 ~ #1) 항목은 분량 정리 차원에서
 > [`CHANGELOG-archive-0.17.md`](./CHANGELOG-archive-0.17.md) 로 분리 보존.
 
+## CL #52917 — 0.73.1 — 일괄 import dedup 강화 (merchant 유사 / 명세서 내 중복) (2026-05-19)
+
+배경 (사용자 요청): "파일 import 를 통한 벌크 입력 때 dedup 기능을 강화해
+주세요. 이전에 언급된 한계들을 완화할 수 있는 방법들을 도입해주세요."
+
+이전 답변에서 명시한 한계:
+1. **Merchant 이름 변형** — 자연키 매칭이 merchant 정확 일치라 "스타벅스" ↔
+   "스타벅스 강남점" 같은 표기 변형 미감지.
+2. **좌·우 계정 반대 / 환불 부호 반대** — 벌크 import 컨텍스트에서 의미
+   적음 (account_id 고정).
+3. **여러 명세서 간 dedup** — 이미 import_log 가 처리.
+
+본 CL 은 #1 + 새로 발견된 #4 (같은 명세서 안 row 중복) 를 강화.
+
+### 새 helper — `whooing_core.dupes`
+
+- `normalize_text(s)` — 종전 private `_norm_text` 의 public alias. NFKC +
+  casefold + 공백·구두점 제거.
+- `merchant_similar(a, b)` — 정규화 후 한 쪽이 다른 쪽을 포함하면 True.
+  너무 짧은 (정규화 후 3자 미만) 문자열은 정확 일치만 인정 (false
+  positive 방지).
+
+### 새 helper — `whooing_core.db.find_imports_by_date_amount`
+
+종전 `find_imports_by_natural_key` (merchant 정확 일치) 의 *완화* 형 —
+`(date, amount)` 만으로 후보 가져옴. caller 가 merchant 정규화 비교로
+한 번 더 필터.
+
+### `_dedup` 강화 (4 단계)
+
+**1. import_log strict** (기존) — `(date, amount, merchant)` 정확 일치.
+
+**2. import_log fuzzy** (CL #52917+) — 1 단계 못 잡은 row 에 대해
+`find_imports_by_date_amount` 로 후보 가져와 `merchant_similar` 통과 row
+도 `previously_imported` 로. "스타벅스" ↔ "스타벅스 강남점" 케이스 잡힘.
+
+**3. ledger 매칭** (개선) — 종전엔 `(date±2, amount 정확)` 의 첫 후보를
+잡았으나, 같은 (date, amount) 의 ledger entry 가 여러 개면 잘못된 entry
+와 묶일 수 있었음. 이제 후보 모두 모은 뒤 `merchant_similar` 한 entry 를
+*우선* 채택 (tiebreaker).
+
+**4. 명세서 내 중복** (신규) — strict / fuzzy / ledger 모두 통과한 proposal
+중 `(date, amount, normalize_text(merchant))` 동일 row 가 2회 이상이면 첫
+1건만 proposals, 나머지는 `previously_imported`. HTML 명세서 다중 페이지
+/ 어댑터 버그로 같은 거래가 두 번 추출되는 경우 보호.
+
+### `_compute_suspect_map` 확장
+
+기존 의심 조건 2개 (같은 금액 + 3~7일 차 / 금액 ±1% + 날짜 ±2일) 에 추가:
+
+- **3. 가맹점 유사 + 금액 ±10% + 날짜 ±7일** — 같은 가맹점에서 정기 결제 /
+  환불 후 재결제 / 가격 변동 등으로 같은 거래의 변형일 가능성. 가장 약한
+  신호이므로 사용자에게 의심 표시만, 자동 skip X.
+
+### UI 영향
+
+기존 UI 그대로 — Space 토글 / Ctrl+A/D/U 단축은 CL #52912 그대로. 다만:
+- "(이미 import 됨 — skip)" 카운트가 늘어남 — fuzzy 매칭으로 더 많이 잡힘.
+- "⚠️ 의심" 표시가 늘어남 — merchant 유사 케이스도 함께.
+
+### 테스트 (+9 신규)
+
+`core/tests/test_dupes.py`:
+- `normalize_text` 정규화 일관성 + None 처리.
+- `merchant_similar` substring 매칭 / 무관 / 빈문자 / 너무 짧음.
+
+`tui/tests/test_statement_import.py`:
+- `dedup_within_batch_dedup_same_normalized` — 같은 명세서 안 중복.
+- `dedup_ledger_match_prefers_merchant_similar` — ledger tiebreaker.
+- `dedup_ledger_first_candidate_when_no_merchant_match` — fallback 동작.
+- `suspect_merchant_similar_amount_off` — merchant 유사 의심.
+
+총 1029 → 1038 (+9, 0 regression).
+
+### Backward compat
+
+- `find_imports_by_natural_key` API 변경 없음 (strict pass 그대로 사용).
+- `_dedup` 시그니처 + 반환 형식 동일 — caller 영향 X.
+- `_compute_suspect_map` 반환은 dict 으로 추가 항목만, 키 의미 동일.
+
 ## CL #52912 — 0.73.0 — 명세서 import: 의심 매칭 표시 + Space 선택/해제 (2026-05-19)
 
 배경 (사용자 요청 두 항목):

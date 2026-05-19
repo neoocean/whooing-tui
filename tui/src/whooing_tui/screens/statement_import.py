@@ -244,14 +244,19 @@ def _dedup(
         except (ValueError, TypeError):
             return None
 
-    # 1) previously_imported — import_log 자연키 매칭.
+    # 1) previously_imported — import_log 매칭.
+    # CL #52917+: 종전 strict natural key (merchant 정확 일치) + 새 fuzzy
+    # pass (date + amount 만 매칭 + merchant 정규화 / 부분 일치 확인).
+    # "스타벅스" ↔ "스타벅스 강남점" 같은 표기 변형도 dup 으로 잡힌다.
     previously_imported: list[CSVRow] = []
     new_after_log: list[CSVRow] = []
     if check_import_log:
         try:
+            from whooing_core.dupes import merchant_similar
             from whooing_tui import data as tui_data
             with tui_data.open_ro() as conn:
                 for r in rows:
+                    # Strict 먼저 — 정확 일치면 즉시 dup.
                     hits = core_db.find_imports_by_natural_key(
                         conn,
                         entry_date=r.date,
@@ -259,6 +264,19 @@ def _dedup(
                         merchant=r.merchant,
                         section_id=section_id,
                     )
+                    if not hits:
+                        # Fuzzy — (date, amount) 만으로 후보 가져와 merchant
+                        # 정규화 / 부분 일치 검사.
+                        candidates = core_db.find_imports_by_date_amount(
+                            conn,
+                            entry_date=r.date,
+                            total_amount=r.amount,
+                            section_id=section_id,
+                        )
+                        hits = [
+                            c for c in candidates
+                            if merchant_similar(r.merchant, c.get("merchant") or "")
+                        ]
                     if hits:
                         previously_imported.append(r)
                     else:
@@ -270,6 +288,10 @@ def _dedup(
         new_after_log = list(rows)
 
     # 2) matched_existing — ledger 기반.
+    # CL #52917+: 후보가 여러 개일 때 *merchant 유사* 한 ledger entry 를 우선
+    # 채택 (tiebreaker). 종전엔 첫 매칭 ledger entry 를 그대로 잡아 같은
+    # 날 같은 금액의 다른 거래에 잘못 묶일 수 있었음.
+    from whooing_core.dupes import merchant_similar
     matched: list[dict[str, Any]] = []
     new: list[CSVRow] = []
     used_ids: set[str] = set()
@@ -278,7 +300,8 @@ def _dedup(
         if not rdate:
             new.append(r)
             continue
-        match = None
+        # 1차 통과: date / amount 조건 만족하는 후보 모두 수집.
+        candidates: list[dict[str, Any]] = []
         for e in ledger:
             eid = str(e.get("entry_id"))
             if eid in used_ids:
@@ -294,13 +317,37 @@ def _dedup(
                 continue
             if emoney != r.amount:
                 continue
-            match = e
-            used_ids.add(eid)
-            break
+            candidates.append(e)
+        # 2차 우선순위: merchant 유사한 ledger entry > 그 외 첫 후보.
+        match = None
+        for e in candidates:
+            if merchant_similar(r.merchant, e.get("item") or ""):
+                match = e
+                break
+        if match is None and candidates:
+            match = candidates[0]
         if match:
             matched.append({"row": r, "ledger": match})
+            used_ids.add(str(match.get("entry_id")))
         else:
             new.append(r)
+
+    # 3) within-batch dedup — 같은 명세서 안에서 (date + amount + 정규화
+    # merchant) 동일한 row 가 2회 이상이면 첫 1건만 남기고 나머지는
+    # previously_imported 로 분류.
+    # CL #52917+: HTML 명세서가 다중 페이지로 같은 거래를 두 번 리포트하는
+    # 케이스, 또는 어댑터의 버그로 같은 row 가 중복 추출되는 케이스 방어.
+    from whooing_core.dupes import normalize_text
+    seen: set[tuple[str, int, str]] = set()
+    dedup_new: list[CSVRow] = []
+    for r in new:
+        key = (r.date, r.amount, normalize_text(r.merchant))
+        if key in seen:
+            previously_imported.append(r)
+        else:
+            seen.add(key)
+            dedup_new.append(r)
+    new = dedup_new
     return matched, previously_imported, new
 
 
@@ -326,6 +373,10 @@ def _compute_suspect_map(
             return datetime.strptime(d, "%Y%m%d")
         except (ValueError, TypeError):
             return None
+
+    # CL #52917+: 같은 가맹점 (merchant 유사) + 가까운 날짜의 ledger 매칭도
+    # 의심 신호로 — 금액이 약간 달라도 같은 거래일 가능성.
+    from whooing_core.dupes import merchant_similar
 
     suspect: dict[int, str] = {}
     for idx, r in enumerate(proposals):
@@ -356,6 +407,19 @@ def _compute_suspect_map(
             ):
                 suspect[idx] = (
                     f"금액 유사 ({emoney:,}) {day_diff}일 차 ledger {eid}"
+                )
+                break
+            # 3) CL #52917+: merchant 유사 + 날짜 ±7일 + 금액 ±10%
+            #    (같은 가맹점 정기 결제 / 가맹점 환불 후 재결제 등).
+            if (
+                day_diff <= 7 and r.amount > 0
+                and abs(emoney - r.amount) / r.amount <= 0.10
+                and emoney != r.amount
+                and merchant_similar(r.merchant, e.get("item") or "")
+            ):
+                suspect[idx] = (
+                    f"가맹점 유사 ({e.get('item') or '?'} / {emoney:,}) "
+                    f"{day_diff}일 차 ledger {eid}"
                 )
                 break
     return suspect

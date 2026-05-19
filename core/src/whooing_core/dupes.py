@@ -96,6 +96,29 @@ def _norm_text(s: Any) -> str:
     return t
 
 
+# CL #52917+: public alias — caller 가 직접 정규화 비교에 사용 가능.
+normalize_text = _norm_text
+
+
+def merchant_similar(a: str, b: str) -> bool:
+    """두 가맹점 문자열이 정규화 후 *유사* 한지 — substring 매칭.
+
+    "스타벅스" 와 "스타벅스 강남점" 같이 한 쪽이 다른 쪽을 포함하면 True.
+    너무 짧은 (정규화 후 3자 미만) 문자열은 false positive 위험으로 정확
+    일치만 인정.
+
+    CL #52917+ — 카드 명세서 import 의 fuzzy dedup 용. 정규화는 NFKC +
+    casefold + 공백 / 구두점 제거 → 같은 가맹점이 명세서마다 다른 표기로
+    들어와도 매칭.
+    """
+    na, nb = _norm_text(a), _norm_text(b)
+    if not na or not nb:
+        return False
+    if len(na) < 3 or len(nb) < 3:
+        return na == nb
+    return na in nb or nb in na
+
+
 def _date(v: Any) -> str:
     """entry_date — YYYYMMDD 문자열로. 다른 표기는 그대로 (비교만)."""
     if v is None:
@@ -283,3 +306,10 @@ VERDICT_LABELS_KO: dict[Verdict, str] = {
     "possible": "중복 가능성 있음",
     "different": "중복 아님",
 }
+
+
+__all__ = [
+    "DupeReport", "Verdict", "VERDICT_LABELS_KO",
+    "evaluate_duplicates", "is_duplicate",
+    "normalize_text", "merchant_similar",
+]
