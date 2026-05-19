@@ -344,6 +344,12 @@ class WhooingClient:
 
         money 는 음수도 허용하지 않는다 (후잉은 차변/대변으로 음양을 표현).
         호출자가 0/음수 검증을 책임진다.
+
+        CL #52911+ (사용자 보고): 카드 명세서 일괄 import 16/16 모두
+        "`section_id` parameter is required." 로 실패. 후잉 server 가 POST
+        의 JSON body 의 section_id 를 인식하지 못함. *query string* 으로도
+        보내야 받아준다 (`/sections/{id}/entries.json` URL syntax 대안).
+        body 에도 그대로 두어 향후 API 변경에 안전 — 양쪽 send 정책.
         """
         body: dict[str, Any] = {
             "section_id": section_id,
@@ -359,7 +365,13 @@ class WhooingClient:
             body["memo"] = memo
         if entry_date:
             body["entry_date"] = entry_date
-        results = await self._post(self._ENTRIES_PATH, json_body=body)
+        # CL #52911+: section_id 를 query 로도 — 단일 entry / 일괄 import
+        # 양쪽이 같은 path 사용. _request 직접 호출 (params + json_body).
+        results = await self._request(
+            "POST", self._ENTRIES_PATH,
+            params={"section_id": section_id},
+            json_body=body,
+        )
         return _coerce_dict(results)
 
     async def update_entry(
@@ -396,7 +408,13 @@ class WhooingClient:
                 body[k] = v
         if money is not None:
             body["money"] = int(money)
-        results = await self._put(self._entry_path(entry_id), json_body=body)
+        # CL #52911+: create_entry 와 동일 — section_id 를 query 로도 보내
+        # 후잉 server 가 어느 쪽이든 인식하게.
+        results = await self._request(
+            "PUT", self._entry_path(entry_id),
+            params={"section_id": section_id},
+            json_body=body,
+        )
         return _coerce_dict(results)
 
     async def delete_entry(self, *, section_id: str, entry_id: str) -> dict[str, Any]:

@@ -42,9 +42,13 @@ async def test_create_entry_posts_expected_body():
     )
     assert out.get("entry_id") == "e_new_001"
     assert route.call_count == 1
-    sent = route.calls[0].request.read()
+    req = route.calls[0].request
+    # CL #52911+: section_id 가 query 로도 전송돼야 — 후잉 server 의 일괄
+    # import 회귀 (`section_id parameter is required`) 가드.
+    assert b"section_id=s1" in req.url.query
+    # body 에는 모든 필드 (section_id 포함) 가 그대로.
     import json as _json
-    body = _json.loads(sent)
+    body = _json.loads(req.read())
     assert body == {
         "section_id": "s1",
         "l_account": "expenses", "l_account_id": "x20",
@@ -85,8 +89,11 @@ async def test_update_entry_puts_only_changed_fields():
         section_id="s1", entry_id="e123",
         money=99000, item="수정된 적요",
     )
+    req = route.calls[0].request
+    # CL #52911+: section_id 가 query param 으로도 전송.
+    assert b"section_id=s1" in req.url.query
     import json as _json
-    body = _json.loads(route.calls[0].request.read())
+    body = _json.loads(req.read())
     assert body == {"section_id": "s1", "money": 99000, "item": "수정된 적요"}
     # 미지정 필드는 절대 포함되어선 안 됨 (None 으로 덮어쓰기 방지)
     for k in ("l_account", "r_account_id", "memo", "entry_date"):

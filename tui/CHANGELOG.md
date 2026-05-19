@@ -5,6 +5,65 @@
 > **0.17.x 이전** (CL #51119 ~ #1) 항목은 분량 정리 차원에서
 > [`CHANGELOG-archive-0.17.md`](./CHANGELOG-archive-0.17.md) 로 분리 보존.
 
+## CL #52911 — 0.72.3 — create/update_entry: section_id 를 query 로도 전송 (2026-05-19)
+
+배경 (사용자 보고 + 직전 CL 의 에러 모달 결과): 카드 명세서 일괄 import
+16건 *모두* 동일 에러로 실패:
+
+```
+[1/16] 20260513 ... → ToolError: `section_id` parameter is required.
+[2/16] ... → ToolError: `section_id` parameter is required.
+... (16건 모두 같은 메시지)
+```
+
+### 원인
+
+후잉 server 가 POST `/entries.json` 의 *JSON body* 안의 `section_id` 를
+인식하지 못한다. action_confirm 직전 단계의 `list_accounts(section_id)` 는
+GET + query string 이라 정상이지만 POST 는 JSON body 만 보내 실패.
+
+같은 회귀 가드용 직전 CL #52910 의 에러 modal 덕분에 16건의 동일 메시지
+패턴이 명확히 드러남.
+
+### 수정
+
+`client.py` 의 `create_entry` / `update_entry` 가 `section_id` 를 *query
+parameter 로도* 함께 전송:
+
+```python
+results = await self._request(
+    "POST", self._ENTRIES_PATH,
+    params={"section_id": section_id},  # ← 추가
+    json_body=body,                     # body 의 section_id 도 그대로
+)
+```
+
+JSON body 의 section_id 도 그대로 — server 가 어느 쪽이든 읽으면 작동.
+향후 API 변경에도 안전 (양쪽 send 정책).
+
+`delete_entry` 는 종전부터 `params={"section_id": ...}` 만 사용 — 변경 없음.
+
+### 테스트 (변경 +2)
+
+- `test_create_entry_posts_expected_body` — query 에 `section_id=s1` 가
+  보이는지 + body 의 section_id 도 그대로인지 검증.
+- `test_update_entry_puts_only_changed_fields` — 같은 query 검증.
+
+총 1025 (변경 없음, +0 신규).
+
+### 영향
+
+- **카드 명세서 import 정상 동작 복구** — 가장 큰 회복.
+- **EntryEditDialog 새 거래 / 기존 거래 수정** 모두 영향. 종전엔 body
+  만으로 어떻게 작동했는지 미스터리 — 후잉 server 가 query 든 body 든
+  *적어도 한 곳* 에 있으면 받아주는 것으로 추정. 본 CL 부터는 양쪽 모두
+  보내 안전.
+
+### 미해결 의문
+
+`update_entry` (PUT) 가 종전 body-only 로 작동해 보였던 이유는 미상. 하지만
+본 CL 의 변경은 *완전 superset* (body + query 모두) 라 회귀 없음.
+
 ## CL #52910 — 0.72.2 — 카드 명세서 import 실패 메시지 보존 (2026-05-19)
 
 배경 (사용자 보고): 카드 명세서 import 의 Ctrl+Enter (입력 확정) 후 "에러
