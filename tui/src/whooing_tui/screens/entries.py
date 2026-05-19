@@ -743,8 +743,17 @@ class EntriesScreen(MenuBarMixin, Screen):
             return
 
         # 2단계 — 카드 계정 선택 (대변).
+        # CL #52906+: picker 에 purpose 안내 — 사용자가 파일 선택 직후
+        # 갑자기 또 다른 popup 이 떠 혼란스러워하지 않도록.
         picked = await self.app.push_screen_wait(
-            AccountPickerScreen(session, side="right"),
+            AccountPickerScreen(
+                session, side="right",
+                purpose=(
+                    "선택한 명세서 안의 거래들을 어느 카드 계정으로 분류할지 "
+                    "선택하세요.\n"
+                    "(import wizard 2/3 단계 · Esc 로 취소)"
+                ),
+            ),
         )
         if not picked:
             self.set_status("카드 계정 미선택 — import 취소.")

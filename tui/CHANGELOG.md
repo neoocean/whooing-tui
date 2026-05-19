@@ -5,6 +5,45 @@
 > **0.17.x 이전** (CL #51119 ~ #1) 항목은 분량 정리 차원에서
 > [`CHANGELOG-archive-0.17.md`](./CHANGELOG-archive-0.17.md) 로 분리 보존.
 
+## CL #52906 — 0.72.1 — AccountPicker 에 wizard 단계 설명 (2026-05-19)
+
+배경 (사용자 요청): 카드 명세서 import wizard 의 2 단계 (계정과목 선택)
+에서 사용자가 "왜 갑자기 또 popup 이 떴는가" 혼란스러워하지 않도록,
+picker 안에 *이 단계가 무엇을 뜻하는지* 한 줄 안내.
+
+### 변경
+
+`AccountPickerScreen.__init__` 에 새 optional kwarg `purpose: str | None`:
+- 지정 시 제목 바로 아래 `#picker-purpose` Static 으로 회색 글씨로 표시.
+- 미지정 시 `hidden` 클래스가 부여돼 보이지 않음 (기존 caller 영향 X).
+
+`EntriesScreen._import_card_statement_wizard` 의 2단계 호출:
+```python
+AccountPickerScreen(
+    session, side="right",
+    purpose=(
+        "선택한 명세서 안의 거래들을 어느 카드 계정으로 분류할지 "
+        "선택하세요.\n"
+        "(import wizard 2/3 단계 · Esc 로 취소)"
+    ),
+)
+```
+
+### 테스트 (+2)
+
+- `test_picker_shows_purpose_when_provided` — `_purpose` attribute 보관
+  + `#picker-purpose` 의 `hidden` 클래스 부재 검증.
+- `test_picker_hides_purpose_when_not_provided` — 기존 caller (kwarg
+  없이 호출) 동작 영향 0 — Static 이 `hidden` 클래스 유지.
+
+총 1020 → 1022 (+2, 0 regression).
+
+### Backward compat
+
+`purpose` 는 keyword-only optional. 기존 호출자 (`EntryEditDialog` 의
+left/right account 변경 등) 는 그대로 동작 — purpose 영역이 hidden 이라
+화면 변화 X.
+
 ## CL #52899 — 0.72.0 — 풀다운 화면 메뉴 모두 팝업화 + FilePicker 숨김 파일 (2026-05-19)
 
 배경 (사용자 요청 두 건 + 질문 하나):

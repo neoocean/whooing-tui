@@ -82,6 +82,17 @@ class AccountPickerScreen(ModalScreen[tuple[str, str, str] | None]):
         content-align: center middle;
         color: $accent;
     }
+    /* CL #52906+: caller (예: 카드 명세서 import) 가 picker 의 *맥락* 을
+       사용자에게 설명할 수 있도록 한 줄 subtitle. 미지정 시 hidden. */
+    #picker-purpose {
+        height: auto;
+        padding: 0 1;
+        color: $text-muted;
+        text-align: center;
+    }
+    #picker-purpose.hidden {
+        display: none;
+    }
     #picker-hint {
         height: 1;
         content-align: center middle;
@@ -109,15 +120,20 @@ class AccountPickerScreen(ModalScreen[tuple[str, str, str] | None]):
         *,
         side: str,
         current_id: str | None = None,
+        purpose: str | None = None,
     ) -> None:
         """`side` = "left" / "right" — 모달 타이틀 라벨용.
 
         `current_id` 가 주어지면 해당 항목 카테고리만 자동 펼침 + cursor 위치.
+        `purpose` (CL #52906+) 가 주어지면 제목 아래 한 줄 안내로 표시 —
+        wizard 의 중간 단계에서 사용자에게 "왜 이 picker 가 떴는가" 를 즉시
+        알려준다 (예: 카드 명세서 import 의 2 단계).
         """
         super().__init__()
         self._session = session
         self._side = side
         self._current = current_id
+        self._purpose = purpose
 
     def compose(self) -> ComposeResult:
         side_label = "차변 (left)" if self._side == "left" else "대변 (right)"
@@ -125,6 +141,14 @@ class AccountPickerScreen(ModalScreen[tuple[str, str, str] | None]):
             yield Static(
                 f"[bold]계정과목 선택 — {side_label}[/bold]", id="picker-title",
             )
+            # CL #52906+: 맥락 안내 — caller 가 지정 안 하면 hidden.
+            purpose_static = Static(
+                self._purpose or "",
+                id="picker-purpose",
+            )
+            if not self._purpose:
+                purpose_static.add_class("hidden")
+            yield purpose_static
             yield Static(
                 "↑/↓ 이동 / ←/→ 접힘·펼침 / Enter 선택 / Esc 취소",
                 id="picker-hint",

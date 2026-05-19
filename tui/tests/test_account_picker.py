@@ -301,3 +301,48 @@ async def test_picker_leaf_enter_dismisses_with_account():
         app.screen.post_message(Tree.NodeSelected(leaf))
         await pilot.pause()
         assert results == [("x20", "식비", "expenses")]
+
+
+# ---- CL #52906+ : 맥락 안내 (purpose) ---------------------------------
+
+
+@pytest.mark.asyncio
+async def test_picker_shows_purpose_when_provided():
+    """`purpose` kwarg 가 주어지면 picker 안에 같은 텍스트가 보여야 — 사용자
+    가 wizard 의 중간 단계에서 *왜* 이 picker 가 떴는지 즉시 알 수 있도록.
+    """
+    from textual.widgets import Static
+
+    fake = FakeClient()
+    app = WhooingTuiApp(client=fake)  # type: ignore[arg-type]
+    async with app.run_test() as pilot:
+        await _open_entries(app)
+        await app.push_screen(
+            AccountPickerScreen(
+                app.session, side="right",
+                purpose="명세서 거래 분류 — wizard 2/3",
+            ),
+        )
+        await pilot.pause()
+        # screen 의 _purpose attribute 가 caller 의 값 보관.
+        assert "wizard 2/3" in str(app.screen._purpose)
+        # hidden class 가 *없어야* 한다 — 사용자에게 보이는 상태.
+        purpose_widget = app.screen.query_one("#picker-purpose", Static)
+        assert "hidden" not in purpose_widget.classes
+
+
+@pytest.mark.asyncio
+async def test_picker_hides_purpose_when_not_provided():
+    """`purpose` 미지정 — picker-purpose Static 이 hidden 클래스를 가져야."""
+    from textual.widgets import Static
+
+    fake = FakeClient()
+    app = WhooingTuiApp(client=fake)  # type: ignore[arg-type]
+    async with app.run_test() as pilot:
+        await _open_entries(app)
+        await app.push_screen(
+            AccountPickerScreen(app.session, side="left"),
+        )
+        await pilot.pause()
+        purpose_widget = app.screen.query_one("#picker-purpose", Static)
+        assert "hidden" in purpose_widget.classes
