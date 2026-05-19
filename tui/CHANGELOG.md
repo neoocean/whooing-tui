@@ -5,6 +5,63 @@
 > **0.17.x 이전** (CL #51119 ~ #1) 항목은 분량 정리 차원에서
 > [`CHANGELOG-archive-0.17.md`](./CHANGELOG-archive-0.17.md) 로 분리 보존.
 
+## CL #52910 — 0.72.2 — 카드 명세서 import 실패 메시지 보존 (2026-05-19)
+
+배경 (사용자 보고): 카드 명세서 import 의 Ctrl+Enter (입력 확정) 후 "에러
+메시지들이 화면에 지나가고 사라집니다." 원인은 `log.exception` 호출이
+stderr 로 출력 → Textual 화면 뒤로 잠깐 보였다가 다음 redraw 에 묻혀버림.
+
+### 변경
+
+`screens/statement_import.py`:
+
+1. **새 `_ErrorReportModal(ModalScreen[None])`** — 실패 내역 표시 전용:
+   - 빨간 border + 제목 + 요약 + VerticalScroll(Static) 본문 + 닫기 버튼.
+   - 본문은 평문 Static — 터미널의 mouse 선택 (Shift/Option+drag 환경
+     의존) 으로 복사 가능. 그래도 안 되면 status 의 log 파일 경로를
+     `cat` / `less` 로.
+
+2. **`action_confirm` 의 loop**:
+   - 종전: `except Exception → log.exception` (stderr 로 사라짐).
+   - 신규: `error_lines` 에 `[idx/total] date merchant amount → ExType: msg`
+     누적. loop 끝에 비어있지 않으면 `_ErrorReportModal` push.
+
+3. **새 `_write_error_log(lines)`** — `/tmp/whooing-import-errors-<ts>.log`
+   에 헤더 (명세서 path / issuer / r_account / 실패 수) + 라인들 저장.
+   modal 의 footer 와 화면 status 양쪽에 path 안내.
+
+### 단일 거래 path 는 변경 없음
+
+`EntryEditDialog → EntriesScreen._submit_create` 는 이미 `set_status(...,
+error=True)` 가 *persist* (다음 status 까지 유지) — 사용자가 충분히
+읽을 시간. 본 CL 의 변경 대상 아님.
+
+### 테스트 (+3)
+
+- `test_error_report_modal_class_exists`
+- `test_error_report_modal_stores_title_summary_body`
+- `test_error_log_writes_lines_to_tmp_path` — tmp_path 로 `/tmp` redirect,
+  헤더 + 라인 모두 file 에 기록되는지 검증.
+
+총 1022 → 1025 (+3, 0 regression).
+
+### 사용자가 보게 되는 흐름
+
+```
+입력 완료: 12 성공 / 4 실패 — 자세한 내용: /tmp/whooing-import-errors-20260519-153022.log
+
+┌─ 카드 명세서 import — 4건 실패 ────────────────────────────────────┐
+│ 전체 16 건 중 12 건 성공, 4 건 실패. 아래는 실패 내역 (mouse 로  │
+│ 선택 가능).                                                      │
+│ 전체 로그: /tmp/whooing-import-errors-20260519-153022.log        │
+│ ────────────────────────────────────────────────────────────────  │
+│ [3/16] 20260512 스타벅스강남점 4500 → ToolError: USER_INPUT ...  │
+│ [7/16] 20260514 GS25방배점 12300 → ToolError: ...                │
+│ [11/16] ...                                                       │
+│                          [ 닫기 (Esc) ]                          │
+└──────────────────────────────────────────────────────────────────┘
+```
+
 ## CL #52906 — 0.72.1 — AccountPicker 에 wizard 단계 설명 (2026-05-19)
 
 배경 (사용자 요청): 카드 명세서 import wizard 의 2 단계 (계정과목 선택)

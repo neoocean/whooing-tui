@@ -1,4 +1,4 @@
-"""statement_import.py — pure helper 단위 테스트.
+﻿"""statement_import.py — pure helper 단위 테스트.
 
 Pilot driven 화면 시나리오는 별도 (Playwright + 실 후잉 호출 필요해 e2e 분류).
 """
@@ -185,3 +185,64 @@ def test_find_account_type_in_list_form():
     }
     assert _find_account_type(accounts, "x50") == "expenses"
     assert _find_account_type(accounts, "xUNKNOWN") is None
+
+
+# ---- CL #52910+ : 일괄 import 실패 메시지 capture --------------------------
+
+
+def test_error_report_modal_class_exists():
+    """_ErrorReportModal 이 ModalScreen 으로 정의 — 회귀 가드."""
+    from textual.screen import ModalScreen
+    from whooing_tui.screens.statement_import import _ErrorReportModal
+    assert issubclass(_ErrorReportModal, ModalScreen)
+
+
+def test_error_report_modal_stores_title_summary_body():
+    """생성자가 인자를 그대로 보관 — UI 자체는 textual run_test 가 필요해
+    여기서는 attribute 만 확인.
+    """
+    from whooing_tui.screens.statement_import import _ErrorReportModal
+    m = _ErrorReportModal(
+        title="t", summary="s",
+        body="line1\nline2",
+        log_path="/tmp/foo.log",
+    )
+    assert m._title == "t"
+    assert m._summary == "s"
+    assert "line1" in m._body
+    assert m._log_path == "/tmp/foo.log"
+
+
+def test_error_log_writes_lines_to_tmp_path(tmp_path, monkeypatch):
+    """_write_error_log — 임시 파일 경로 + 헤더 + 라인들 포함."""
+    from pathlib import Path as _Path
+    from whooing_tui.screens.statement_import import StatementImportScreen
+
+    # /tmp 대신 tmp_path 사용 — 실 사용자 /tmp 오염 방지.
+    real_path = _Path
+
+    class _FakePath(_Path):
+        # /tmp 만 가로채 redirect.
+        def __new__(cls, *args, **kwargs):
+            if args and str(args[0]) == "/tmp":
+                return real_path(tmp_path)
+            return real_path(*args, **kwargs)
+
+    monkeypatch.setattr(
+        "whooing_tui.screens.statement_import.Path", _FakePath,
+    )
+
+    # 실제 인스턴스 — file_path / kind / issuer / r_account_id 만 보면 됨.
+    scr = StatementImportScreen.__new__(StatementImportScreen)
+    scr.file_path = "/some/statement.html"
+    scr.kind = "html"
+    scr.issuer = "hyundai"
+    scr.r_account_id = "x153"
+
+    p = scr._write_error_log(["err1", "err2: detail"])
+    text = p.read_text()
+    assert "statement.html" in text
+    assert "hyundai" in text
+    assert "x153" in text
+    assert "err1" in text
+    assert "err2: detail" in text

@@ -47,6 +47,94 @@ from whooing_tui.client import WhooingClient
 log = logging.getLogger(__name__)
 
 
+# CL #52910+: 일괄 import 의 실패 메시지를 사용자 가시 modal + 파일로
+# 보존. log.exception 만 호출하면 stderr 로 가서 TUI 화면에 깜빡이고
+# 사라짐 — 사용자 보고: "에러메시지들이 지나가고 사라집니다".
+
+class _ErrorReportModal(ModalScreen[None]):
+    """일괄 import 실패 메시지를 보여주는 modal — 닫기 + log 파일 경로 안내.
+
+    터미널의 mouse 선택 (대부분 환경에서 Shift/Option+drag) 으로 텍스트
+    선택 가능. 그게 안 되는 환경에서는 status 의 log 파일 경로를 cat /
+    less 로 확인.
+    """
+
+    DEFAULT_CSS = """
+    _ErrorReportModal { align: center middle; }
+    #err-frame {
+        width: 95%;
+        max-width: 140;
+        min-width: 60;
+        height: 90%;
+        max-height: 40;
+        min-height: 16;
+        padding: 1 2;
+        border: thick $error;
+        background: $surface;
+        layout: vertical;
+    }
+    #err-title {
+        height: 1;
+        content-align: center middle;
+        color: $error;
+    }
+    #err-summary {
+        height: auto;
+        padding: 1 0;
+        color: $text-muted;
+    }
+    #err-body {
+        height: 1fr;
+        border: solid $error;
+        padding: 0 1;
+    }
+    #err-foot {
+        height: 3;
+        align: center middle;
+    }
+    #err-foot Button { min-width: 20; }
+    """
+
+    BINDINGS = [
+        Binding("escape", "close", "Close", show=True),
+        Binding("enter", "close", "", show=False),
+    ]
+
+    def __init__(
+        self,
+        *,
+        title: str,
+        summary: str,
+        body: str,
+        log_path: str | None = None,
+    ) -> None:
+        super().__init__()
+        self._title = title
+        self._summary = summary
+        self._body = body
+        self._log_path = log_path
+
+    def compose(self) -> ComposeResult:
+        from textual.containers import VerticalScroll
+        with Vertical(id="err-frame"):
+            yield Static(f"[bold]{self._title}[/bold]", id="err-title")
+            summary = self._summary
+            if self._log_path:
+                summary += f"\n[dim]전체 로그: {self._log_path}[/dim]"
+            yield Static(summary, id="err-summary")
+            with VerticalScroll(id="err-body"):
+                yield Static(self._body)
+            with Horizontal(id="err-foot"):
+                yield Button("닫기 (Esc)", id="err-close")
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "err-close":
+            self.dismiss(None)
+
+    def action_close(self) -> None:
+        self.dismiss(None)
+
+
 # ---- Password modal --------------------------------------------------
 
 
@@ -439,7 +527,11 @@ class StatementImportScreen(ModalScreen[None]):
         period_end = self.proposals[-1].date
         inserted = 0
         failed = 0
-        for r in self.proposals:
+        # CL #52910+: 사용자 가시 에러 모음 — log.exception 만 호출하면 stderr
+        # 로 가서 TUI 화면 뒤로 깜빡이고 사라진다 (사용자 보고). 모든 실패
+        # 메시지를 모아 import 끝난 뒤 modal + 파일로 보여준다.
+        error_lines: list[str] = []
+        for idx, r in enumerate(self.proposals, 1):
             try:
                 # Direct REST call — TUI 가 직접 entries CRUD (DESIGN.md 정책)
                 resp = await self.client.create_entry(
@@ -477,12 +569,60 @@ class StatementImportScreen(ModalScreen[None]):
                 inserted += 1
             except Exception as ex:
                 failed += 1
+                # 사용자 가시 한 줄 + Python 로그 양쪽.
+                error_lines.append(
+                    f"[{idx}/{len(self.proposals)}] "
+                    f"{r.date} {r.merchant[:30]} {r.amount:,} → "
+                    f"{type(ex).__name__}: {ex}"
+                )
                 log.exception("entry insert failed: %s", ex)
 
+        # 결과 status — 항상 표시.
         self._set_status(
             f"입력 완료: {inserted} 성공 / {failed} 실패. "
             f"({len(self.matched)} 건은 dedup 으로 skip)"
         )
+
+        # CL #52910+: 실패 있으면 modal + log 파일.
+        if error_lines:
+            log_path = self._write_error_log(error_lines)
+            self._set_status(
+                f"입력 완료: {inserted} 성공 / {failed} 실패 — "
+                f"자세한 내용: {log_path}"
+            )
+            self.app.push_screen(_ErrorReportModal(
+                title=f"카드 명세서 import — {failed}건 실패",
+                summary=(
+                    f"전체 {len(self.proposals)} 건 중 {inserted} 건 성공, "
+                    f"{failed} 건 실패. 아래는 실패 내역 (mouse 로 선택 가능)."
+                ),
+                body="\n".join(error_lines),
+                log_path=str(log_path),
+            ))
+
+    def _write_error_log(self, lines: list[str]) -> Path:
+        """import 실패 내역을 timestamp 가 붙은 임시 파일로 — 사용자가 cat
+        / less 로 열어 전체 내용을 확인 / 복사 가능.
+
+        파일 형식: 한 줄에 한 실패. 헤더로 명세서 파일 + 시간 표기.
+        """
+        from datetime import datetime
+        ts = datetime.now().strftime("%Y%m%d-%H%M%S")
+        log_path = Path("/tmp") / f"whooing-import-errors-{ts}.log"
+        try:
+            header = (
+                f"# whooing-tui statement import errors\n"
+                f"# statement: {self.file_path}\n"
+                f"# at: {datetime.now().isoformat()}\n"
+                f"# issuer: {self.issuer or 'unknown'}\n"
+                f"# r_account_id: {self.r_account_id}\n"
+                f"# failed: {len(lines)}\n"
+                f"\n"
+            )
+            log_path.write_text(header + "\n".join(lines) + "\n")
+        except Exception:  # pragma: no cover — 파일 쓰기 실패도 silent.
+            log.exception("write error log failed")
+        return log_path
 
     def action_back(self) -> None:
         # CL #52841+: ModalScreen 이므로 dismiss. pop_screen 도 동작하지만
