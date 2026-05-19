@@ -1,4 +1,4 @@
-"""FilePickerScreen — 디렉터리 navigation + 파일 선택 modal.
+﻿"""FilePickerScreen — 디렉터리 navigation + 파일 선택 modal.
 
 CL #51139+ (A7). 종전엔 첨부 / 명세서 import 의 파일 경로 입력이 절대 경로
 텍스트만 — 사용자가 매번 path 외워야 했음. 본 picker 가:
@@ -37,12 +37,19 @@ _DIR = "dir::"       # 자식 디렉터리.
 _FILE = "file::"     # 파일.
 
 
-def _safe_listdir(path: Path) -> list[Path]:
-    """`path` 의 자식들 — 권한/존재 오류는 빈 list. 정렬 (디렉터리 먼저)."""
+def _safe_listdir(path: Path, *, show_hidden: bool = False) -> list[Path]:
+    """`path` 의 자식들 — 권한/존재 오류는 빈 list. 정렬 (디렉터리 먼저).
+
+    CL #52899+: 사용자 요청 — 숨김 파일 (`.x`) 은 default 로 표시 X.
+    `show_hidden=True` 가 명시되면 (Ctrl+H 토글 등) 포함. `..` 같은
+    부모/현재 dir 자체는 caller (`_refresh_list`) 가 따로 처리.
+    """
     try:
         children = list(path.iterdir())
     except (PermissionError, FileNotFoundError, OSError):
         return []
+    if not show_hidden:
+        children = [c for c in children if not c.name.startswith(".")]
     children.sort(key=lambda p: (not p.is_dir(), p.name.lower()))
     return children
 
@@ -71,6 +78,8 @@ class FilePickerScreen(ModalScreen[str | None]):
 
     BINDINGS = [
         Binding("escape", "cancel", "취소"),
+        # CL #52899+: 숨김 파일 토글 (default 숨김).
+        Binding("ctrl+h", "toggle_hidden", "Hidden 토글", show=True),
     ]
 
     DEFAULT_CSS = """
@@ -122,6 +131,8 @@ class FilePickerScreen(ModalScreen[str | None]):
             sd = Path.home()
         self.current: Path = sd.resolve()
         self._all_children: list[Path] = []
+        # CL #52899+: 숨김 파일 표시 여부 — default 숨김. Ctrl+H 토글.
+        self._show_hidden: bool = False
 
     def compose(self) -> ComposeResult:
         with Container(id="fp_box"):
@@ -130,7 +141,7 @@ class FilePickerScreen(ModalScreen[str | None]):
             yield Input(placeholder="필터 (파일명 부분 일치)", id="fp_filter")
             yield OptionList(id="fp_list")
             yield Static(
-                "Enter=선택/들어감 / ←=부모 / →=자식(디렉터리) / Esc=취소",
+                "Enter=선택/들어감 / ←=부모 / →=자식 / Ctrl+H=숨김 토글 / Esc=취소",
                 id="fp_hint",
             )
 
@@ -160,7 +171,9 @@ class FilePickerScreen(ModalScreen[str | None]):
         # path label 갱신.
         self.query_one("#fp_path", Static).update(str(self.current))
 
-        children = self._filter_by_ext(_safe_listdir(self.current))
+        children = self._filter_by_ext(
+            _safe_listdir(self.current, show_hidden=self._show_hidden),
+        )
         query = self.query_one("#fp_filter", Input).value.strip()
         children = filter_paths(children, query)
         self._all_children = children
@@ -242,6 +255,11 @@ class FilePickerScreen(ModalScreen[str | None]):
 
     def action_cancel(self) -> None:
         self.dismiss(None)
+
+    def action_toggle_hidden(self) -> None:
+        """Ctrl+H — 숨김 파일 표시 토글 (CL #52899+)."""
+        self._show_hidden = not self._show_hidden
+        self._refresh_list()
 
 
 def _fmt_bytes(n: int) -> str:

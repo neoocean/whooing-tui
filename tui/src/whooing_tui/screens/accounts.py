@@ -257,8 +257,12 @@ class AccountEditDialog(ModalScreen[AccountDraft | None]):
 # ---- AccountsScreen ----------------------------------------------------
 
 
-class AccountsScreen(MenuBarMixin, Screen):
-    """활성 섹션의 계정과목 트리 + CRUD. CL #51131+ F10 메뉴바 통합."""
+class AccountsScreen(MenuBarMixin, ModalScreen[None]):
+    """활성 섹션의 계정과목 트리 + CRUD.
+
+    CL #51131+ F10 메뉴바 통합.
+    CL #52899+: 사용자 요청 — Screen → ModalScreen 으로 popup 화.
+    """
 
     @staticmethod
     def _build_menus() -> tuple[MenuSpec, ...]:
@@ -288,8 +292,23 @@ class AccountsScreen(MenuBarMixin, Screen):
         return "accounts-menubar"
 
     DEFAULT_CSS = """
-    AccountsScreen {
-        layers: base;
+    AccountsScreen { align: center middle; }
+    #acc-screen-frame {
+        width: 95%;
+        max-width: 140;
+        min-width: 50;
+        height: 90%;
+        max-height: 45;
+        min-height: 16;
+        padding: 1 2;
+        border: thick $accent;
+        background: $surface;
+        layout: vertical;
+    }
+    #acc-screen-title {
+        height: 1;
+        content-align: center middle;
+        color: $accent;
     }
     #acc-body {
         height: 1fr;
@@ -304,11 +323,12 @@ class AccountsScreen(MenuBarMixin, Screen):
         padding: 0 1;
         color: $text-muted;
     }
-    #acc-status.error {
-        color: $error;
-    }
-    #acc-status.warn {
-        color: $warning;
+    #acc-status.error { color: $error; }
+    #acc-status.warn { color: $warning; }
+    #acc-screen-foot {
+        height: 1;
+        content-align: center middle;
+        color: $text-muted;
     }
     """
 
@@ -336,13 +356,18 @@ class AccountsScreen(MenuBarMixin, Screen):
     # ---- compose ------------------------------------------------------
 
     def compose(self) -> ComposeResult:
-        yield Header(show_clock=True)
-        # CL #51131+: F10 메뉴바 — Header 아래 항상 노출.
-        yield MenuBar(self._build_menus(), id="accounts-menubar")
-        with Vertical(id="acc-body"):
-            yield Tree("(섹션 미선택)", id="accounts-tree")
-        yield Static("", id="acc-status")
-        yield Footer()
+        # CL #52899+: ModalScreen — Header/Footer 위젯 제거, 가운데 정렬
+        # #acc-screen-frame popup. 기존 위젯 id 들은 그대로.
+        with Vertical(id="acc-screen-frame"):
+            yield Static("[bold]계정과목 관리[/bold]", id="acc-screen-title")
+            yield MenuBar(self._build_menus(), id="accounts-menubar")
+            with Vertical(id="acc-body"):
+                yield Tree("(섹션 미선택)", id="accounts-tree")
+            yield Static("", id="acc-status")
+            yield Static(
+                "Enter 수정 · n 새로 · d 삭제 · r 재로드 · Esc/q 닫기",
+                id="acc-screen-foot",
+            )
 
     def on_mount(self) -> None:
         self._render_tree()
@@ -353,7 +378,8 @@ class AccountsScreen(MenuBarMixin, Screen):
     # ---- actions ------------------------------------------------------
 
     def action_back(self) -> None:
-        self.app.pop_screen()
+        # CL #52899+: ModalScreen 표준 종료 path.
+        self.dismiss(None)
 
     def action_refresh(self) -> None:
         invalidate = getattr(self._client, "invalidate_section", None)

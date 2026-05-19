@@ -5,6 +5,59 @@
 > **0.17.x 이전** (CL #51119 ~ #1) 항목은 분량 정리 차원에서
 > [`CHANGELOG-archive-0.17.md`](./CHANGELOG-archive-0.17.md) 로 분리 보존.
 
+## CL #52899 — 0.72.0 — 풀다운 화면 메뉴 모두 팝업화 + FilePicker 숨김 파일 (2026-05-19)
+
+배경 (사용자 요청 두 건 + 질문 하나):
+1. 풀다운 "화면" 메뉴의 *모든* 항목을 popup 형태로 — 종전 일부 (보고서·중복
+   평가·매월입력) 만 modal 이었고 나머지는 전체 화면.
+2. 파일 브라우저에서 숨김 파일 (`.x`) 표시 X.
+3. (질문) 카드 명세서 import 에서 파일 선택 직후 계정과목 팝업이 나타나는
+   이유는? → 카드 명세서가 *어느 카드 계정* 의 거래인지 지정해야 import
+   가 가능하므로 wizard 의 2단계로 의도된 흐름 (취소 가능, `entries.py:
+   action_import_card_statement` 의 `AccountPickerScreen(side="right")` push
+   참조). 버그 아님.
+
+### 풀다운 화면 메뉴 항목 모달화
+
+`MenuBarMixin, Screen` → `MenuBarMixin, ModalScreen[None]` 변경 4 화면:
+- `AccountsScreen` (계정과목 관리).
+- `TagManagementScreen` (해시태그 관리).
+- `BudgetEditScreen` (예산 편집).
+- `GoalEditScreen` (목표 편집).
+
+각 화면의 compose 가 가운데 정렬된 `#*-frame` 안에 제목·MenuBar·상태·
+DataTable/Tree·footer hint 를 담음. Header/Footer 위젯 제거 (modal 안에서
+무의미). `action_back` 이 `pop_screen()` → `dismiss(None)` 로 표준 모달
+종료.
+
+기존 modal 들 (보고서·매월입력·중복평가·StatementImport·SectionPicker·
+AttachmentBrowser·FilePicker) 과 일관된 톤 (border `thick $accent`,
+background `$surface`).
+
+### FilePicker 숨김 파일
+
+`_safe_listdir` 의 새 `show_hidden: bool = False` parameter:
+- default `False` — `.x` 로 시작하는 항목 제외.
+- `FilePickerScreen._show_hidden` 인스턴스 attribute + 새 `Ctrl+H` 바인딩
+  `action_toggle_hidden` 으로 토글 가능 (footer 안내 추가).
+
+### 테스트 (+4)
+
+- `test_safe_listdir_hides_dot_files_by_default` — `.cache`/`.claude`
+  등이 default 결과에서 빠지는지.
+- `test_safe_listdir_includes_dot_files_when_show_hidden` — 명시 True 시 포함.
+- `test_picker_starts_with_hidden_off` — `_show_hidden` 초기값.
+- `test_picker_action_toggle_hidden_flips_flag` — Ctrl+H 토글 동작.
+
+총 1016 → 1020 (+4, 0 regression).
+
+### Backward compat
+
+- 호출자 (`EntriesScreen.action_open_accounts` / `_open_tag_management` /
+  `_open_budget_edit` / `_open_goal_edit`) 는 `push_screen` 으로 띄우는
+  흐름 그대로. ModalScreen 도 같은 API 로 push 가능. `pop_screen` 종료
+  path 만 `dismiss(None)` 로 변경 — 호출자 callback 미지정 시 같은 효과.
+
 ## CL #52896 — 0.71.3 — 매월입력관리 회귀 수정 + 팝업화 (2026-05-19)
 
 배경 (사용자 보고 두 건):

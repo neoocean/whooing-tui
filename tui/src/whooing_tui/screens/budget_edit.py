@@ -1,4 +1,4 @@
-"""BudgetEditScreen — 예산 입력/관리 (지출 / 수입 항목별 amount).
+﻿"""BudgetEditScreen — 예산 입력/관리 (지출 / 수입 항목별 amount).
 
 CL #51153+. 후잉 budget endpoint 의 *조회* 는 알려져 있고 (`/budget/<account>.json`
 GET), *setter* 는 같은 path POST 로 추정. 라이브 검증 시 실패하면 status
@@ -117,8 +117,11 @@ class _AmountModal(ModalScreen[int | None]):
 # ---- Main screen --------------------------------------------------------
 
 
-class BudgetEditScreen(MenuBarMixin, Screen):
-    """예산 list (account 별) + 편집/삭제. account = expenses | income 토글."""
+class BudgetEditScreen(MenuBarMixin, ModalScreen[None]):
+    """예산 list (account 별) + 편집/삭제. account = expenses | income 토글.
+
+    CL #52899+: 사용자 요청 — Screen → ModalScreen 으로 popup 화.
+    """
 
     BINDINGS = [
         *menubar_bindings(),
@@ -135,14 +138,37 @@ class BudgetEditScreen(MenuBarMixin, Screen):
     ]
 
     DEFAULT_CSS = """
-    BudgetEditScreen { layout: vertical; }
+    BudgetEditScreen { align: center middle; }
+    #b-frame {
+        width: 95%;
+        max-width: 120;
+        min-width: 50;
+        height: 90%;
+        max-height: 40;
+        min-height: 16;
+        padding: 1 2;
+        border: thick $accent;
+        background: $surface;
+        layout: vertical;
+    }
+    #b-title {
+        height: 1;
+        content-align: center middle;
+        color: $accent;
+    }
     #b_status {
         height: auto;
-        padding: 1;
-        background: $boost;
+        padding: 1 0;
+        background: transparent;
     }
     #b_status.error { color: $error; }
     #b_status.warn  { color: $warning; }
+    #b_table { height: 1fr; }
+    #b-foot {
+        height: 1;
+        content-align: center middle;
+        color: $text-muted;
+    }
     """
 
     @staticmethod
@@ -177,13 +203,16 @@ class BudgetEditScreen(MenuBarMixin, Screen):
         self._rows: list[dict[str, Any]] = []
 
     def compose(self) -> ComposeResult:
-        yield Header()
-        yield MenuBar(self._build_menus(), id="budget-menubar")
-        yield Static("", id="b_status")
-        yield Vertical(
-            DataTable(id="b_table", zebra_stripes=True, cursor_type="row"),
-        )
-        yield Footer()
+        # CL #52899+: ModalScreen popup — Header/Footer 위젯 제거.
+        with Vertical(id="b-frame"):
+            yield Static("[bold]예산 편집[/bold]", id="b-title")
+            yield MenuBar(self._build_menus(), id="budget-menubar")
+            yield Static("", id="b_status")
+            yield DataTable(id="b_table", zebra_stripes=True, cursor_type="row")
+            yield Static(
+                "Enter 금액편집 · d 제거 · Tab expenses↔income · r 재로드 · Esc/q 닫기",
+                id="b-foot",
+            )
 
     def on_mount(self) -> None:
         table = self.query_one("#b_table", DataTable)
@@ -193,7 +222,8 @@ class BudgetEditScreen(MenuBarMixin, Screen):
     # ---- actions ---------------------------------------------------------
 
     def action_back(self) -> None:
-        self.app.pop_screen()
+        # CL #52899+: ModalScreen 표준 종료 path.
+        self.dismiss(None)
 
     def action_toggle_account(self) -> None:
         self._account = "income" if self._account == "expenses" else "expenses"

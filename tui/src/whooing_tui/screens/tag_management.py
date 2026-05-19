@@ -1,4 +1,4 @@
-"""TagManagementScreen — 해시태그 일괄 관리 (rename / merge / delete).
+﻿"""TagManagementScreen — 해시태그 일괄 관리 (rename / merge / delete).
 
 CL #51135+ (H5). 누적 사용 시 가장 큰 마찰 — 오타 수정 한 건마다 entry 를
 하나씩 edit dialog 로 열어야 했음. 본 화면이 일괄 도구.
@@ -57,8 +57,11 @@ def _strip_tag_input(s: str | None) -> str | None:
 # ---- Main screen --------------------------------------------------------
 
 
-class TagManagementScreen(MenuBarMixin, Screen):
-    """해시태그 일괄 관리 — list + rename / merge / delete + P4 submit."""
+class TagManagementScreen(MenuBarMixin, ModalScreen[None]):
+    """해시태그 일괄 관리 — list + rename / merge / delete + P4 submit.
+
+    CL #52899+: 사용자 요청 — Screen → ModalScreen 으로 popup 화.
+    """
 
     BINDINGS = [
         *menubar_bindings(),
@@ -74,16 +77,37 @@ class TagManagementScreen(MenuBarMixin, Screen):
     ]
 
     DEFAULT_CSS = """
-    TagManagementScreen {
+    TagManagementScreen { align: center middle; }
+    #tagm-frame {
+        width: 95%;
+        max-width: 120;
+        min-width: 50;
+        height: 90%;
+        max-height: 40;
+        min-height: 16;
+        padding: 1 2;
+        border: thick $accent;
+        background: $surface;
         layout: vertical;
+    }
+    #tagm-title {
+        height: 1;
+        content-align: center middle;
+        color: $accent;
     }
     #tagm_status {
         height: auto;
-        padding: 1;
-        background: $boost;
+        padding: 1 0;
+        background: transparent;
     }
     #tagm_status.error { color: $error; }
     #tagm_status.warn  { color: $warning; }
+    #tagm_table { height: 1fr; }
+    #tagm-foot {
+        height: 1;
+        content-align: center middle;
+        color: $text-muted;
+    }
     """
 
     @staticmethod
@@ -118,13 +142,16 @@ class TagManagementScreen(MenuBarMixin, Screen):
         self._tags: list[tuple[str, int]] = []  # (tag, count) 사용 빈도 내림차순.
 
     def compose(self) -> ComposeResult:
-        yield Header()
-        yield MenuBar(self._build_menus(), id="tagm-menubar")
-        yield Static("", id="tagm_status")
-        yield Vertical(
-            DataTable(id="tagm_table", zebra_stripes=True, cursor_type="row"),
-        )
-        yield Footer()
+        # CL #52899+: ModalScreen popup — Header/Footer 위젯 제거.
+        with Vertical(id="tagm-frame"):
+            yield Static("[bold]해시태그 관리[/bold]", id="tagm-title")
+            yield MenuBar(self._build_menus(), id="tagm-menubar")
+            yield Static("", id="tagm_status")
+            yield DataTable(id="tagm_table", zebra_stripes=True, cursor_type="row")
+            yield Static(
+                "Enter 이름변경 · m 병합 · d 삭제 · c 색 · r 재로드 · Esc/q 닫기",
+                id="tagm-foot",
+            )
 
     def on_mount(self) -> None:
         table = self.query_one("#tagm_table", DataTable)
@@ -134,7 +161,8 @@ class TagManagementScreen(MenuBarMixin, Screen):
     # ---- actions ---------------------------------------------------------
 
     def action_back(self) -> None:
-        self.app.pop_screen()
+        # CL #52899+: ModalScreen 표준 종료 path.
+        self.dismiss(None)
 
     def action_refresh(self) -> None:
         try:

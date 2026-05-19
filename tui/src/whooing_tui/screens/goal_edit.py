@@ -1,4 +1,4 @@
-"""GoalEditScreen — 장기목표 + 월별 자본 목표값 편집.
+﻿"""GoalEditScreen — 장기목표 + 월별 자본 목표값 편집.
 
 CL #51154+. 후잉의 두 종류 goal:
   - **장기목표** (`/budget_goal.json`): 단일 amount + target_date.
@@ -138,8 +138,11 @@ class _GoalEditModal(ModalScreen[dict | None]):
 # ---- Main screen --------------------------------------------------------
 
 
-class GoalEditScreen(MenuBarMixin, Screen):
-    """장기목표 + 월별 자본 목표 편집."""
+class GoalEditScreen(MenuBarMixin, ModalScreen[None]):
+    """장기목표 + 월별 자본 목표 편집.
+
+    CL #52899+: 사용자 요청 — Screen → ModalScreen 으로 popup 화.
+    """
 
     BINDINGS = [
         *menubar_bindings(),
@@ -153,14 +156,37 @@ class GoalEditScreen(MenuBarMixin, Screen):
     ]
 
     DEFAULT_CSS = """
-    GoalEditScreen { layout: vertical; }
+    GoalEditScreen { align: center middle; }
+    #g-frame {
+        width: 95%;
+        max-width: 120;
+        min-width: 50;
+        height: 90%;
+        max-height: 40;
+        min-height: 16;
+        padding: 1 2;
+        border: thick $accent;
+        background: $surface;
+        layout: vertical;
+    }
+    #g-title {
+        height: 1;
+        content-align: center middle;
+        color: $accent;
+    }
     #g_status {
         height: auto;
-        padding: 1;
-        background: $boost;
+        padding: 1 0;
+        background: transparent;
     }
     #g_status.error { color: $error; }
     #g_status.warn  { color: $warning; }
+    #g_table { height: 1fr; }
+    #g-foot {
+        height: 1;
+        content-align: center middle;
+        color: $text-muted;
+    }
     """
 
     @staticmethod
@@ -194,13 +220,16 @@ class GoalEditScreen(MenuBarMixin, Screen):
         self._rows: list[dict[str, Any]] = []
 
     def compose(self) -> ComposeResult:
-        yield Header()
-        yield MenuBar(self._build_menus(), id="goal-menubar")
-        yield Static("", id="g_status")
-        yield Vertical(
-            DataTable(id="g_table", zebra_stripes=True, cursor_type="row"),
-        )
-        yield Footer()
+        # CL #52899+: ModalScreen popup — Header/Footer 위젯 제거.
+        with Vertical(id="g-frame"):
+            yield Static("[bold]목표 편집[/bold]", id="g-title")
+            yield MenuBar(self._build_menus(), id="goal-menubar")
+            yield Static("", id="g_status")
+            yield DataTable(id="g_table", zebra_stripes=True, cursor_type="row")
+            yield Static(
+                "Enter 편집 · Tab 장기↔월별 · r 재로드 · Esc/q 닫기",
+                id="g-foot",
+            )
 
     def on_mount(self) -> None:
         table = self.query_one("#g_table", DataTable)
@@ -210,7 +239,8 @@ class GoalEditScreen(MenuBarMixin, Screen):
     # ---- actions ---------------------------------------------------------
 
     def action_back(self) -> None:
-        self.app.pop_screen()
+        # CL #52899+: ModalScreen 표준 종료 path.
+        self.dismiss(None)
 
     def action_toggle_mode(self) -> None:
         self._mode = "goal" if self._mode == "budget_goal" else "budget_goal"

@@ -1,4 +1,4 @@
-"""FilePickerScreen — 디렉터리 navigation + 파일 선택 modal.
+﻿"""FilePickerScreen — 디렉터리 navigation + 파일 선택 modal.
 
 CL #51139+ (A7).
 """
@@ -80,3 +80,46 @@ def test_picker_no_ext_filter_returns_all(tmp_path):
     txt.write_text("")
     sc = FilePickerScreen()
     assert sorted(p.name for p in sc._filter_by_ext([pdf, txt])) == ["x.pdf", "x.txt"]
+
+
+# ---- CL #52899+ : 숨김 파일 default 안 보임 + Ctrl+H 토글 ---------------
+
+
+def test_safe_listdir_hides_dot_files_by_default(tmp_path):
+    """`_safe_listdir` 의 default show_hidden=False — .x 로 시작하는 항목 제외."""
+    from whooing_tui.screens.file_picker import _safe_listdir
+
+    (tmp_path / "visible.txt").write_text("")
+    (tmp_path / ".hidden").write_text("")
+    (tmp_path / ".config").mkdir()
+    (tmp_path / "Documents").mkdir()
+
+    names = {p.name for p in _safe_listdir(tmp_path)}
+    assert names == {"visible.txt", "Documents"}
+
+
+def test_safe_listdir_includes_dot_files_when_show_hidden(tmp_path):
+    from whooing_tui.screens.file_picker import _safe_listdir
+
+    (tmp_path / "visible.txt").write_text("")
+    (tmp_path / ".hidden").write_text("")
+    names = {p.name for p in _safe_listdir(tmp_path, show_hidden=True)}
+    assert names == {"visible.txt", ".hidden"}
+
+
+def test_picker_starts_with_hidden_off():
+    """FilePickerScreen 의 _show_hidden default = False."""
+    sc = FilePickerScreen()
+    assert sc._show_hidden is False
+
+
+def test_picker_action_toggle_hidden_flips_flag():
+    """Ctrl+H 토글 — `action_toggle_hidden` 한 번 호출 시 True."""
+    sc = FilePickerScreen()
+    assert sc._show_hidden is False
+    # _refresh_list 는 위젯이 없어 fail 하므로 stub.
+    sc._refresh_list = lambda: None  # type: ignore[method-assign]
+    sc.action_toggle_hidden()
+    assert sc._show_hidden is True
+    sc.action_toggle_hidden()
+    assert sc._show_hidden is False
