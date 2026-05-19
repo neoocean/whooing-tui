@@ -5,6 +5,126 @@
 > **0.17.x 이전** (CL #51119 ~ #1) 항목은 분량 정리 차원에서
 > [`CHANGELOG-archive-0.17.md`](./CHANGELOG-archive-0.17.md) 로 분리 보존.
 
+## CL #53093 — 0.79.0 — P4 자동 submit 정책 — 매 mutation → 세션 종료 묶음 (2026-05-19)
+
+배경 (사용자 요청, 2026-05-19): "지금은 매 수정마다 데이터베이스를 서브밋
+하고있는데 이를 앱 시작할 때 최신화, 앱 종료할때 서브밋하도록 변경해주세요.
+단 앱 종료할때 서브밋할때는 디스크립션에 이 서브밋에 어떤 수정들이 포함
+되어있는지 디스크립션에 잘 작성해주세요."
+
+스크린샷 — P4 history 가 짧은 시간 안 매 거래 삭제마다 별도 CL 폭증
+(53016 ~ 53090 중 대부분 `entry NNNNNN deleted` 단일 라인 description).
+
+### 기존 정책 (CL #51118+)
+
+- `submit_db_to_p4(...)` 호출 시점에 daemon=False 스레드 spawn → 즉시
+  `_do_submit_multi` → `p4 reconcile + change + submit`. 결과: 매 mutation
+  당 CL 1 개, description 1 줄.
+- 100건 삭제 = CL 100개.
+- 부담: P4 server 라운드트립 × N, history 가독성 ↓, 사용자가 "한 세션
+  결과" 단위로 review 어려움.
+
+### 새 정책 (CL #53093+)
+
+P4 자동 submit 의 *2단계 모델*:
+
+1. **시작**: `sync_db_from_p4(db_path)` — 종전 그대로 (`_StartupCheckScreen`
+   이 호출). 다른 환경에서 submit 된 변경 받아옴.
+2. **세션 중 mutation**: `submit_*` 호출 → **journal 에 enqueue 만** (p4
+   호출 0). 매 호출 즉시 반환.
+3. **종료**: `flush_on_exit` 가 journal 의 모든 변경을 한 CL 로 묶어
+   submit + aggregated multi-line description.
+
+### `p4_sync.py` 구현
+
+**module-level journal**:
+```python
+_CHANGE_JOURNAL: list[tuple[list[Path], str]] = []
+_JOURNAL_LOCK = threading.Lock()
+
+def enqueue_db_change(paths, description) -> None
+def get_journal_snapshot() -> list
+def clear_journal() -> None
+def journal_size() -> int
+```
+
+**API 변경** (backwards-compat):
+- `submit_files_to_p4(paths, description, *, blocking=False)` —
+  `blocking=False` (default) 면 enqueue 만, `blocking=True` 는 종전대로
+  즉시 submit (테스트 / emergency).
+- `submit_db_to_p4(...)` — wrapper, 같은 정책.
+- `on_complete` callback — enqueue 시 즉시 `"queued"` 로 호출, blocking
+  시는 종전 status string.
+
+**`flush_on_exit(db_path, *, description=None)`**:
+1. `wait_for_pending()` — legacy thread 안전망.
+2. `_SESSION_MUTATED` False 면 skip.
+3. journal snapshot + clear.
+4. paths dedup.
+5. `_build_aggregated_description(journal, header=description)` → multi-line.
+6. `_do_submit_multi(all_paths, aggregated)` 단일 호출.
+
+**`_build_aggregated_description`**:
+- 빈 journal → `"[whooing-tui] session end — no changes"`.
+- 비어있지 않으면:
+  ```
+  [whooing-tui] session end — N db changes bundled
+
+    · <description 1>
+    · <description 2>
+    · (3x) <repeated description>
+  ```
+- 동일 string 반복은 (Nx) prefix 로 카운트.
+- `"[whooing-tui] "` prefix 는 header 중복이라 제거.
+
+### 결과 — P4 history 비교
+
+종전 (CL #53090 직전 50건 mutation):
+```
+53090  session end — flush pending db changes
+53089  entry 1713038 deleted
+53084  entry 1710706 deleted
+53081  entry 1709053 deleted
+...  (CL 50개)
+```
+
+새 정책 (같은 세션):
+```
+53093  [whooing-tui] session end — 50 db changes bundled
+
+         · (47x) entry deleted
+         · annotation persist e456 — memo + tags
+         · batch tag add #식비: 4/4 entries
+```
+
+(개별 description 의 entry_id 부분이 다르면 (Nx) grouping 안 됨 — 각 라인.
+실제로는 `entry NNNNNN deleted` 가 각각 distinct string 이라 ~50줄 description.
+그래도 한 CL.)
+
+### 영향 범위
+
+- `EntryRepository.persist` / `purge` — 변경 없음 (기존 `submit_db_to_p4`
+  / `submit_files_to_p4` 시그니처 동일, 동작만 enqueue 로 전환).
+- `screens/entries.py · action_batch_tag_add` — 동일.
+- `app.py · on_unmount` / `_shutdown_worker` — 동일 (`flush_on_exit` 호출).
+- 첨부 추가 등 다른 mutating screen — 동일.
+
+### 테스트 (+4 신규, total 1124 → 1128)
+
+`test_p4_sync.py`:
+- `test_submit_enqueues_into_journal_without_p4_call` — 매 submit 이
+  journal 에 쌓이고 p4 호출 0 (fake_p4 log 비어있음).
+- `test_flush_on_exit_consolidates_journal_into_single_cl` — flush 후
+  `submit -c <CL>` 호출 1회 (모든 변경 한 CL).
+- `test_aggregated_description_lists_distinct_entries` — distinct 라인
+  + 동일 string 은 (Nx).
+- `test_aggregated_description_custom_header` — 명시 header 사용.
+- 기존 `test_submit_async_threads_are_tracked_and_joinable` 제거 (새
+  정책에선 thread 안 spawn).
+
+`conftest.py · _isolate_p4_pending` 에 `clear_journal()` 추가 — 테스트
+간 journal 격리.
+
 ## CL #53092 — 0.78.0 — 중복 정리: 사람 입력 우선 + 매칭 휴리스틱 강화 (2026-05-19)
 
 배경 (사용자 요청, 2026-05-19): "중복 거래를 정리할 때 남길 거래와 삭제할

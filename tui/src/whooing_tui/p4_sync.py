@@ -365,6 +365,110 @@ def reset_session_mutated() -> None:
     _SESSION_MUTATED = False
 
 
+# ----------------------------------------------------------------------
+# 세션 변경 journal (CL #53093+).
+# ----------------------------------------------------------------------
+#
+# 사용자 요청 (2026-05-19): "지금은 매 수정마다 데이터베이스를 서브밋하고
+# 있는데 이를 앱 시작할 때 최신화, 앱 종료할때 서브밋하도록 변경해주세요.
+# 단 앱 종료할때 서브밋할때는 디스크립션에 이 서브밋에 어떤 수정들이
+# 포함되어있는지 디스크립션에 잘 작성해주세요."
+#
+# 종전 정책: 매 mutation 마다 `submit_files_to_p4` 가 daemon=False 스레드
+# spawn → 즉시 `p4 submit` 실행. 결과: 5분 작업에 CL 수십 개, 각각 한 줄
+# description.
+#
+# 새 정책 (CL #53093+):
+#   1. 매 mutation 의 `submit_*` 호출 → `_CHANGE_JOURNAL` 에 enqueue (즉시
+#      반환, p4 호출 없음).
+#   2. 앱 종료 시 `flush_on_exit` 가 journal 을 한 CL 로 묶어 `_do_submit_
+#      multi(all_paths, aggregated_description)` 단일 호출.
+#   3. aggregated description = journal 의 description 들을 그룹화 + 카운트
+#      해 multi-line 으로 build (`_build_aggregated_description`).
+_CHANGE_JOURNAL: list[tuple[list[Path], str]] = []
+_JOURNAL_LOCK = threading.Lock()
+
+
+def enqueue_db_change(paths: list[Path], description: str) -> None:
+    """세션 변경을 journal 에 적재. `flush_on_exit` 가 한 CL 로 묶어 submit.
+
+    호출자 (예: EntryRepository / entries.py) 의 기존 `submit_db_to_p4` /
+    `submit_files_to_p4` 호출이 본 함수로 위임된다 — API 그대로 사용.
+
+    `mark_session_mutated()` 도 자동 호출 — flush_on_exit 의 dirty 게이트
+    통과.
+    """
+    paths_snap = [Path(p) for p in paths]
+    with _JOURNAL_LOCK:
+        _CHANGE_JOURNAL.append((paths_snap, str(description)))
+    mark_session_mutated()
+
+
+def get_journal_snapshot() -> list[tuple[list[Path], str]]:
+    """현재 journal 의 (paths, description) tuple list 복사본."""
+    with _JOURNAL_LOCK:
+        return [(list(p), d) for p, d in _CHANGE_JOURNAL]
+
+
+def clear_journal() -> None:
+    """journal 비움 — flush 직후 / 테스트 격리에서 호출."""
+    with _JOURNAL_LOCK:
+        _CHANGE_JOURNAL.clear()
+
+
+def journal_size() -> int:
+    """journal 에 쌓인 변경 수 — shutdown modal 의 라이브 카운트 등."""
+    with _JOURNAL_LOCK:
+        return len(_CHANGE_JOURNAL)
+
+
+def _build_aggregated_description(
+    entries: list[tuple[list[Path], str]],
+    *,
+    header: str | None = None,
+) -> str:
+    """journal 을 multi-line description 으로 빌드.
+
+    같은 description 이 반복되면 묶고 카운트 표기 — "(3x) entry e123
+    deleted" 형태. caller 의 mechanical 문자열을 보존해 사람이 읽기 좋게.
+
+    output 예:
+        [whooing-tui] session end — 5 db changes bundled
+
+          · (3x) entry 1713038 deleted
+          · annotation persist e456 — memo + tags
+          · batch tag add #식비: 4/4 entries
+    """
+    n = len(entries)
+    if n == 0:
+        return header or "[whooing-tui] session end — no changes"
+
+    counts: dict[str, int] = {}
+    order: list[str] = []
+    for _paths, desc in entries:
+        if desc not in counts:
+            counts[desc] = 0
+            order.append(desc)
+        counts[desc] += 1
+
+    plural = "s" if n != 1 else ""
+    head = header or (
+        f"[whooing-tui] session end — {n} db change{plural} bundled"
+    )
+    lines: list[str] = [head, ""]
+    for desc in order:
+        # 호출자가 "[whooing-tui] foo" prefix 를 붙였으면 header 중복이라 제거.
+        clean = desc
+        if clean.startswith("[whooing-tui] "):
+            clean = clean[len("[whooing-tui] "):]
+        c = counts[desc]
+        if c == 1:
+            lines.append(f"  · {clean}")
+        else:
+            lines.append(f"  · ({c}x) {clean}")
+    return "\n".join(lines)
+
+
 def submit_files_to_p4(
     paths: list[Path],
     description: str,
@@ -372,35 +476,29 @@ def submit_files_to_p4(
     blocking: bool = False,
     on_complete: Any = None,
 ) -> None:
-    """여러 파일을 한 CL 로 묶어 P4 에 자동 submit — fire-and-forget.
+    """여러 파일의 변경을 journal 에 enqueue — 종료 시 한 CL 로 묶음 submit.
 
-    CL #51124+. 사용자 요청: "첨부파일을 서브밋 할 때 데이터베이스, 파일을
-    함께 서브밋하고 디스크립션에 어떤 입력에 의한 서브밋인지 상세히 기입."
-    db 와 첨부 파일을 동일 description / 동일 changelist 로 묶는 진입점.
+    CL #51124+ 도입, CL #53093+ 정책 변경. 사용자 요청 (2026-05-19):
+    "매 수정마다 서브밋" → "시작 시 sync + 종료 시 한 번 submit + aggregated
+    description".
 
-    `description` 은 caller 가 만드는 mechanical 문자열 (LLM 미관여).
-    `blocking=True` 는 테스트 전용 — worker 스레드 없이 즉시 실행.
+    매 호출은 *즉시* 반환 — p4 호출 없음. 실제 submit 은 `flush_on_exit`
+    에서.
 
-    CL #51118 도입 이후의 thread 추적 / `wait_for_pending` 정책 그대로 적용.
-
-    CL #51136+ (A4): `on_complete(status: str)` callback — submit 끝나면
-    호출. status:
-      - "ok": p4 환경 + 매핑 OK + submit 성공.
-      - "no-changes": 변경 없음 (이미 동일).
-      - "no-p4": p4 환경 부재 (silent 정책 그대로 — caller 만 인지).
-      - "unmapped": workspace 매핑 외.
-      - "error": 그 외 실패.
+    파라미터:
+      paths, description — journal 의 한 entry 가 됨.
+      blocking=True — 테스트 / emergency-only path. journal 우회하고 즉시
+        `_do_submit_multi` 실행. on_complete 도 그 결과 status 로 호출.
+      on_complete — blocking=True 면 submit 결과 status, blocking=False
+        면 즉시 "queued" 로 호출 (호환성).
     """
-    # CL #52853+: 본 호출 시점에 세션 dirty 마크 — flush_on_exit 가 종료
-    # 시 안전망 submit 을 실행할 근거. 호출 자체가 "db 변경 의도가 있었다"
-    # 의 명확한 증거.
-    mark_session_mutated()
-
     if blocking:
+        # 테스트 / emergency: journal 우회.
+        mark_session_mutated()
         status = "error"
         try:
             status = _do_submit_multi(list(paths), description)
-        except Exception:  # pragma: no cover — 절대 예외 표면화 X
+        except Exception:  # pragma: no cover
             log.exception("p4 submit_files blocking failed")
         if on_complete is not None:
             try:
@@ -408,33 +506,13 @@ def submit_files_to_p4(
             except Exception:  # pragma: no cover
                 log.exception("on_complete callback failed")
         return
-
-    paths_snapshot = list(paths)
-
-    def _runner() -> None:
-        status = "error"
+    # 일반 path — enqueue only.
+    enqueue_db_change(paths, description)
+    if on_complete is not None:
         try:
-            status = _do_submit_multi(paths_snapshot, description)
+            on_complete("queued")
         except Exception:  # pragma: no cover
-            log.exception("p4 submit_files thread failed")
-        finally:
-            with _PENDING_LOCK:
-                try:
-                    _PENDING.remove(threading.current_thread())
-                except ValueError:  # pragma: no cover
-                    pass
-            if on_complete is not None:
-                try:
-                    on_complete(status)
-                except Exception:  # pragma: no cover
-                    log.exception("on_complete callback failed")
-
-    t = threading.Thread(
-        target=_runner, name="whooing-p4-sync", daemon=False,
-    )
-    with _PENDING_LOCK:
-        _PENDING.append(t)
-    t.start()
+            log.exception("on_complete callback failed")
 
 
 def submit_db_to_p4(
@@ -443,9 +521,8 @@ def submit_db_to_p4(
     *,
     blocking: bool = False,
 ) -> None:
-    """단일 db 파일 submit — `submit_files_to_p4([db_path], ...)` 의 후방
-    호환 wrapper. CL #51107 이후의 호출자 (entries 의 `_persist_local`/
-    `_purge_local`) 가 그대로 사용."""
+    """단일 db 파일 변경 enqueue. CL #53093+ 부터 즉시 submit 안 함 (journal
+    경유). `submit_files_to_p4([db_path], ...)` 의 후방 호환 wrapper."""
     submit_files_to_p4([db_path], description, blocking=blocking)
 
 
@@ -483,24 +560,25 @@ def sync_db_from_p4(db_path: Path) -> None:
 def flush_on_exit(
     db_path: Path,
     *,
-    description: str = "[whooing-tui] session end — flush pending db changes",
+    description: str | None = None,
 ) -> None:
-    """앱 종료 직전에 호출. 다음 두 가지를 순차 수행:
+    """앱 종료 직전 호출. journal 의 모든 변경을 한 CL 로 묶어 submit.
 
-    1. `wait_for_pending()` — 진행 중이던 submit worker 들 join.
-    2. *추가 안전망*: 미반영 로컬 변경이 있을 수 있으므로 blocking 으로 한
-       번 더 `_do_submit` (변경 없으면 `p4 submit` 의 'no files to submit'
-       으로 silent skip — `_do_submit` 가 처리).
+    CL #53093+ 정책 (사용자 요청): 매 mutation 즉시 submit 대신 종료
+    시점에 한 번 묶음 submit. journal 의 description 들을 그룹화 +
+    카운트해 aggregated multi-line description 작성.
 
-    사용자 요청 (CL #51119+): "종료할 때, 데이터를 변경할 때마다 서브밋."
-    매 mutation 의 자동 submit 은 `_persist_local`/`_purge_local` 경로에
-    있고, 본 함수는 *마지막 안전망* — race / 누락 케이스 보호.
+    `description` 인자:
+      None (default) → "[whooing-tui] session end — N db changes bundled"
+      특정 string → header 로 사용 (테스트 / 명시 호출 케이스).
 
-    CL #52853+ 최적화 (사용자 요청): 본 프로세스 동안 한 번도 mutation
-    submit 시도가 없었으면 (`is_session_mutated() == False`) 안전망
-    `_do_submit` 자체를 생략 — `p4 reconcile -n` 라운드트립 비용 0. 시작
-    시 `has_pending_local_changes` 가 True 였던 경우는 caller 가 명시적으로
-    `mark_session_mutated()` 를 부른 뒤 호출하므로 안전.
+    journal 이 비어있고 mutation 도 없었으면 noop. 비어있어도 `_SESSION_
+    MUTATED` 가 True 면 (예: 시작 시 has_pending_local_changes 보고 caller
+    가 `mark_session_mutated()` 명시 호출) db_path 1개로 안전망 submit —
+    다른 프로세스가 남긴 변경 처리.
+
+    CL #51118+ 호환: legacy `submit_files_to_p4(blocking=True)` 또는 미래의
+    다른 thread spawn 경로가 남아있을 수 있으므로 먼저 `wait_for_pending()`.
     """
     wait_for_pending()
     if not _SESSION_MUTATED:
@@ -508,8 +586,27 @@ def flush_on_exit(
             "flush_on_exit: 세션 동안 mutation 없음 — 안전망 submit 생략",
         )
         return
+
+    journal = get_journal_snapshot()
+    clear_journal()
+
+    # journal 에서 paths 수집 (dedup). 비어있어도 db_path 만으로 한 번 시도
+    # (시작 시 has_pending_local_changes 가 True 였던 케이스 보호).
+    all_paths: list[Path] = []
+    seen: set[str] = set()
+    for paths, _desc in journal:
+        for p in paths:
+            sp = str(p)
+            if sp not in seen:
+                seen.add(sp)
+                all_paths.append(p)
+    db_str = str(db_path)
+    if db_str not in seen:
+        all_paths.insert(0, db_path)
+
+    desc = _build_aggregated_description(journal, header=description)
     try:
-        _do_submit(db_path, description)
+        _do_submit_multi(all_paths, desc)
     except Exception:  # pragma: no cover
         log.debug("flush_on_exit submit failed (silent)", exc_info=True)
 

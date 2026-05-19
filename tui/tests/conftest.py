@@ -46,6 +46,8 @@ def _isolate_p4_pending():
         # CL #52853+: 세션 dirty 플래그 — 이전 테스트가 set 한 채로 다음
         # 테스트의 `flush_on_exit skip` 검증을 오염시킬 수 있어 reset.
         p4_sync.reset_session_mutated()
+        # CL #53093+: 세션 change journal 도 격리.
+        p4_sync.clear_journal()
     except Exception:  # pragma: no cover
         pass
     yield

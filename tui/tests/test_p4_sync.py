@@ -190,25 +190,77 @@ def _make_fake_p4(path: Path, log_file: Path, *, where_filter_to: str | None = N
     path.chmod(0o755)
 
 
-def test_submit_async_threads_are_tracked_and_joinable(monkeypatch, tmp_path):
-    """CL #51118+: daemon=False + _PENDING 추적 — `wait_for_pending` 으로
-    모두 join 됨."""
+def test_submit_enqueues_into_journal_without_p4_call(monkeypatch, tmp_path):
+    """CL #53093+ 정책 변경: submit_db_to_p4 가 즉시 p4 호출 안 함 — journal
+    에 enqueue. 실 submit 은 `flush_on_exit` 에서.
+    """
     log_file = tmp_path / "p4-calls.txt"
     fake_p4 = tmp_path / "p4"
-    _make_fake_p4(fake_p4, log_file, sleep_before=0.05)
+    _make_fake_p4(fake_p4, log_file)
     monkeypatch.setenv("WHOOING_P4_BIN", str(fake_p4))
     db = tmp_path / "db.sqlite"
     db.write_bytes(b"")
-    # 비동기 submit 2개 발사 — _PENDING 에 추적되고 wait_for_pending 으로
-    # 둘 다 끝까지 기다려야.
-    p4_sync.submit_db_to_p4(db, "test 1", blocking=False)
-    p4_sync.submit_db_to_p4(db, "test 2", blocking=False)
-    p4_sync.wait_for_pending(timeout_per_thread=5.0)
-    # 두 submit 의 호출이 모두 기록됐는지 확인 — CL #52749+ 패턴은
-    # `submit -c <CL>`.
-    log_lines = log_file.read_text().splitlines()
-    submit_calls = [l for l in log_lines if l.startswith("submit ")]
-    assert len(submit_calls) == 2
+    # 비동기 submit 2개 enqueue — journal 에 2 entry, p4 호출 0.
+    p4_sync.submit_db_to_p4(db, "[whooing-tui] test 1", blocking=False)
+    p4_sync.submit_db_to_p4(db, "[whooing-tui] test 2", blocking=False)
+    p4_sync.wait_for_pending(timeout_per_thread=5.0)  # 호환성 — noop.
+    assert p4_sync.journal_size() == 2
+    # log_file 가 안 생겼거나 비어있어야 (p4 호출 X).
+    assert not log_file.exists() or not log_file.read_text().strip()
+
+
+def test_flush_on_exit_consolidates_journal_into_single_cl(monkeypatch, tmp_path):
+    """CL #53093+: flush_on_exit 가 journal 전부를 한 CL 로 묶어 submit."""
+    log_file = tmp_path / "p4-calls.txt"
+    fake_p4 = tmp_path / "p4"
+    _make_fake_p4(fake_p4, log_file)
+    monkeypatch.setenv("WHOOING_P4_BIN", str(fake_p4))
+    db = tmp_path / "db.sqlite"
+    db.write_bytes(b"")
+    p4_sync.submit_db_to_p4(db, "[whooing-tui] entry e1 deleted")
+    p4_sync.submit_db_to_p4(db, "[whooing-tui] entry e2 deleted")
+    p4_sync.submit_db_to_p4(db, "[whooing-tui] annotation update e3")
+    assert p4_sync.journal_size() == 3
+    p4_sync.flush_on_exit(db)
+    # journal 비워짐.
+    assert p4_sync.journal_size() == 0
+    # p4 호출 1회 (submit -c <CL>) — 모든 변경이 한 CL.
+    log = log_file.read_text().splitlines()
+    submit_calls = [l for l in log if l.startswith("submit -c ")]
+    assert len(submit_calls) == 1
+
+
+def test_aggregated_description_lists_distinct_entries():
+    """서로 다른 description 은 각 라인. 반복 description 은 (Nx)."""
+    desc = p4_sync._build_aggregated_description([
+        ([], "[whooing-tui] entry e1 deleted"),
+        ([], "[whooing-tui] entry e2 deleted"),
+        ([], "[whooing-tui] annotation persist e3"),
+        ([], "[whooing-tui] annotation persist e3"),  # exact duplicate
+    ])
+    assert "4 db change" in desc
+    # 각 distinct 라인 모두 노출.
+    assert "entry e1 deleted" in desc
+    assert "entry e2 deleted" in desc
+    # 동일 string 2회 → (2x).
+    assert "(2x)" in desc
+    assert "annotation persist e3" in desc
+
+
+def test_aggregated_description_empty_journal():
+    """journal 비어있으면 'no changes' 메시지."""
+    desc = p4_sync._build_aggregated_description([])
+    assert "no changes" in desc
+
+
+def test_aggregated_description_custom_header():
+    """caller 가 header 지정하면 그 header 가 사용됨."""
+    desc = p4_sync._build_aggregated_description(
+        [([], "[whooing-tui] foo")],
+        header="[whooing-tui] custom session header",
+    )
+    assert desc.startswith("[whooing-tui] custom session header")
+    assert "foo" in desc
 
 
 def test_wait_for_pending_when_empty_is_noop():
