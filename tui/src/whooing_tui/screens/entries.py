@@ -1051,12 +1051,22 @@ class EntriesScreen(MenuBarMixin, Screen):
     async def _scan_duplicates_worker(self) -> None:
         """3년 거래 fetch → cluster 추출 → DuplicateScanScreen push.
 
+        CL #52977+: fetch / 분석 단계 동안 `ScanProgressModal` 을 화면 위에
+        띄워 사용자에게 진행 안내. modal 의 `set_activity(text)` 로 현재
+        단계를 표시. 완료 (성공/실패/취소) 시 modal 을 반드시 dismiss —
+        DuplicateScanScreen 도 같은 modal stack 에 push 되므로 progress
+        modal 이 그 아래 깔리지 않도록.
+
         성공한 cluster 한 건이라도 있으면 entries 재로드. cluster 발견
-        못 하면 status 만 안내 (화면 띄우지 않음 — 작업 흐름 끊김 최소화).
+        못 하면 status 만 안내 (결과 화면 띄우지 않음 — 작업 흐름 끊김
+        최소화).
         """
         import asyncio
         from whooing_core.dupes import find_duplicate_clusters
-        from whooing_tui.screens.duplicate_scan import DuplicateScanScreen
+        from whooing_tui.screens.duplicate_scan import (
+            DuplicateScanScreen,
+            ScanProgressModal,
+        )
 
         log.info("scan_duplicates worker started")
         session = self.app.session  # type: ignore[attr-defined]
@@ -1065,42 +1075,71 @@ class EntriesScreen(MenuBarMixin, Screen):
                 "활성 섹션이 없습니다 — `s` 로 먼저 선택하세요.", error=True,
             )
             return
-        end_date = today_yyyymmdd()
-        # 365 * 3 — 3년 윈도우. list_entries 가 split_yearly_ranges 로
-        # 1년 단위 분할 호출, 100-cap 도 bisection 처리.
-        start_date = days_ago_yyyymmdd(365 * 3)
-        self.set_status(
-            f"⏳ 중복 검사 — 거래 fetch 중… ({start_date} ~ {end_date}, "
-            "3년치)",
-        )
-        # frame yield — status 가 fetch await 전에 반드시 한 번 paint.
+
+        # progress modal — fetch + 분석 단계 동안 화면 가림. push_screen 은
+        # sync (큐에 등록만), mount 는 다음 frame.
+        progress = ScanProgressModal(initial="📊 3년치 거래 fetch 시작…")
+        self.app.push_screen(progress)  # type: ignore[attr-defined]
         await asyncio.sleep(0)
+
+        clusters_to_show: list | None = None
         try:
-            entries = await self._client.list_entries(
-                section_id=session.section_id,
-                start_date=start_date,
-                end_date=end_date,
+            end_date = today_yyyymmdd()
+            # 365 * 3 — 3년 윈도우. list_entries 가 split_yearly_ranges 로
+            # 1년 단위 분할 호출, 100-cap 도 bisection 처리.
+            start_date = days_ago_yyyymmdd(365 * 3)
+            progress.set_activity(
+                f"📊 거래 fetch 중…\n{start_date} ~ {end_date} (3년치)",
             )
-        except ToolError as e:
             self.set_status(
-                f"거래 조회 실패 [{e.kind}] {e.message}", error=True,
+                f"⏳ 중복 검사 — 거래 fetch 중… ({start_date} ~ {end_date}, "
+                "3년치)",
             )
+            await asyncio.sleep(0)
+            try:
+                entries = await self._client.list_entries(
+                    section_id=session.section_id,
+                    start_date=start_date,
+                    end_date=end_date,
+                )
+            except ToolError as e:
+                self.set_status(
+                    f"거래 조회 실패 [{e.kind}] {e.message}", error=True,
+                )
+                return
+            except Exception as e:
+                log.exception("scan_duplicates fetch failed")
+                self.set_status(f"거래 조회 실패 (INTERNAL): {e}", error=True)
+                return
+            progress.set_activity(
+                f"🔍 중복 cluster 검색 중…\n"
+                f"(거래 {len(entries):,} 건 분석 — blocking + windowing)",
+            )
+            self.set_status(
+                f"🔍 중복 cluster 검색 중… (거래 {len(entries):,} 건)",
+            )
+            await asyncio.sleep(0)
+            # pure func — sync 로 충분히 빠르지만 큰 부담은 worker 컨텍스트 이라 OK.
+            clusters = find_duplicate_clusters(entries, date_window_days=7)
+            if not clusters:
+                self.set_status(
+                    f"✅ 거래 {len(entries):,} 건 검사 완료 — 중복 후보 없음.",
+                )
+                return
+            clusters_to_show = clusters
+        finally:
+            # 어떤 경로 (정상/예외/early return) 든 progress modal 은 닫음.
+            # DuplicateScanScreen 도 modal 이라 같은 stack — progress 가
+            # 위에 남아있으면 결과 화면을 가린다.
+            try:
+                progress.dismiss()
+            except Exception:  # pragma: no cover
+                pass
+
+        if clusters_to_show is None:
             return
-        except Exception as e:
-            log.exception("scan_duplicates fetch failed")
-            self.set_status(f"거래 조회 실패 (INTERNAL): {e}", error=True)
-            return
-        self.set_status(
-            f"🔍 중복 cluster 검색 중… (거래 {len(entries):,} 건)",
-        )
+        # progress modal 이 실제로 pop 되도록 한 frame 양보 후 결과 push.
         await asyncio.sleep(0)
-        # pure func — sync 로 충분히 빠르지만 큰 부담은 worker 컨텍스트 이라 OK.
-        clusters = find_duplicate_clusters(entries, date_window_days=7)
-        if not clusters:
-            self.set_status(
-                f"✅ 거래 {len(entries):,} 건 검사 완료 — 중복 후보 없음.",
-            )
-            return
 
         async def _delete_many(eids: list[str]) -> tuple[int, list[str]]:
             deleted = 0

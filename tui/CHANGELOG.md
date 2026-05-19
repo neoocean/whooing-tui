@@ -5,6 +5,80 @@
 > **0.17.x 이전** (CL #51119 ~ #1) 항목은 분량 정리 차원에서
 > [`CHANGELOG-archive-0.17.md`](./CHANGELOG-archive-0.17.md) 로 분리 보존.
 
+## CL #52977 — 0.76.2 — 중복 검사 진행 popup (ScanProgressModal) (2026-05-19)
+
+배경 (사용자 요청, 2026-05-19): "중복 검사중일 때 화면을 작은 팝업으로
+덮고 중복 검사중이라고 안내해주세요. 그리고 지금 하고 있는 작업을 표시
+해주세요."
+
+### 기존 한계
+
+CL #52968 의 진입 피드백은 화면 하단 status 한 줄. 사용자는 본 화면
+(거래내역 DataTable) 을 그대로 보면서 status 변화를 *발견* 해야 했음 —
+특히 3년 ledger fetch 가 수십 초 걸리는 동안 "화면이 멈춘 것 같다" 라는
+인상을 줄 수 있음.
+
+### 수정 — 신규 `ScanProgressModal`
+
+`screens/duplicate_scan.py`:
+
+```python
+class ScanProgressModal(ModalScreen[None]):
+    """BINDINGS 없음 — 작업 완료 전 닫히지 않음.
+    set_activity(text) 로 현재 단계 갱신.
+    """
+```
+
+레이아웃:
+```
+        ╭─ 🔍 중복 거래 검사 중 ─────╮
+        │                              │
+        │    📊 거래 fetch 중…         │
+        │    20230520 ~ 20260519 (3년치) │
+        │                              │
+        │    잠시만 기다려주세요…       │
+        │                              │
+        ╰──────────────────────────────╯
+```
+
+- ModalScreen — 본 화면 위에 작은 popup 으로 떠 본 화면을 가린다.
+- `set_activity(text)` — buffer + (mounted 면) Static 갱신. mount 이전
+  호출도 안전 (initial 처럼 compose 가 사용).
+- **BINDINGS 비어있음** — Esc 도 무효. 작업이 끝나야 worker 가 자동
+  dismiss. 사용자가 멋대로 닫고 worker 만 계속 도는 상황 방지.
+
+### `_scan_duplicates_worker` 단계별 progress.set_activity
+
+| 단계 | activity 텍스트 |
+|---|---|
+| 진입 | `📊 3년치 거래 fetch 시작…` |
+| fetch | `📊 거래 fetch 중…\n{start} ~ {end} (3년치)` |
+| 분석 | `🔍 중복 cluster 검색 중…\n(거래 N 건 분석 — blocking + windowing)` |
+
+worker 는 try/finally 로 modal dismiss 보장 — 어떤 경로 (정상/예외/
+early return) 든 modal 이 화면에 남지 않음. DuplicateScanScreen 도 같은
+modal stack 이라 progress 가 위에 남으면 결과 화면을 가릴 수 있어 중요.
+
+### 결과
+
+| 상황 | 사용자가 보는 것 |
+|---|---|
+| 클릭 직후 | ScanProgressModal 등장 — "📊 3년치 거래 fetch 시작…" |
+| fetch 중 (긴 await) | popup 갱신 — "📊 거래 fetch 중… 날짜범위" |
+| 분석 중 | popup 갱신 — "🔍 중복 cluster 검색 중… N 건" |
+| 중복 있음 | popup 닫힘 → DuplicateScanScreen 등장 |
+| 중복 없음 | popup 닫힘 → 본 화면 + status "✅ 검사 완료 — 중복 후보 없음" |
+| 에러 | popup 닫힘 → 본 화면 + status "거래 조회 실패…" |
+
+### 테스트 (+3, total 1090 → 1093)
+
+- `test_scan_shows_progress_modal_during_fetch` — 어느 시점에 modal 또는
+  결과 화면이 떠야, 최종 DuplicateScanScreen 으로 자동 교체.
+- `test_scan_progress_modal_set_activity_buffer_before_mount` — mount
+  이전 set_activity 안전성.
+- `test_scan_progress_modal_dismissed_when_no_clusters` — 중복 0건 시
+  progress 도 결과도 안 떠 있어야 (본 화면 복귀).
+
 ## CL #52968 — 0.76.1 — 중복 거래 검사 진입 피드백 + 실키 dispatch 테스트 (2026-05-19)
 
 배경 (사용자 보고, CL #52963 직후): "중복 거래 검사를 눌러도 아무 일도 안

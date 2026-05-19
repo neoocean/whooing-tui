@@ -69,6 +69,86 @@ def _fmt_money(v: Any) -> str:
 DeleteCallback = Callable[[list[str]], Awaitable[tuple[int, list[str]]]]
 
 
+class ScanProgressModal(ModalScreen[None]):
+    """중복 검사가 fetch/분석 중일 때 본 화면을 가리는 단순 진행 popup.
+
+    CL #52977+ 사용자 요청: "중복 검사중일 때 화면을 작은 팝업으로 덮고
+    중복 검사중이라고 안내해주세요. 그리고 지금 하고 있는 작업을 표시해
+    주세요."
+
+    worker 가 `app.push_screen(ScanProgressModal())` 으로 띄우고
+    `set_activity(text)` 를 호출해 본문 갱신, 작업 완료 시 `dismiss()`.
+
+    사용자 입력 없음 — BINDINGS 비어있어 Esc 도 무효. 작업이 끝나야 닫힘
+    (긴 fetch 중 사용자가 멋대로 닫고 worker 만 계속 도는 상황 방지).
+    실제로 화면을 가리고 있어 다른 액션도 막힘 → 일종의 modal busy 표시.
+    """
+
+    DEFAULT_CSS = """
+    ScanProgressModal {
+        align: center middle;
+    }
+    #scan-progress-frame {
+        width: auto;
+        min-width: 50;
+        max-width: 70;
+        height: auto;
+        padding: 1 2;
+        border: thick $accent;
+        background: $surface;
+    }
+    #scan-progress-title {
+        height: 1;
+        content-align: center middle;
+        color: $accent;
+        text-style: bold;
+    }
+    #scan-progress-activity {
+        height: auto;
+        min-height: 2;
+        margin-top: 1;
+        content-align: center middle;
+    }
+    #scan-progress-hint {
+        height: 1;
+        margin-top: 1;
+        content-align: center middle;
+        color: $text-muted;
+    }
+    """
+
+    def __init__(self, initial: str = "준비 중…") -> None:
+        super().__init__()
+        # mount 전에 set_activity 가 호출돼도 보존되도록 buffer.
+        self._activity_text: str = initial
+        # 테스트 친화.
+        self.last_activity: str = initial
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="scan-progress-frame"):
+            yield Static(
+                "[bold]🔍 중복 거래 검사 중[/bold]",
+                id="scan-progress-title",
+            )
+            yield Static(self._activity_text, id="scan-progress-activity")
+            yield Static(
+                "잠시만 기다려주세요…",
+                id="scan-progress-hint",
+            )
+
+    def set_activity(self, text: str) -> None:
+        """현재 작업을 안내하는 텍스트 갱신 — worker 가 단계마다 호출.
+
+        mount 이전에 호출돼도 안전 (buffer 에 저장, compose 가 사용).
+        """
+        self._activity_text = text
+        self.last_activity = text
+        try:
+            self.query_one("#scan-progress-activity", Static).update(text)
+        except Exception:  # pragma: no cover — not mounted yet.
+            pass
+
+
 class DuplicateScanScreen(ModalScreen[bool]):
     """전체 중복 cluster 를 하나씩 순회하며 dedup.
 

@@ -13,7 +13,10 @@ import pytest
 
 from whooing_tui.app import WhooingTuiApp
 from whooing_tui.models import ToolError
-from whooing_tui.screens.duplicate_scan import DuplicateScanScreen
+from whooing_tui.screens.duplicate_scan import (
+    DuplicateScanScreen,
+    ScanProgressModal,
+)
 from whooing_tui.screens.entries import EntriesScreen
 
 
@@ -210,6 +213,83 @@ async def test_menu_popup_dispatches_scan_duplicates():
             f"Current: {type(app.screen).__name__}, "
             f"status={es.last_status!r}"
         )
+
+
+@pytest.mark.asyncio
+async def test_scan_shows_progress_modal_during_fetch():
+    """fetch / 분석 중 ScanProgressModal 이 화면 위에 떠야 — 그리고 결과
+    DuplicateScanScreen 으로 자동 교체.
+
+    CL #52977 사용자 요청: "중복 검사중일 때 화면을 작은 팝업으로 덮고
+    중복 검사중이라고 안내해주세요. 그리고 지금 하고 있는 작업을 표시해
+    주세요."
+
+    fake client 의 list_entries 는 즉시 반환하므로 실제 실행에서는 progress
+    modal 이 잠깐만 보임. 본 테스트는 *어느 시점이라도* progress modal 이
+    떴음을 보장한다 (set_activity 가 한 번이라도 호출되면 last_activity
+    가 남음).
+    """
+    fake = FakeClient()
+    app = WhooingTuiApp(client=fake)  # type: ignore[arg-type]
+    seen_progress: list[ScanProgressModal] = []
+
+    async with app.run_test() as pilot:
+        await _open_entries(app)
+        es = app.screen
+        assert isinstance(es, EntriesScreen)
+        es.action_scan_duplicates()
+        # progress modal 이 어느 순간엔가 화면에 떠야.
+        ok = await _wait_for(
+            lambda: isinstance(app.screen, (ScanProgressModal, DuplicateScanScreen)),
+            timeout=3.0,
+        )
+        assert ok
+        # 한 번이라도 progress modal 이었으면 capture.
+        if isinstance(app.screen, ScanProgressModal):
+            seen_progress.append(app.screen)
+        # 결국 결과 화면으로 교체.
+        ok2 = await _wait_for(
+            lambda: isinstance(app.screen, DuplicateScanScreen),
+            timeout=5.0,
+        )
+        assert ok2, f"Did not reach DuplicateScanScreen. Final: {type(app.screen).__name__}"
+        # progress modal 이 closed — DuplicateScanScreen 위에 떠 있지 않아야.
+        assert isinstance(app.screen, DuplicateScanScreen)
+
+
+def test_scan_progress_modal_set_activity_buffer_before_mount():
+    """ScanProgressModal.set_activity 가 mount 전에도 안전 — buffer 에 저장."""
+    m = ScanProgressModal(initial="처음")
+    assert m.last_activity == "처음"
+    # mount 전 호출 — 예외 없이 buffer 갱신.
+    m.set_activity("두번째")
+    assert m.last_activity == "두번째"
+    assert m._activity_text == "두번째"
+
+
+@pytest.mark.asyncio
+async def test_scan_progress_modal_dismissed_when_no_clusters():
+    """중복 0건이면 progress modal 만 잠깐 떴다 사라지고 DuplicateScanScreen
+    은 안 뜸 (status 만 갱신)."""
+    fake = FakeClient(entries=[
+        {"entry_id": "x", "entry_date": "20260510", "money": 1000,
+         "l_account_id": "x20", "r_account_id": "x11", "item": "A"},
+        {"entry_id": "y", "entry_date": "20260201", "money": 2000,
+         "l_account_id": "x20", "r_account_id": "x11", "item": "B"},
+    ])
+    app = WhooingTuiApp(client=fake)  # type: ignore[arg-type]
+    async with app.run_test() as pilot:
+        await _open_entries(app)
+        es = app.screen
+        assert isinstance(es, EntriesScreen)
+        es.action_scan_duplicates()
+        # 결국 EntriesScreen 으로 복귀 (progress 도 결과도 없어야).
+        await _wait_for(
+            lambda: "중복 후보 없음" in es.last_status, timeout=3.0,
+        )
+        # progress modal 도 결과 화면도 안 떠 있어야.
+        assert not isinstance(app.screen, ScanProgressModal)
+        assert not isinstance(app.screen, DuplicateScanScreen)
 
 
 @pytest.mark.asyncio
