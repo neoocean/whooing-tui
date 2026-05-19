@@ -108,6 +108,111 @@ async def test_list_entries_under_cap_single_call():
 
 
 @respx.mock
+async def test_list_entries_invokes_on_progress_callback():
+    """CL #53010+: list_entries 가 fetch/received/done 콜백을 단계마다 호출."""
+    rows = [
+        {"entry_id": f"e{i}", "entry_date": "20260510", "money": 1000}
+        for i in range(3)
+    ]
+    respx.get("https://whooing.com/api/entries.json").mock(
+        return_value=Response(
+            200,
+            json={"code": 200, "results": {"reports": [], "rows": rows}},
+        )
+    )
+    c = _make_client()
+    events: list[tuple[str, str, str, dict]] = []
+
+    def on_progress(kind, start, end, **extra):
+        events.append((kind, start, end, extra))
+
+    out = await c.list_entries(
+        "s1", "20260501", "20260510", on_progress=on_progress,
+    )
+    assert len(out) == 3
+    kinds = [e[0] for e in events]
+    # 단일 chunk + 단일 year — fetch / received / done 필수.
+    assert "fetch" in kinds
+    assert "received" in kinds
+    assert kinds[-1] == "done"
+    # received 의 count 가 응답 row 수.
+    received = next(e for e in events if e[0] == "received")
+    assert received[3]["count"] == 3
+    # done 의 total = 결과 길이.
+    done = next(e for e in events if e[0] == "done")
+    assert done[3]["total"] == 3
+
+
+@respx.mock
+async def test_list_entries_bisect_emits_bisect_event():
+    """100건 cap 도달 → bisect 콜백 발사 + 분할 재요청 2회."""
+    # 첫 호출 (전체 범위) — 100 row 응답 → cap 도달.
+    full_rows = [
+        {"entry_id": f"e{i}", "entry_date": "20260510", "money": 1000}
+        for i in range(100)
+    ]
+    # bisect 후 양쪽 — 50 + 50 (cap 미만이라 더 안 쪼갬).
+    half = [
+        {"entry_id": f"x{i}", "entry_date": "20260510", "money": 1000}
+        for i in range(50)
+    ]
+    route = respx.get("https://whooing.com/api/entries.json").mock(
+        side_effect=[
+            Response(200, json={"code": 200, "results": {"reports": [], "rows": full_rows}}),
+            Response(200, json={"code": 200, "results": {"reports": [], "rows": half}}),
+            Response(200, json={"code": 200, "results": {"reports": [], "rows": half}}),
+        ]
+    )
+    c = _make_client()
+    events: list[tuple[str, str, str, dict]] = []
+
+    def on_progress(kind, start, end, **extra):
+        events.append((kind, start, end, extra))
+
+    out = await c.list_entries(
+        "s1", "20260501", "20260510", on_progress=on_progress,
+    )
+    # 100 cap → bisect → 50+50.
+    assert route.call_count == 3
+    kinds = [e[0] for e in events]
+    assert "bisect" in kinds
+    # bisect 의 mid + next_start 가 들어와야.
+    bisect = next(e for e in events if e[0] == "bisect")
+    assert "mid" in bisect[3]
+    assert "next_start" in bisect[3]
+
+
+@respx.mock
+async def test_list_entries_yearly_split_emits_yearly_events():
+    """1년 초과 범위 → split_yearly_ranges → yearly 콜백 발사."""
+    rows = [
+        {"entry_id": f"e{i}", "entry_date": "20240510", "money": 1000}
+        for i in range(3)
+    ]
+    respx.get("https://whooing.com/api/entries.json").mock(
+        return_value=Response(
+            200,
+            json={"code": 200, "results": {"reports": [], "rows": rows}},
+        )
+    )
+    c = _make_client()
+    events: list[tuple[str, str, str, dict]] = []
+
+    def on_progress(kind, start, end, **extra):
+        events.append((kind, start, end, extra))
+
+    # 3년 범위 — split_yearly_ranges 가 여러 구간으로 쪼갬.
+    await c.list_entries(
+        "s1", "20230520", "20260520", on_progress=on_progress,
+    )
+    yearlies = [e for e in events if e[0] == "yearly"]
+    assert len(yearlies) >= 2
+    # 각 yearly 에 range_idx / range_total.
+    assert all("range_idx" in e[3] for e in yearlies)
+    assert all("range_total" in e[3] for e in yearlies)
+
+
+@respx.mock
 async def test_auth_error_maps_to_tool_error():
     respx.get("https://whooing.com/api/sections.json").mock(
         return_value=Response(

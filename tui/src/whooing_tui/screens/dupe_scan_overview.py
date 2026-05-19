@@ -209,16 +209,25 @@ class DupeScanOverviewScreen(ModalScreen[bool]):
         resolved = sum(1 for c in self._clusters if c.status == "resolved")
         skipped = sum(1 for c in self._clusters if c.status == "skipped")
         cache_hint = " · 💾 sqlite 캐시" if self._cached else " · 🌐 후잉에서 fetch"
-        self.query_one("#overview-summary", Static).update(
-            f"범위: [b]{self._range_start} ~ {self._range_end}[/b]"
-            f"{cache_hint}\n"
-            f"전체 [b]{total}[/b] · 정리됨 [green]{resolved}[/green] · "
-            f"남음 [yellow]{pending}[/yellow]"
-            + (f" · skip {skipped}" if skipped else "")
-        )
+        try:
+            self.query_one("#overview-summary", Static).update(
+                f"범위: [b]{self._range_start} ~ {self._range_end}[/b]"
+                f"{cache_hint}\n"
+                f"전체 [b]{total}[/b] · 정리됨 [green]{resolved}[/green] · "
+                f"남음 [yellow]{pending}[/yellow]"
+                + (f" · skip {skipped}" if skipped else "")
+            )
+        except Exception:
+            # mount race — children 아직 생성 안 됐을 때 on_mount 가 호출되는
+            # 드문 케이스. compose 가 곧 호출되면 그 때 initial state 가
+            # 적용되므로 safe-skip.
+            pass
 
     def _render_table(self) -> None:
-        table = self.query_one("#overview-table", DataTable)
+        try:
+            table = self.query_one("#overview-table", DataTable)
+        except Exception:
+            return  # mount race — children 아직.
         table.clear(columns=True)
         table.add_column("#", width=4)
         table.add_column("상태", width=8)

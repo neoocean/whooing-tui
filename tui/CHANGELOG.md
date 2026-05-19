@@ -5,6 +5,151 @@
 > **0.17.x 이전** (CL #51119 ~ #1) 항목은 분량 정리 차원에서
 > [`CHANGELOG-archive-0.17.md`](./CHANGELOG-archive-0.17.md) 로 분리 보존.
 
+## CL #53010 — 0.77.2 — 중복 검사 진행 popup 의 chunk-별 실시간 갱신 (2026-05-19)
+
+배경 (사용자 요청, 2026-05-19): "이 화면에서 구체적으로 지금 무엇을
+하고 있는지 계속해서 업데이트해주세요. 무엇을 요청하고 또 무엇을 받고
+있는지 업데이트하세요." — 진행 popup 이 "거래 fetch 중…" 만 표시한
+채 수십 초 멈춤 → 사용자가 진척을 못 봄.
+
+### 원인
+
+`ScanProgressModal.set_activity` 가 fetch *시작* 과 *완료* 두 번만
+호출. 그 사이 `client.list_entries` 는 split_yearly_ranges 로 N 개
+구간을 순차 호출하고, 각 구간이 100건 cap 도달 시 bisect 재호출 —
+모두 침묵 속에서 진행.
+
+### 수정
+
+#### (1) `client.list_entries` 에 `on_progress` 콜백 추가
+
+`tui/src/whooing_tui/client.py`:
+
+```python
+ProgressCallback = Callable[..., None]
+# kind: "fetch" | "received" | "bisect" | "yearly" | "done" | "cache_hit"
+
+async def list_entries(self, section_id, start_date, end_date,
+                       *, on_progress: ProgressCallback | None = None):
+    ...
+```
+
+발사 지점:
+- **`yearly`** — split_yearly_ranges 의 각 구간 진입 (`range_idx`, `range_total`).
+- **`fetch`** — HTTP GET /entries.json 직전.
+- **`received`** — HTTP 응답 직후 (`count`=row 수).
+- **`bisect`** — 100건 cap 도달 시 분할 재요청 (`mid`, `next_start`).
+- **`done`** — 전체 list_entries 종료 (`total`=총 거래 수).
+- **`cache_hit`** — CachedWhooingClient 가 sqlite cache 에서 즉시 반환.
+
+`CachedWhooingClient.list_entries` 도 콜백 받아 inner 에 전달 (캐시 hit
+시는 자체적으로 `cache_hit` 1회 발사 + fetch skip).
+
+#### (2) Worker 의 dense progress 업데이트
+
+`entries.py · _fetch_and_save_dupe_clusters`:
+
+```python
+running_total = [0]
+chunk_count = [0]
+bisect_count = [0]
+
+def _on_fetch_progress(kind, start, end, **extra):
+    if kind == "yearly":
+        progress.set_activity(f"📦 연도별 분할 — 구간 {idx}/{total} ...")
+    elif kind == "fetch":
+        chunk_count[0] += 1
+        progress.set_activity(f"📡 후잉 요청 #{n} → /entries.json ...")
+    elif kind == "received":
+        running_total[0] += n
+        progress.set_activity(f"📥 받음 N 건  · 누적 M 건 ...")
+    elif kind == "bisect":
+        bisect_count[0] += 1
+        progress.set_activity(f"🔀 100건 한도 → 분할 재요청 #N ...")
+    elif kind == "done":
+        progress.set_activity(f"✅ fetch 완료 — 총 N 건 (요청 X · bisect Y)")
+
+await self._client.list_entries(..., on_progress=_on_fetch_progress)
+```
+
+### 결과 — 사용자가 보는 popup 흐름 예시
+
+3년치 + bisect 1번 발생 케이스:
+
+```
+📊 거래 fetch 시작…
+20230520 ~ 20260519
+            ↓
+📦 연도별 분할 — 구간 1/4
+20230520 ~ 20231231
+받은 거래 누적 0 건
+            ↓
+📡 후잉 요청 #1 → /entries.json
+20230520 ~ 20231231
+받은 거래 누적 0 건
+            ↓
+📥 받음 87 건
+20230520 ~ 20231231
+받은 거래 누적 87 건 · 요청 1 회
+            ↓
+📦 연도별 분할 — 구간 2/4
+20240101 ~ 20241231
+받은 거래 누적 87 건
+            ↓
+📡 후잉 요청 #2 → /entries.json
+20240101 ~ 20241231
+받은 거래 누적 87 건
+            ↓
+📥 받음 100 건 ⚠️  100건 cap 도달 — 재분할
+20240101 ~ 20241231
+받은 거래 누적 187 건 · 요청 2 회
+            ↓
+🔀 100건 한도 → 분할 재요청 #1
+20240101 ~ 20240701  +  20240702 ~ 20241231
+받은 거래 누적 187 건
+            ↓
+📡 후잉 요청 #3 → /entries.json
+20240101 ~ 20240701
+받은 거래 누적 187 건
+            ↓
+📥 받음 65 건
+20240101 ~ 20240701
+받은 거래 누적 252 건 · 요청 3 회
+            ↓
+... (계속)
+            ↓
+✅ fetch 완료 — 총 1,234 건 수신
+(20230520 ~ 20260519 · 요청 8 회 · bisect 2 회)
+            ↓
+🔍 중복 cluster 검색 중…
+거래 1,234 건 분석 (blocking + windowing)
+|금액| bucket → ±7일 window → union-find
+            ↓
+💾 결과 저장 중…
+146 개 cluster sqlite 영구화
+(테이블: dupe_scan_clusters · status=pending)
+```
+
+### 안정화 — overview mount race 방지 (덤)
+
+`DupeScanOverviewScreen._render_summary` / `_render_table` 가 mount 이전
+에 호출되는 드문 race 에서 `NoMatches` 발생 — `try/except` 로 safe-skip.
+compose 가 마치면 initial state 적용되므로 데이터 손실 없음.
+
+### 테스트 (+4, total 1114 → 1118)
+
+`test_client.py`:
+- `test_list_entries_invokes_on_progress_callback` — fetch/received/done
+  순서 + count/total 검증.
+- `test_list_entries_bisect_emits_bisect_event` — 100건 cap 시 bisect
+  이벤트 + mid / next_start 포함.
+- `test_list_entries_yearly_split_emits_yearly_events` — 1년 초과 범위
+  의 yearly 이벤트 + range_idx / range_total.
+
+`test_duplicate_scan.py`:
+- `test_progress_modal_updates_per_chunk_during_fetch` — 통합 flow 가
+  fetch 콜백을 거쳐 정상 종료.
+
 ## CL #53006 — 0.77.1 — 중복 검사 범위 선택 popup (DupeScanRangeModal) (2026-05-19)
 
 배경 (사용자 요청, 2026-05-19): "중복거래검사 범위를 1개월, 3개월 6개월

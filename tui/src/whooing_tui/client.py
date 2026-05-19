@@ -19,9 +19,14 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
-from typing import Any
+from typing import Any, Callable
 
 import httpx
+
+# CL #53010+: list_entries 진행 콜백 — 사용자 UI 가 fetch 단계별 안내.
+# kind: "fetch" | "received" | "bisect" | "yearly" | "done".
+# 추가 정보 (count, mid, range_idx, total 등) 는 **extra 로 전달.
+ProgressCallback = Callable[..., None]
 
 from whooing_tui.auth import WhooingAuth
 from whooing_tui.errors import map_response, sanitize_token
@@ -267,6 +272,8 @@ class WhooingClient:
         section_id: str,
         start_date: str,
         end_date: str,
+        *,
+        on_progress: "ProgressCallback | None" = None,
     ) -> list[dict[str, Any]]:
         """후잉 entries fetch — 자동 분할 (1년 초과 + 100-cap pagination).
 
@@ -274,14 +281,33 @@ class WhooingClient:
           results = {reports: [...], rows: [<entry>, ...]}
         server-side hard cap = 100 rows per request (`limit` param 무시).
         → 100 받으면 날짜 범위가 더 큰 가능성 → bisection 으로 분할.
+
+        CL #53010+: `on_progress(kind, start, end, **extra)` 콜백 추가 —
+        호출자가 사용자에게 진행 안내 (예: ScanProgressModal). kind 값:
+          - "fetch"     — HTTP 요청 직전 (start/end).
+          - "received"  — HTTP 응답 직후 (count=len(chunk)).
+          - "bisect"    — 100건 한도 도달 — 분할 재요청 (mid=mid_date).
+          - "yearly"    — 1년 분할 시 (range_idx, range_total).
+          - "done"      — 전체 종료 (total=총 거래 수).
+        sync 콜백 — 예외 raise 면 fetch 중단 (호출자 책임). None 이면 noop.
         """
         from whooing_tui.dates import split_yearly_ranges
 
         ranges = split_yearly_ranges(start_date, end_date)
         out: list[dict[str, Any]] = []
         seen_ids: set = set()
-        for s, e in ranges:
-            chunks = await self._list_entries_chunked(section_id, s, e)
+        for i, (s, e) in enumerate(ranges, start=1):
+            if on_progress is not None:
+                try:
+                    on_progress(
+                        "yearly", s, e,
+                        range_idx=i, range_total=len(ranges),
+                    )
+                except Exception:  # pragma: no cover
+                    log.exception("on_progress yearly callback raised")
+            chunks = await self._list_entries_chunked(
+                section_id, s, e, on_progress=on_progress,
+            )
             for entry in chunks:
                 eid = entry.get("entry_id")
                 if eid and eid in seen_ids:
@@ -289,6 +315,13 @@ class WhooingClient:
                 if eid:
                     seen_ids.add(eid)
                 out.append(entry)
+        if on_progress is not None:
+            try:
+                on_progress(
+                    "done", start_date, end_date, total=len(out),
+                )
+            except Exception:  # pragma: no cover
+                log.exception("on_progress done callback raised")
         return out
 
     async def _list_entries_chunked(
@@ -296,10 +329,17 @@ class WhooingClient:
         section_id: str,
         start_date: str,
         end_date: str,
+        *,
+        on_progress: "ProgressCallback | None" = None,
     ) -> list[dict[str, Any]]:
         """Single date-range fetch with bisection if 100-cap hit."""
         from datetime import datetime, timedelta
 
+        if on_progress is not None:
+            try:
+                on_progress("fetch", start_date, end_date)
+            except Exception:  # pragma: no cover
+                log.exception("on_progress fetch callback raised")
         results = await self._get(
             "/entries.json",
             params={
@@ -310,6 +350,13 @@ class WhooingClient:
             },
         )
         chunk = self._normalize_collection(results, key="rows")
+        if on_progress is not None:
+            try:
+                on_progress(
+                    "received", start_date, end_date, count=len(chunk),
+                )
+            except Exception:  # pragma: no cover
+                log.exception("on_progress received callback raised")
 
         # 100 미만 → 모두 가져옴
         if len(chunk) < 100:
@@ -334,9 +381,21 @@ class WhooingClient:
 
         log.debug("list_entries: bisect %s~%s → [%s~%s, %s~%s]",
                   start_date, end_date, start_date, mid, next_str, end_date)
+        if on_progress is not None:
+            try:
+                on_progress(
+                    "bisect", start_date, end_date,
+                    mid=mid, next_start=next_str,
+                )
+            except Exception:  # pragma: no cover
+                log.exception("on_progress bisect callback raised")
 
-        left = await self._list_entries_chunked(section_id, start_date, mid)
-        right = await self._list_entries_chunked(section_id, next_str, end_date)
+        left = await self._list_entries_chunked(
+            section_id, start_date, mid, on_progress=on_progress,
+        )
+        right = await self._list_entries_chunked(
+            section_id, next_str, end_date, on_progress=on_progress,
+        )
         return left + right
 
     # ---- mutating endpoints ----------------------------------------------
@@ -1075,14 +1134,26 @@ class CachedWhooingClient:
 
     async def list_entries(
         self, section_id: str, start_date: str, end_date: str,
+        *,
+        on_progress: "ProgressCallback | None" = None,
     ) -> list[dict[str, Any]]:
         cached = self._store.get_entries(
             section_id, start_date, end_date,
             max_age_sec=self._entries_ttl_sec,
         )
         if cached is not None:
+            # 캐시 hit 도 사용자에게 알림 — 콜백이 있으면 done 한 번 발사.
+            if on_progress is not None:
+                try:
+                    on_progress(
+                        "cache_hit", start_date, end_date, total=len(cached),
+                    )
+                except Exception:  # pragma: no cover
+                    log.exception("on_progress cache_hit raised")
             return cached
-        result = await self._inner.list_entries(section_id, start_date, end_date)
+        result = await self._inner.list_entries(
+            section_id, start_date, end_date, on_progress=on_progress,
+        )
         # 100-cap 도달 의심되는 응답도 같은 라운드에선 캐시 — TTL 짧음.
         self._store.put_entries(section_id, start_date, end_date, result)
         return result

@@ -1200,22 +1200,82 @@ class EntriesScreen(MenuBarMixin, Screen):
         except Exception:  # pragma: no cover
             log.exception("clear_scan failed (계속 진행)")
 
-        progress = ScanProgressModal(initial="📊 3년치 거래 fetch 시작…")
+        progress = ScanProgressModal(initial="📊 거래 fetch 시작…")
         self.app.push_screen(progress)  # type: ignore[attr-defined]
         await asyncio.sleep(0)
+
+        # CL #53010+: 사용자가 진행을 *계속* 보도록 chunk 단위 콜백.
+        # client.list_entries 가 yearly 분할 / 100-cap bisect 마다 호출.
+        # 누적 received 건수 유지 — closure 안 list 로 mutable.
+        running_total = [0]   # received 누적
+        bisect_count = [0]
+        chunk_count = [0]
+        last_range = [range_start, range_end]
+
+        def _on_fetch_progress(kind: str, start: str, end: str, **extra: Any) -> None:
+            last_range[0], last_range[1] = start, end
+            try:
+                if kind == "yearly":
+                    idx = extra.get("range_idx") or 1
+                    total = extra.get("range_total") or 1
+                    progress.set_activity(
+                        f"📦 연도별 분할 — 구간 {idx}/{total}\n"
+                        f"{start} ~ {end}\n"
+                        f"받은 거래 누적 {running_total[0]:,} 건",
+                    )
+                elif kind == "fetch":
+                    chunk_count[0] += 1
+                    progress.set_activity(
+                        f"📡 후잉 요청 #{chunk_count[0]} → /entries.json\n"
+                        f"{start} ~ {end}\n"
+                        f"받은 거래 누적 {running_total[0]:,} 건",
+                    )
+                elif kind == "received":
+                    n = int(extra.get("count") or 0)
+                    running_total[0] += n
+                    cap_note = " ⚠️  100건 cap 도달 — 재분할" if n >= 100 else ""
+                    progress.set_activity(
+                        f"📥 받음 {n} 건{cap_note}\n"
+                        f"{start} ~ {end}\n"
+                        f"받은 거래 누적 {running_total[0]:,} 건 · "
+                        f"요청 {chunk_count[0]} 회",
+                    )
+                elif kind == "bisect":
+                    bisect_count[0] += 1
+                    mid = extra.get("mid", "?")
+                    progress.set_activity(
+                        f"🔀 100건 한도 → 분할 재요청 #{bisect_count[0]}\n"
+                        f"{start} ~ {mid}  +  {extra.get('next_start', '?')} ~ {end}\n"
+                        f"받은 거래 누적 {running_total[0]:,} 건",
+                    )
+                elif kind == "cache_hit":
+                    n = int(extra.get("total") or 0)
+                    progress.set_activity(
+                        f"💾 캐시 hit — {n:,} 건 즉시 로드\n{start} ~ {end}",
+                    )
+                elif kind == "done":
+                    n = int(extra.get("total") or 0)
+                    progress.set_activity(
+                        f"✅ fetch 완료 — 총 {n:,} 건 수신\n"
+                        f"({range_start} ~ {range_end} · "
+                        f"요청 {chunk_count[0]} 회 · bisect {bisect_count[0]} 회)",
+                    )
+            except Exception:  # pragma: no cover
+                log.exception("fetch progress callback failed")
+
         try:
             progress.set_activity(
-                f"📊 거래 fetch 중…\n{range_start} ~ {range_end} (3년치)",
+                f"📊 거래 fetch 시작…\n{range_start} ~ {range_end}",
             )
             self.set_status(
-                f"⏳ 중복 검사 — 거래 fetch 중… ({range_start} ~ {range_end}, "
-                "3년치)",
+                f"⏳ 중복 검사 — 거래 fetch 중… ({range_start} ~ {range_end})",
             )
             await asyncio.sleep(0)
             try:
                 entries = await self._client.list_entries(
                     section_id=session.section_id,
                     start_date=range_start, end_date=range_end,
+                    on_progress=_on_fetch_progress,
                 )
             except ToolError as e:
                 self.set_status(
@@ -1228,7 +1288,8 @@ class EntriesScreen(MenuBarMixin, Screen):
                 return []
             progress.set_activity(
                 f"🔍 중복 cluster 검색 중…\n"
-                f"(거래 {len(entries):,} 건 분석 — blocking + windowing)",
+                f"거래 {len(entries):,} 건 분석 (blocking + windowing)\n"
+                f"|금액| bucket → ±7일 window → union-find",
             )
             await asyncio.sleep(0)
             clusters = find_duplicate_clusters(entries, date_window_days=7)
@@ -1238,7 +1299,9 @@ class EntriesScreen(MenuBarMixin, Screen):
                 )
                 return []
             progress.set_activity(
-                f"💾 결과 저장 중…\n{len(clusters)} 개 cluster sqlite 영구화",
+                f"💾 결과 저장 중…\n"
+                f"{len(clusters)} 개 cluster sqlite 영구화\n"
+                f"(테이블: dupe_scan_clusters · status=pending)",
             )
             await asyncio.sleep(0)
             stored = repo.save_scan(
