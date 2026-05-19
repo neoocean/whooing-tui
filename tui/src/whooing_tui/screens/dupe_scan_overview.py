@@ -229,9 +229,12 @@ class DupeScanOverviewScreen(ModalScreen[bool]):
         except Exception:
             return  # mount race — children 아직.
         table.clear(columns=True)
+        # CL #53046+: 사용자 보고 "중복 가능성 있음" (8자 × 2 cell = 16) 이
+        # width=14 에서 마지막 "음" 잘림. 한글 라벨 + padding 까지 고려해
+        # 18 로 확대. 상태 (⏳ 남음 / ✓ 정리 / × skip) 도 1 cell 여유 확보.
         table.add_column("#", width=4)
-        table.add_column("상태", width=8)
-        table.add_column("강도", width=14)
+        table.add_column("상태", width=10)
+        table.add_column("강도", width=18)
         table.add_column("날짜", width=10)
         table.add_column("금액", width=12)
         table.add_column("건수", width=4)
