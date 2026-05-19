@@ -18,7 +18,7 @@
 | 02 | [거래 추가 / 수정 / 삭제](scenarios/02-add-edit-delete-entry.md) | `n` / `e` / `d` | `screens/entries.py`, `screens/edit_entry.py` |
 | 03 | [영수증·인보이스 첨부](scenarios/03-attach-files.md) | `f` / 메뉴 | `screens/attachment_browser.py`, `screens/receipt_attach.py` |
 | 04 | [카드 명세서 가져오기](scenarios/04-import-card-statement.md) | 메뉴 → 카드 import | `screens/statement_import.py` |
-| 05 | [중복 거래 평가 + 정리](scenarios/05-evaluate-duplicates.md) | `space` 선택 → `m` → 평가 | `screens/dupe_eval.py`, `core/dupes.py` |
+| 05 | [중복 거래 평가 + 정리 (선택 / 일괄 스캔)](scenarios/05-evaluate-duplicates.md) | `space` + `m` (선택) / 입력 메뉴 (일괄) | `screens/dupe_eval.py`, `screens/dupe_scan_overview.py`, `screens/duplicate_scan.py`, `core/dupes.py`, `dupe_scan_repo.py` |
 | 06 | [해시태그 + 일괄 태그](scenarios/06-hashtags-and-batch-tagging.md) | `#` / `m` 메뉴 | `screens/tags_picker.py`, `screens/tag_management.py` |
 | 07 | [필터 + 검색](scenarios/07-filter-and-search.md) | `←/→` + `Enter` / `/` | `filters.py`, `screens/entries.py` |
 | 08 | [보고서 + 통계](scenarios/08-reports.md) | `t` | `screens/reports.py`, `official_mcp.py` |

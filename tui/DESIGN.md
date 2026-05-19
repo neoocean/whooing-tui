@@ -87,13 +87,18 @@ wrapper 가 의도적으로 코드 중복** 으로 공유하기 위해 만들어
 | `screens/budget_edit.py` | 예산 입력/편집 |
 | `screens/goal_edit.py` | 장기/월별 목표 입력/편집 |
 | `screens/dashboard.py` | DashboardScreen — 한눈 보기 (annotation / attachment / import / hashtags 통계) |
+| `screens/dupe_eval.py` | DuplicateEvalScreen — *선택* N건 평가 + dedup (m 메뉴, CL #52815+) |
+| **`screens/duplicate_scan.py`** | **CL #52963+** Stage 2 cluster 1개씩 정리 + **ScanProgressModal** (CL #52977+, fetch/분석 단계 안내). CL #52989+ 부터 `repo` + `start_idx` 파라미터로 sqlite 영구화 + overview 에서 특정 cluster 진입 |
+| **`screens/dupe_scan_overview.py`** | **CL #52989+** Stage 1 — 입력 메뉴 → 전체 cluster 목록 + 정리(R)/새로고침(F5)/닫기(Esc). sqlite 캐시 hit 면 후잉 fetch skip |
+| **`repository.py`** | EntryRepository — annotation/hashtag/attachment 카운트 어댑터 (CL #52834+) |
+| **`dupe_scan_repo.py`** | **CL #52989+** DupeScanRepository — `dupe_scan_clusters` 테이블 (schema v9) 의 save/load/update/clear/has_open. pure data layer |
 | `theming.tcss` | 전역 스타일 |
 
 ### 3.0a core 모듈 인벤토리 (0.1.x)
 
 | 모듈 | 책무 |
 | --- | --- |
-| `core/db.py` | SQLite **schema v8** (CL #52758+, `entries_cache` 추가) + migrations + annotation/hashtag/tag_meta/import_log/audit_log CRUD |
+| `core/db.py` | SQLite **schema v9** (CL #52989+, `dupe_scan_clusters` 추가; CL #52758+ entries_cache; earlier annotations/hashtags/attachments/import_log/audit_log) + migrations + CRUD |
 | **`core/entries_cache.py`** | **신규 (CL #52758+)** entries 영구 sqlite 캐시 layer — `upsert_entries` / `list_cached` / `cached_oldest_date` / `purge_section` |
 | **`core/preview.py`** | **신규 (CL #52750+)** 첨부 파일 미리보기 텍스트 추출 — text/* (UTF-8/cp949/latin-1 fallback) + application/pdf (pdfplumber per-page) |
 | **`core/hangul.py`** | **신규 (CL #52784+)** Hangul 자모 → 음절 합성 — `compose_hangul(text)` pure 함수. Compat Jamo (`ㅎㅏㄴ` U+3130~U+318F) → Hangul Jamo (U+1100~) 매핑 후 state machine 으로 (초성, 중성, 종성) 결합. 종성↔초성 split 처리. iPhone Blink 등 자모 단위로 들어오는 terminal 환경 fix. |
