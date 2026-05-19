@@ -246,19 +246,32 @@ class DuplicateScanScreen(ModalScreen[bool]):
 
     def __init__(
         self,
-        clusters: list[DupeCluster],
+        clusters: list,
         *,
         client: WhooingClient,
         session: SessionState,
         delete_callback: DeleteCallback | None = None,
+        repo: Any = None,
+        start_idx: int = 0,
     ) -> None:
+        """clusters: DupeCluster 또는 StoredCluster list — 같은 shape (entries,
+        verdict, reasons, keep_suggestion). StoredCluster 면 `.id` 와
+        `.status` 가 있어 `repo` 와 함께 결과를 sqlite 에 영구화.
+
+        repo: DupeScanRepository | None. None 이면 영구화 없이 종래 동작
+        (테스트 친화 + DupeScanOverviewScreen 거치지 않는 직접 호출 대비).
+
+        start_idx: 어느 cluster 부터 시작할지. DupeScanOverviewScreen 에서
+        특정 row 클릭하면 해당 index 로 진입.
+        """
         super().__init__()
         self._clusters = list(clusters)
         self._client = client
         self._session = session
         self._delete_callback = delete_callback
-        # 현재 보고 있는 cluster 의 index.
-        self._idx: int = 0
+        self._repo = repo
+        # 현재 보고 있는 cluster 의 index — start_idx 로 진입 가능.
+        self._idx: int = max(0, min(start_idx, max(0, len(self._clusters) - 1)))
         # 각 cluster 의 entry_id → bool ("✓ = 삭제 대상" 여부).
         # 초기값: keep_suggestion 만 False (보존), 나머지 True (삭제).
         self._marks: list[dict[str, bool]] = []
@@ -518,6 +531,8 @@ class DuplicateScanScreen(ModalScreen[bool]):
         if deleted > 0:
             self._dirty = True
             self._processed.add(self._idx)
+            # CL #52989+: StoredCluster + repo 가 주어졌으면 영구화.
+            self._mark_resolved_in_repo(self._clusters[self._idx])
         if failed:
             self._set_status(
                 f"{deleted}건 삭제, {len(failed)}건 실패 — 첫 실패: {failed[0]}",
@@ -526,14 +541,46 @@ class DuplicateScanScreen(ModalScreen[bool]):
             # 실패 row 들은 ✓ 유지 (사용자가 재시도 / skip 결정).
             self._render_current()
             return
-        # 전부 성공 → 다음 cluster 자동 이동 (마지막이면 닫기).
+        # 전부 성공 → 다음 pending cluster 자동 이동 (없으면 닫기).
         self._set_status(f"✅ {deleted}건 삭제 완료.")
-        if self._idx + 1 >= len(self._clusters):
-            # 마지막 cluster 처리 직후 — 사용자 OK 없이도 dismiss.
+        next_idx = self._next_unresolved_idx(self._idx + 1)
+        if next_idx is None:
+            # 더 정리할 cluster 없음 — 사용자 OK 없이도 dismiss.
             self.dismiss(self._dirty)
             return
-        self._idx += 1
+        self._idx = next_idx
         self._render_current()
+
+    def _mark_resolved_in_repo(self, cluster: Any) -> None:
+        """StoredCluster + repo 가 있을 때만 status='resolved' 영구화."""
+        if self._repo is None:
+            return
+        cluster_id = getattr(cluster, "id", None)
+        if cluster_id is None:
+            return
+        try:
+            self._repo.update_status(int(cluster_id), "resolved")
+        except Exception:  # pragma: no cover
+            log.exception("repo.update_status failed for cluster %s", cluster_id)
+
+    def _next_unresolved_idx(self, from_idx: int) -> int | None:
+        """from_idx 부터 처음 발견되는 unresolved cluster idx.
+
+        StoredCluster 면 .status == 'pending' 만 후보. 일반 DupeCluster
+        (._processed 만으로 판단) 면 from_idx 자체가 마지막이면 None.
+        """
+        n = len(self._clusters)
+        if from_idx >= n:
+            return None
+        for i in range(from_idx, n):
+            c = self._clusters[i]
+            status = getattr(c, "status", None)
+            if status == "resolved":
+                continue
+            if i in self._processed:
+                continue
+            return i
+        return None
 
     async def _delete_via_client(
         self, entry_ids: list[str],

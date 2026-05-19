@@ -1049,23 +1049,22 @@ class EntriesScreen(MenuBarMixin, Screen):
 
     @work(exclusive=True, group="dupe_scan", name="scan_duplicates")
     async def _scan_duplicates_worker(self) -> None:
-        """3년 거래 fetch → cluster 추출 → DuplicateScanScreen push.
+        """3년 거래 fetch → cluster 추출 → 결과 sqlite 영구화 → 2단계 UI.
 
-        CL #52977+: fetch / 분석 단계 동안 `ScanProgressModal` 을 화면 위에
-        띄워 사용자에게 진행 안내. modal 의 `set_activity(text)` 로 현재
-        단계를 표시. 완료 (성공/실패/취소) 시 modal 을 반드시 dismiss —
-        DuplicateScanScreen 도 같은 modal stack 에 push 되므로 progress
-        modal 이 그 아래 깔리지 않도록.
+        CL #52989+: sqlite 캐싱 + 2단계 UI 도입. 흐름:
 
-        성공한 cluster 한 건이라도 있으면 entries 재로드. cluster 발견
-        못 하면 status 만 안내 (결과 화면 띄우지 않음 — 작업 흐름 끊김
-        최소화).
+          1) repo.has_open_scan(...) → 같은 (section, range) 에 pending 이
+             있으면 cache hit → fetch skip → 바로 overview push.
+          2) cache miss 면 종래 fetch + cluster 분석 → repo.save_scan → overview.
+          3) overview 의 F5 시 _refresh_callback 이 same worker logic 재호출
+             (repo.clear + fetch + save + 새 list 반환).
+
+        CL #52977+: fetch / 분석 단계 동안 `ScanProgressModal` 진행 안내.
         """
         import asyncio
-        from whooing_core.dupes import find_duplicate_clusters
-        from whooing_tui.screens.duplicate_scan import (
-            DuplicateScanScreen,
-            ScanProgressModal,
+        from whooing_tui.dupe_scan_repo import DupeScanRepository
+        from whooing_tui.screens.dupe_scan_overview import (
+            DupeScanOverviewScreen,
         )
 
         log.info("scan_duplicates worker started")
@@ -1076,71 +1075,18 @@ class EntriesScreen(MenuBarMixin, Screen):
             )
             return
 
-        # progress modal — fetch + 분석 단계 동안 화면 가림. push_screen 은
-        # sync (큐에 등록만), mount 는 다음 frame.
-        progress = ScanProgressModal(initial="📊 3년치 거래 fetch 시작…")
-        self.app.push_screen(progress)  # type: ignore[attr-defined]
-        await asyncio.sleep(0)
+        repo = DupeScanRepository()
+        end_date = today_yyyymmdd()
+        start_date = days_ago_yyyymmdd(365 * 3)
 
-        clusters_to_show: list | None = None
-        try:
-            end_date = today_yyyymmdd()
-            # 365 * 3 — 3년 윈도우. list_entries 가 split_yearly_ranges 로
-            # 1년 단위 분할 호출, 100-cap 도 bisection 처리.
-            start_date = days_ago_yyyymmdd(365 * 3)
-            progress.set_activity(
-                f"📊 거래 fetch 중…\n{start_date} ~ {end_date} (3년치)",
-            )
-            self.set_status(
-                f"⏳ 중복 검사 — 거래 fetch 중… ({start_date} ~ {end_date}, "
-                "3년치)",
-            )
-            await asyncio.sleep(0)
-            try:
-                entries = await self._client.list_entries(
-                    section_id=session.section_id,
-                    start_date=start_date,
-                    end_date=end_date,
-                )
-            except ToolError as e:
-                self.set_status(
-                    f"거래 조회 실패 [{e.kind}] {e.message}", error=True,
-                )
-                return
-            except Exception as e:
-                log.exception("scan_duplicates fetch failed")
-                self.set_status(f"거래 조회 실패 (INTERNAL): {e}", error=True)
-                return
-            progress.set_activity(
-                f"🔍 중복 cluster 검색 중…\n"
-                f"(거래 {len(entries):,} 건 분석 — blocking + windowing)",
-            )
-            self.set_status(
-                f"🔍 중복 cluster 검색 중… (거래 {len(entries):,} 건)",
-            )
-            await asyncio.sleep(0)
-            # pure func — sync 로 충분히 빠르지만 큰 부담은 worker 컨텍스트 이라 OK.
-            clusters = find_duplicate_clusters(entries, date_window_days=7)
-            if not clusters:
-                self.set_status(
-                    f"✅ 거래 {len(entries):,} 건 검사 완료 — 중복 후보 없음.",
-                )
-                return
-            clusters_to_show = clusters
-        finally:
-            # 어떤 경로 (정상/예외/early return) 든 progress modal 은 닫음.
-            # DuplicateScanScreen 도 modal 이라 같은 stack — progress 가
-            # 위에 남아있으면 결과 화면을 가린다.
-            try:
-                progress.dismiss()
-            except Exception:  # pragma: no cover
-                pass
+        # 1) 캐시 hit 검사.
+        cached_clusters = repo.load_all_clusters(
+            section_id=session.section_id,
+            range_start=start_date, range_end=end_date,
+        )
+        has_pending = any(c.status == "pending" for c in cached_clusters)
 
-        if clusters_to_show is None:
-            return
-        # progress modal 이 실제로 pop 되도록 한 frame 양보 후 결과 push.
-        await asyncio.sleep(0)
-
+        # delete callback — entries 삭제 + 로컬 sqlite annotation purge.
         async def _delete_many(eids: list[str]) -> tuple[int, list[str]]:
             deleted = 0
             failed: list[str] = []
@@ -1161,14 +1107,42 @@ class EntriesScreen(MenuBarMixin, Screen):
                     failed.append(f"{eid} INTERNAL: {e}")
             return deleted, failed
 
-        total = len(clusters)
-        self.set_status(f"🔍 중복 cluster {total} 개 발견 — 하나씩 검토.")
+        # refresh callback — F5 시 호출. clear → fetch → save → 새 list.
+        async def _refresh() -> list:
+            return await self._fetch_and_save_dupe_clusters(
+                repo=repo, session=session,
+                range_start=start_date, range_end=end_date,
+            )
+
+        if has_pending:
+            self.set_status(
+                f"💾 sqlite 캐시 hit — pending {sum(1 for c in cached_clusters if c.status=='pending')} 건 "
+                f"({start_date} ~ {end_date}). F5 로 새로고침.",
+            )
+            clusters_for_overview = cached_clusters
+            cached_flag = True
+        else:
+            # 2) cache miss — fetch + save.
+            clusters_for_overview = await self._fetch_and_save_dupe_clusters(
+                repo=repo, session=session,
+                range_start=start_date, range_end=end_date,
+            )
+            cached_flag = False
+            if not clusters_for_overview:
+                # 0건이면 overview 도 띄우지 않음 — status 만.
+                return
+
         result = await self.app.push_screen_wait(  # type: ignore[attr-defined]
-            DuplicateScanScreen(
-                clusters,
+            DupeScanOverviewScreen(
+                clusters_for_overview,
+                repo=repo,
+                section_id=session.section_id,
+                range_start=start_date, range_end=end_date,
                 client=self._client,
                 session=session,
                 delete_callback=_delete_many,
+                refresh_callback=_refresh,
+                cached=cached_flag,
             ),
         )
         if result:
@@ -1176,7 +1150,91 @@ class EntriesScreen(MenuBarMixin, Screen):
             self.set_status("중복 검사 완료 — 재로드 중…")
             self.refresh_entries()
         else:
-            self.set_status("중복 검사 종료 (변경 없음).")
+            self.set_status("중복 검사 종료.")
+
+    async def _fetch_and_save_dupe_clusters(
+        self,
+        *,
+        repo,
+        session,
+        range_start: str,
+        range_end: str,
+    ) -> list:
+        """후잉 entries 조회 → find_duplicate_clusters → repo.save_scan.
+
+        worker (_scan_duplicates_worker) 와 refresh_callback 모두에서 사용.
+        진행 안내는 ScanProgressModal 을 띄워 단계별 set_activity.
+        실패 시 (set_status + 빈 list 반환).
+        """
+        import asyncio
+        from whooing_core.dupes import find_duplicate_clusters
+        from whooing_tui.screens.duplicate_scan import ScanProgressModal
+
+        # refresh 흐름에서는 caller 가 먼저 sqlite 의 기존 row 를 비워야
+        # save_scan 이 새로 INSERT 후 깨끗한 상태가 된다.
+        try:
+            repo.clear_scan(
+                section_id=session.section_id,
+                range_start=range_start, range_end=range_end,
+            )
+        except Exception:  # pragma: no cover
+            log.exception("clear_scan failed (계속 진행)")
+
+        progress = ScanProgressModal(initial="📊 3년치 거래 fetch 시작…")
+        self.app.push_screen(progress)  # type: ignore[attr-defined]
+        await asyncio.sleep(0)
+        try:
+            progress.set_activity(
+                f"📊 거래 fetch 중…\n{range_start} ~ {range_end} (3년치)",
+            )
+            self.set_status(
+                f"⏳ 중복 검사 — 거래 fetch 중… ({range_start} ~ {range_end}, "
+                "3년치)",
+            )
+            await asyncio.sleep(0)
+            try:
+                entries = await self._client.list_entries(
+                    section_id=session.section_id,
+                    start_date=range_start, end_date=range_end,
+                )
+            except ToolError as e:
+                self.set_status(
+                    f"거래 조회 실패 [{e.kind}] {e.message}", error=True,
+                )
+                return []
+            except Exception as e:
+                log.exception("scan_duplicates fetch failed")
+                self.set_status(f"거래 조회 실패 (INTERNAL): {e}", error=True)
+                return []
+            progress.set_activity(
+                f"🔍 중복 cluster 검색 중…\n"
+                f"(거래 {len(entries):,} 건 분석 — blocking + windowing)",
+            )
+            await asyncio.sleep(0)
+            clusters = find_duplicate_clusters(entries, date_window_days=7)
+            if not clusters:
+                self.set_status(
+                    f"✅ 거래 {len(entries):,} 건 검사 완료 — 중복 후보 없음.",
+                )
+                return []
+            progress.set_activity(
+                f"💾 결과 저장 중…\n{len(clusters)} 개 cluster sqlite 영구화",
+            )
+            await asyncio.sleep(0)
+            stored = repo.save_scan(
+                section_id=session.section_id,
+                range_start=range_start, range_end=range_end,
+                clusters=clusters,
+            )
+            self.set_status(
+                f"🔍 중복 cluster {len(stored)} 개 발견 — 검토 시작.",
+            )
+            return stored
+        finally:
+            try:
+                progress.dismiss()
+            except Exception:  # pragma: no cover
+                pass
 
     def action_open_monthly(self) -> None:
         """CL #51152+: 매월입력 거래 관리 화면."""

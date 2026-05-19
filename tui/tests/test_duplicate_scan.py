@@ -17,7 +17,17 @@ from whooing_tui.screens.duplicate_scan import (
     DuplicateScanScreen,
     ScanProgressModal,
 )
+from whooing_tui.screens.dupe_scan_overview import DupeScanOverviewScreen
 from whooing_tui.screens.entries import EntriesScreen
+
+
+@pytest.fixture(autouse=True)
+def _isolated_db(tmp_path, monkeypatch):
+    """매 테스트 격리 — sqlite 가 tmp_path 안. CL #52989+ 부터 worker 가
+    sqlite 의 dupe_scan_clusters 를 사용하므로 격리 필요."""
+    monkeypatch.setenv("WHOOING_DATA_DIR", str(tmp_path))
+    # 스키마는 worker / repo 진입 시 init 됨. 미리 만들지 않아도 동작.
+    yield tmp_path
 
 
 class FakeClient:
@@ -93,6 +103,26 @@ async def _open_entries(app) -> EntriesScreen:
     return app.screen  # type: ignore[return-value]
 
 
+async def _drive_to_cluster_screen(app) -> DuplicateScanScreen:
+    """CL #52989+: action_scan_duplicates → overview → DuplicateScanScreen.
+
+    overview 에 도달하면 action_start_cleanup 으로 cluster 화면 진입.
+    """
+    es = app.screen
+    es.action_scan_duplicates()
+    await _wait_for(
+        lambda: isinstance(app.screen, DupeScanOverviewScreen),
+        timeout=5.0,
+    )
+    overview = app.screen
+    overview.action_start_cleanup()
+    await _wait_for(
+        lambda: isinstance(app.screen, DuplicateScanScreen),
+        timeout=5.0,
+    )
+    return app.screen  # type: ignore[return-value]
+
+
 # ----------------------------------------------------------------------
 # Menu wiring
 # ----------------------------------------------------------------------
@@ -152,13 +182,13 @@ async def test_menu_popup_enter_press_dispatches_scan_duplicates():
         ol.highlighted = idx
         await pilot.pause()
         await pilot.press("enter")
-        # DuplicateScanScreen 이 떠야.
+        # CL #52989+: 첫 화면은 DupeScanOverviewScreen.
         ok = await _wait_for(
-            lambda: isinstance(app.screen, DuplicateScanScreen),
+            lambda: isinstance(app.screen, DupeScanOverviewScreen),
             timeout=5.0,
         )
         assert ok, (
-            f"DuplicateScanScreen not pushed. "
+            f"DupeScanOverviewScreen not pushed. "
             f"Current: {type(app.screen).__name__}, "
             f"status={es.last_status!r}"
         )
@@ -203,13 +233,13 @@ async def test_menu_popup_dispatches_scan_duplicates():
         assert popup.spec.name == "입력"
         # "중복 거래 검사" 선택 = popup 이 action_id 로 dismiss.
         popup.dismiss("scan_duplicates")
-        # worker → list_entries → find_clusters → push DuplicateScanScreen.
+        # CL #52989+: worker → fetch → save → DupeScanOverviewScreen push.
         ok = await _wait_for(
-            lambda: isinstance(app.screen, DuplicateScanScreen),
+            lambda: isinstance(app.screen, DupeScanOverviewScreen),
             timeout=5.0,
         )
         assert ok, (
-            f"DuplicateScanScreen not pushed. "
+            f"DupeScanOverviewScreen not pushed. "
             f"Current: {type(app.screen).__name__}, "
             f"status={es.last_status!r}"
         )
@@ -218,43 +248,31 @@ async def test_menu_popup_dispatches_scan_duplicates():
 @pytest.mark.asyncio
 async def test_scan_shows_progress_modal_during_fetch():
     """fetch / 분석 중 ScanProgressModal 이 화면 위에 떠야 — 그리고 결과
-    DuplicateScanScreen 으로 자동 교체.
-
-    CL #52977 사용자 요청: "중복 검사중일 때 화면을 작은 팝업으로 덮고
-    중복 검사중이라고 안내해주세요. 그리고 지금 하고 있는 작업을 표시해
-    주세요."
-
-    fake client 의 list_entries 는 즉시 반환하므로 실제 실행에서는 progress
-    modal 이 잠깐만 보임. 본 테스트는 *어느 시점이라도* progress modal 이
-    떴음을 보장한다 (set_activity 가 한 번이라도 호출되면 last_activity
-    가 남음).
-    """
+    DupeScanOverviewScreen 으로 자동 교체 (CL #52989+ 2단계 UI)."""
     fake = FakeClient()
     app = WhooingTuiApp(client=fake)  # type: ignore[arg-type]
-    seen_progress: list[ScanProgressModal] = []
-
     async with app.run_test() as pilot:
         await _open_entries(app)
         es = app.screen
         assert isinstance(es, EntriesScreen)
         es.action_scan_duplicates()
-        # progress modal 이 어느 순간엔가 화면에 떠야.
         ok = await _wait_for(
-            lambda: isinstance(app.screen, (ScanProgressModal, DuplicateScanScreen)),
+            lambda: isinstance(
+                app.screen,
+                (ScanProgressModal, DupeScanOverviewScreen),
+            ),
             timeout=3.0,
         )
         assert ok
-        # 한 번이라도 progress modal 이었으면 capture.
-        if isinstance(app.screen, ScanProgressModal):
-            seen_progress.append(app.screen)
-        # 결국 결과 화면으로 교체.
+        # 결국 overview 로.
         ok2 = await _wait_for(
-            lambda: isinstance(app.screen, DuplicateScanScreen),
+            lambda: isinstance(app.screen, DupeScanOverviewScreen),
             timeout=5.0,
         )
-        assert ok2, f"Did not reach DuplicateScanScreen. Final: {type(app.screen).__name__}"
-        # progress modal 이 closed — DuplicateScanScreen 위에 떠 있지 않아야.
-        assert isinstance(app.screen, DuplicateScanScreen)
+        assert ok2, (
+            f"Did not reach DupeScanOverviewScreen. "
+            f"Final: {type(app.screen).__name__}"
+        )
 
 
 def test_scan_progress_modal_set_activity_buffer_before_mount():
@@ -269,8 +287,8 @@ def test_scan_progress_modal_set_activity_buffer_before_mount():
 
 @pytest.mark.asyncio
 async def test_scan_progress_modal_dismissed_when_no_clusters():
-    """중복 0건이면 progress modal 만 잠깐 떴다 사라지고 DuplicateScanScreen
-    은 안 뜸 (status 만 갱신)."""
+    """중복 0건이면 progress modal 만 잠깐 떴다 사라지고 overview 도
+    cluster 화면도 안 뜸 (status 만 갱신)."""
     fake = FakeClient(entries=[
         {"entry_id": "x", "entry_date": "20260510", "money": 1000,
          "l_account_id": "x20", "r_account_id": "x11", "item": "A"},
@@ -283,18 +301,17 @@ async def test_scan_progress_modal_dismissed_when_no_clusters():
         es = app.screen
         assert isinstance(es, EntriesScreen)
         es.action_scan_duplicates()
-        # 결국 EntriesScreen 으로 복귀 (progress 도 결과도 없어야).
         await _wait_for(
             lambda: "중복 후보 없음" in es.last_status, timeout=3.0,
         )
-        # progress modal 도 결과 화면도 안 떠 있어야.
         assert not isinstance(app.screen, ScanProgressModal)
         assert not isinstance(app.screen, DuplicateScanScreen)
+        assert not isinstance(app.screen, DupeScanOverviewScreen)
 
 
 @pytest.mark.asyncio
-async def test_scan_finds_two_clusters_and_opens_screen():
-    """fake 3년 ledger 안 cluster 2개 — DuplicateScanScreen 이 떠야."""
+async def test_scan_finds_two_clusters_and_opens_overview():
+    """CL #52989+: 첫 화면은 overview 로 — cluster 2개 보여준다."""
     fake = FakeClient()
     app = WhooingTuiApp(client=fake)  # type: ignore[arg-type]
     async with app.run_test() as pilot:
@@ -303,19 +320,135 @@ async def test_scan_finds_two_clusters_and_opens_screen():
         assert isinstance(es, EntriesScreen)
         es.action_scan_duplicates()
         await _wait_for(
-            lambda: isinstance(app.screen, DuplicateScanScreen),
+            lambda: isinstance(app.screen, DupeScanOverviewScreen),
             timeout=3.0,
         )
         await pilot.pause()
-        scr = app.screen
+        overview = app.screen
+        assert isinstance(overview, DupeScanOverviewScreen)
+        assert len(overview._clusters) == 2
+        # identical 이 먼저 (StoredCluster 정렬 기준 동일).
+        assert overview._clusters[0].verdict == "identical"
+        assert overview._clusters[1].verdict == "very_likely"
+
+
+@pytest.mark.asyncio
+async def test_scan_caches_clusters_in_sqlite_for_reuse():
+    """CL #52989+: 첫 스캔 후 sqlite 에 저장 → 두번째 스캔은 fetch 안 함."""
+    from whooing_tui.dates import days_ago_yyyymmdd, today_yyyymmdd
+    from whooing_tui.dupe_scan_repo import DupeScanRepository
+
+    fake = FakeClient()
+    app = WhooingTuiApp(client=fake)  # type: ignore[arg-type]
+    async with app.run_test() as pilot:
+        await _open_entries(app)
+        es = app.screen
+        es.action_scan_duplicates()
+        await _wait_for(
+            lambda: isinstance(app.screen, DupeScanOverviewScreen),
+            timeout=5.0,
+        )
+        # 1차 fetch — list_entries 호출됨.
+        assert len(fake.list_entries_calls) >= 1
+        first_fetch_count = len(fake.list_entries_calls)
+        # repo 에 cluster 저장 확인.
+        repo = DupeScanRepository()
+        cached = repo.load_open_clusters(
+            section_id="s1",
+            range_start=days_ago_yyyymmdd(365 * 3),
+            range_end=today_yyyymmdd(),
+        )
+        assert len(cached) == 2
+        # 닫고 다시 스캔 — 캐시 hit, fetch 추가 호출 X.
+        app.screen.action_close()
+        await pilot.pause()
+        es.action_scan_duplicates()
+        await _wait_for(
+            lambda: isinstance(app.screen, DupeScanOverviewScreen),
+            timeout=5.0,
+        )
+        # list_entries 호출 수가 늘지 않아야 (캐시 hit).
+        assert len(fake.list_entries_calls) == first_fetch_count, (
+            f"cached scan should not re-fetch — calls: {fake.list_entries_calls}"
+        )
+        # 사용자에게 cache hit 알림.
+        assert app.screen._cached is True
+
+
+@pytest.mark.asyncio
+async def test_scan_refresh_clears_cache_and_refetches():
+    """F5 / 새로고침 — sqlite 비우고 후잉 재요청."""
+    from whooing_tui.dates import days_ago_yyyymmdd, today_yyyymmdd
+
+    fake = FakeClient()
+    app = WhooingTuiApp(client=fake)  # type: ignore[arg-type]
+    async with app.run_test() as pilot:
+        await _open_entries(app)
+        es = app.screen
+        es.action_scan_duplicates()
+        await _wait_for(
+            lambda: isinstance(app.screen, DupeScanOverviewScreen),
+            timeout=5.0,
+        )
+        first_calls = len(fake.list_entries_calls)
+        overview = app.screen
+        overview.action_refresh()
+        # refresh worker → 다시 fetch.
+        ok = await _wait_for(
+            lambda: len(fake.list_entries_calls) > first_calls,
+            timeout=5.0,
+        )
+        assert ok
+        await pilot.pause()
+        # 화면은 overview 그대로 (재로딩).
+        assert isinstance(app.screen, DupeScanOverviewScreen)
+        # cached 플래그가 False 로 (방금 새로 받음).
+        assert app.screen._cached is False
+
+
+@pytest.mark.asyncio
+async def test_cluster_resolution_persists_to_repo():
+    """Enter (deletion) → repo 의 cluster status 가 'resolved' 로."""
+    from whooing_tui.dates import days_ago_yyyymmdd, today_yyyymmdd
+    from whooing_tui.dupe_scan_repo import DupeScanRepository
+
+    fake = FakeClient()
+    app = WhooingTuiApp(client=fake)  # type: ignore[arg-type]
+    async with app.run_test() as pilot:
+        await _open_entries(app)
+        scr = await _drive_to_cluster_screen(app)
+        await pilot.pause()
+        cluster_id = scr._clusters[0].id
+        assert scr._clusters[0].status == "pending"
+        scr.action_confirm()
+        # 삭제 완료 후 다음으로 이동.
+        await _wait_for(
+            lambda: scr._idx > 0
+            or not isinstance(app.screen, DuplicateScanScreen),
+            timeout=3.0,
+        )
+        # repo 확인 — cluster_id 의 status 가 resolved.
+        repo = DupeScanRepository()
+        all_clusters = repo.load_all_clusters(
+            section_id="s1",
+            range_start=days_ago_yyyymmdd(365 * 3),
+            range_end=today_yyyymmdd(),
+        )
+        resolved = [c for c in all_clusters if c.id == cluster_id]
+        assert len(resolved) == 1
+        assert resolved[0].status == "resolved"
+
+
+@pytest.mark.asyncio
+async def test_overview_start_cleanup_opens_cluster_screen():
+    """overview 의 R/정리 버튼 → DuplicateScanScreen 진입."""
+    fake = FakeClient()
+    app = WhooingTuiApp(client=fake)  # type: ignore[arg-type]
+    async with app.run_test() as pilot:
+        await _open_entries(app)
+        scr = await _drive_to_cluster_screen(app)
         assert isinstance(scr, DuplicateScanScreen)
-        # cluster 2개 (identical + very_likely).
-        assert len(scr._clusters) == 2
-        # identical 이 먼저 정렬.
-        assert scr._clusters[0].verdict == "identical"
-        assert scr._clusters[1].verdict == "very_likely"
-        # 첫 cluster 의 기본 mark — keep_suggestion 만 False (보존),
-        # 다른 1건은 True (삭제).
+        # 첫 cluster mark — keep_suggestion 만 False.
         marks = scr._marks[0]
         keep = scr._clusters[0].keep_suggestion
         for eid, m in marks.items():
@@ -352,13 +485,7 @@ async def test_scan_confirm_deletes_marked_entries_and_advances():
     app = WhooingTuiApp(client=fake)  # type: ignore[arg-type]
     async with app.run_test() as pilot:
         await _open_entries(app)
-        es = app.screen
-        es.action_scan_duplicates()
-        await _wait_for(
-            lambda: isinstance(app.screen, DuplicateScanScreen),
-            timeout=3.0,
-        )
-        scr = app.screen
+        scr = await _drive_to_cluster_screen(app)
         await pilot.pause()
         # 첫 cluster 의 keep_suggestion 이 아닌 entry_id 가 삭제 대상.
         c0 = scr._clusters[0]
@@ -367,14 +494,14 @@ async def test_scan_confirm_deletes_marked_entries_and_advances():
             str(e.get("entry_id")) for e in c0.entries
             if str(e.get("entry_id")) != keep0
         ]
-        assert expected_deleted  # 적어도 1건 있어야.
-        # 사용자가 Enter → 삭제 + 다음 cluster.
+        assert expected_deleted
         scr.action_confirm()
         ok = await _wait_for(
-            lambda: scr._idx == 1, timeout=3.0,
+            lambda: scr._idx == 1
+            or not isinstance(app.screen, DuplicateScanScreen),
+            timeout=3.0,
         )
         assert ok
-        # 호출 검증.
         deleted_ids = [c["entry_id"] for c in fake.delete_calls]
         assert set(deleted_ids) == set(expected_deleted)
 
@@ -386,15 +513,8 @@ async def test_scan_toggle_delete_flips_mark():
     app = WhooingTuiApp(client=fake)  # type: ignore[arg-type]
     async with app.run_test() as pilot:
         await _open_entries(app)
-        es = app.screen
-        es.action_scan_duplicates()
-        await _wait_for(
-            lambda: isinstance(app.screen, DuplicateScanScreen),
-            timeout=3.0,
-        )
-        scr = app.screen
+        scr = await _drive_to_cluster_screen(app)
         await pilot.pause()
-        # 첫 cluster, cursor row 0 의 mark.
         from textual.widgets import DataTable
         t = scr.query_one("#scan-table", DataTable)
         t.move_cursor(row=0)
@@ -413,13 +533,7 @@ async def test_scan_skip_moves_next_without_deleting():
     app = WhooingTuiApp(client=fake)  # type: ignore[arg-type]
     async with app.run_test() as pilot:
         await _open_entries(app)
-        es = app.screen
-        es.action_scan_duplicates()
-        await _wait_for(
-            lambda: isinstance(app.screen, DuplicateScanScreen),
-            timeout=3.0,
-        )
-        scr = app.screen
+        scr = await _drive_to_cluster_screen(app)
         await pilot.pause()
         assert scr._idx == 0
         scr.action_next_cluster()
@@ -433,13 +547,7 @@ async def test_scan_prev_returns_to_previous_cluster():
     app = WhooingTuiApp(client=fake)  # type: ignore[arg-type]
     async with app.run_test() as pilot:
         await _open_entries(app)
-        es = app.screen
-        es.action_scan_duplicates()
-        await _wait_for(
-            lambda: isinstance(app.screen, DuplicateScanScreen),
-            timeout=3.0,
-        )
-        scr = app.screen
+        scr = await _drive_to_cluster_screen(app)
         await pilot.pause()
         scr.action_next_cluster()
         assert scr._idx == 1
@@ -458,13 +566,7 @@ async def test_scan_esc_no_changes_returns_false():
     app = WhooingTuiApp(client=fake)  # type: ignore[arg-type]
     async with app.run_test() as pilot:
         await _open_entries(app)
-        es = app.screen
-        es.action_scan_duplicates()
-        await _wait_for(
-            lambda: isinstance(app.screen, DuplicateScanScreen),
-            timeout=3.0,
-        )
-        scr = app.screen
+        scr = await _drive_to_cluster_screen(app)
         await pilot.pause()
         scr.action_cancel()
         await pilot.pause()
@@ -483,15 +585,8 @@ async def test_scan_confirm_with_no_marks_shows_error():
     app = WhooingTuiApp(client=fake)  # type: ignore[arg-type]
     async with app.run_test() as pilot:
         await _open_entries(app)
-        es = app.screen
-        es.action_scan_duplicates()
-        await _wait_for(
-            lambda: isinstance(app.screen, DuplicateScanScreen),
-            timeout=3.0,
-        )
-        scr = app.screen
+        scr = await _drive_to_cluster_screen(app)
         await pilot.pause()
-        # 모든 mark 를 False (보존).
         for eid in scr._marks[0]:
             scr._marks[0][eid] = False
         scr.action_confirm()
@@ -507,13 +602,7 @@ async def test_scan_progress_counter_format():
     app = WhooingTuiApp(client=fake)  # type: ignore[arg-type]
     async with app.run_test() as pilot:
         await _open_entries(app)
-        es = app.screen
-        es.action_scan_duplicates()
-        await _wait_for(
-            lambda: isinstance(app.screen, DuplicateScanScreen),
-            timeout=3.0,
-        )
-        scr = app.screen
+        scr = await _drive_to_cluster_screen(app)
         await pilot.pause()
         from textual.widgets import Static
         prog = scr.query_one("#scan-progress", Static)

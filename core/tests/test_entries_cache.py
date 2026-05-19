@@ -53,9 +53,9 @@ def test_entries_cache_table_exists(conn):
     assert rows
 
 
-def test_schema_version_is_8():
-    """SCHEMA_VERSION 이 8 로 bump."""
-    assert core_db.SCHEMA_VERSION == 8
+def test_schema_version_is_9():
+    """CL #52989+: SCHEMA_VERSION 9 — dupe_scan_clusters 추가."""
+    assert core_db.SCHEMA_VERSION == 9
 
 
 # ---- upsert_entries ---------------------------------------------------

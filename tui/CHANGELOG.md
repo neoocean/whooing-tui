@@ -5,6 +5,141 @@
 > **0.17.x 이전** (CL #51119 ~ #1) 항목은 분량 정리 차원에서
 > [`CHANGELOG-archive-0.17.md`](./CHANGELOG-archive-0.17.md) 로 분리 보존.
 
+## CL #52989 — 0.77.0 — 중복 스캔 결과 영구화 + 2단계 UI (overview → cleanup) (2026-05-19)
+
+배경 (사용자 요청, 2026-05-19):
+> 중복 거래 내역을 스캔한 다음 확정 전에 데이터베이스에 별도 테이블로
+> 저장해주세요. 이후 중복 거래를 스캔할 때 데이터베이스를 확인해 정리되지
+> 않은 항목은 후잉에 직접 요청하지 않고 일단 데이터베이스로부터 확보한
+> 중복 항목에 출력해 정리하게 해주세요. 정리되지 않은 중복은 한번 가져오면
+> 정리하기 전까지는 같은 날짜범위를 재요청하지 않도록 해주세요. 중복
+> 목록에서는 후잉으로부터 정보를 새로고침 할 수 있도록 버튼을 제공해야
+> 합니다. 먼저 팝업에서 전체 목록을 보여주고 그 화면에서 정리 버튼을
+> 누르면 중복 항목들을 하나씩 묶어 보여주며 정리하게 인터페이스를 수정하세요.
+
+### 기존 한계 (CL #52963 0.76.0)
+
+- 매번 후잉 API 로 3년치 거래 fetch — 큰 ledger 에서 10~30s.
+- 정리 못 끝낸 채 닫으면 다음 스캔이 처음부터 다시 fetch.
+- 사용자가 *전체 분포* 를 보기 전 cluster 1개씩 보여줘서 큰 그림 안 보임.
+
+### 수정
+
+#### (1) sqlite schema v9 — `dupe_scan_clusters` 테이블
+
+`core/db.py`:
+```sql
+CREATE TABLE dupe_scan_clusters (
+    id               INTEGER PRIMARY KEY AUTOINCREMENT,
+    section_id       TEXT NOT NULL,
+    scan_range_start TEXT NOT NULL,   -- YYYYMMDD
+    scan_range_end   TEXT NOT NULL,
+    scanned_at       TEXT NOT NULL,
+    verdict          TEXT NOT NULL,   -- identical | very_likely | possible
+    reasons_json     TEXT,            -- JSON list[str]
+    keep_suggestion  TEXT,
+    entries_json     TEXT NOT NULL,   -- JSON list[dict]
+    status           TEXT NOT NULL DEFAULT 'pending',  -- pending|resolved|skipped
+    resolved_at      TEXT
+);
+CREATE INDEX idx_dupe_scan_range
+ON dupe_scan_clusters(section_id, scan_range_start, scan_range_end, status);
+```
+
+한 row = 한 cluster. entries 는 JSON list (확장 필드 보존 — 후잉 schema 변경 무관).
+
+#### (2) DupeScanRepository (`tui/src/whooing_tui/dupe_scan_repo.py`)
+
+- `save_scan(section_id, range_start, range_end, clusters)` → 영구화.
+- `load_open_clusters(...)` — pending 만.
+- `load_all_clusters(...)` — resolved/skipped 포함 (overview 가 사용).
+- `update_status(cluster_id, status)` — Enter 후 deletion 성공 시 resolved.
+- `clear_scan(...)` — refresh 진입점 (모든 row 삭제).
+- `has_open_scan(...)` — worker 가 cache hit 결정.
+
+#### (3) 신규 `DupeScanOverviewScreen` (Stage 1)
+
+`screens/dupe_scan_overview.py`:
+```
+╭─ 중복 거래 검사 — 결과 목록 ─────────────────────────╮
+│  범위: 20230520 ~ 20260519 · 💾 sqlite 캐시           │
+│  전체 146 · 정리됨 26 · 남음 120                       │
+│  ┌────┬──────┬──────────┬─────┬────┬────┬────────┐  │
+│  │ #  │ 상태 │ 강도      │ 날짜 │ 금액│ 건수│ 적요    │  │
+│  │  1 │ ⏳남음│ identical │ 20…  │ 5K  │  2 │ …      │  │
+│  │  2 │ ✓정리│ very_likely│ 20…  │ 12K │  3 │ …      │  │
+│  └────┴──────┴──────────┴─────┴────┴────┴────────┘  │
+│  Enter: 이 항목부터 정리 · R: 처음부터 · F5: 새로고침 │
+│  [정리 시작 (R)] [새로고침 (F5)] [닫기 (Esc)]         │
+╰──────────────────────────────────────────────────────╯
+```
+
+- 모든 cluster 한 화면에서 분포 확인.
+- ↑↓ + Enter: 그 cluster 부터 정리 시작.
+- **R**: 첫 pending 부터 정리.
+- **F5**: refresh_callback 호출 → worker 가 sqlite clear → 후잉 재요청 → 새 list.
+- Esc / 닫기: dismiss (정리된 게 있으면 entries 재로드).
+
+#### (4) `_scan_duplicates_worker` 재설계 (entries.py)
+
+```python
+async def _scan_duplicates_worker():
+    repo = DupeScanRepository()
+    cached = repo.load_all_clusters(section, range_start, range_end)
+    if any pending in cached:
+        # 캐시 hit — fetch skip, 바로 overview push.
+        push DupeScanOverviewScreen(cached, cached=True)
+    else:
+        # cache miss — fetch + cluster + save → overview push.
+        stored = await _fetch_and_save_dupe_clusters(...)
+        push DupeScanOverviewScreen(stored, cached=False)
+```
+
+`_fetch_and_save_dupe_clusters` 는 helper — refresh_callback 에서도 재사용.
+
+#### (5) `DuplicateScanScreen` 변경
+
+- `start_idx`, `repo` 파라미터 추가 — overview 가 특정 cluster 부터 진입 가능.
+- Enter (deletion 성공) → `repo.update_status(cluster.id, "resolved")` 자동.
+- `_next_unresolved_idx` — resolved 마킹된 cluster 는 다음 자동 이동에서 skip.
+- 종전 `list[DupeCluster]` 인터페이스도 그대로 받음 (테스트 친화 + repo 없는 직접 호출 케이스).
+
+### 결과 — 사용자 흐름
+
+```
+입력 메뉴 → 중복 거래 검사
+         ↓
+   ScanProgressModal (캐시 hit 면 잠깐만)
+         ↓
+   DupeScanOverviewScreen  ← 첫 화면 (전체 분포)
+    │
+    ├─ Enter / R → DuplicateScanScreen (cluster 1개씩 정리)
+    │              ↑ resolved 마킹 → repo 영구화 → overview 복귀
+    │
+    ├─ F5 → sqlite clear + 후잉 재요청 → overview refresh
+    │
+    └─ Esc → entries 재로드 (정리된 것 있으면)
+```
+
+### 캐시 정책 요약
+
+- 같은 (section, range) 의 pending 이 있으면 → 후잉 안 부름.
+- 모두 resolved 되면 → 다음 스캔은 fetch 다시 (새 중복 가능성).
+- F5 명시 → 사용자가 강제로 fetch 재요청.
+
+### 테스트 (+14, total 1093 → 1107)
+
+`test_dupe_scan_repo.py` (+11): save/load round-trip, range 격리, status
+업데이트 (resolved/skipped), clear_scan, has_open_scan, 잘못된 status,
+entries dict shape 보존.
+
+`test_duplicate_scan.py` (+3 신규, 기존 16 갱신):
+- `test_scan_caches_clusters_in_sqlite_for_reuse` — 두번째 스캔 fetch X.
+- `test_scan_refresh_clears_cache_and_refetches` — F5 → fetch 늘어남.
+- `test_cluster_resolution_persists_to_repo` — Enter → repo status 변경.
+
+총 1109 통과.
+
 ## CL #52979 — 0.76.3 — DELETE 도 form-body 필수 + 저장소 trade-off 문서 (2026-05-19)
 
 ### 1. delete_* 가 "`section_id` parameter is required." 로 실패 (사용자 보고)

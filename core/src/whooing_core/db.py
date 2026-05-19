@@ -29,7 +29,7 @@ from typing import Any, Iterator
 from whooing_core.dates import KST
 from datetime import datetime
 
-SCHEMA_VERSION = 8
+SCHEMA_VERSION = 9
 
 
 # ---- 연결 + schema -----------------------------------------------------
@@ -158,6 +158,42 @@ def _apply_lightweight_migrations(conn: sqlite3.Connection) -> None:
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_entries_cache_right "
             "ON entries_cache(section_id, r_account_id)"
+        )
+    except sqlite3.OperationalError:  # pragma: no cover
+        pass
+
+    # CL #52989+ (schema v9): dupe_scan_clusters — 중복 스캔 결과 영구화.
+    # 사용자 요청 (2026-05-19): "중복 거래 내역을 스캔한 다음 확정 전에
+    # 데이터베이스에 별도 테이블로 저장 … 정리되지 않은 중복은 한번 가져오면
+    # 정리하기 전까지는 같은 날짜범위를 재요청하지 않도록".
+    #
+    # 한 row = 한 cluster. entries 는 JSON list (변동 길이, dict shape 가
+    # 후잉 응답 그대로 보존 — 시간 지나 후잉 schema 가 바뀌어도 read-only
+    # 분석에 영향 적음). status 는 'pending' | 'resolved' | 'skipped'.
+    # 동일 (section_id, scan_range_start, scan_range_end) 의 pending 행이
+    # 하나라도 있으면 worker 가 cache hit — whooing API 안 부름.
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS dupe_scan_clusters (
+            id                 INTEGER PRIMARY KEY AUTOINCREMENT,
+            section_id         TEXT NOT NULL,
+            scan_range_start   TEXT NOT NULL,   -- YYYYMMDD
+            scan_range_end     TEXT NOT NULL,   -- YYYYMMDD
+            scanned_at         TEXT NOT NULL,   -- ISO8601 KST
+            verdict            TEXT NOT NULL,   -- identical | very_likely | possible
+            reasons_json       TEXT,            -- JSON list[str]
+            keep_suggestion    TEXT,            -- entry_id of suggested keep
+            entries_json       TEXT NOT NULL,   -- JSON list[dict] — cluster members
+            status             TEXT NOT NULL DEFAULT 'pending',
+            resolved_at        TEXT             -- status != pending 인 순간 ISO8601.
+        )
+        """
+    )
+    try:
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_dupe_scan_range "
+            "ON dupe_scan_clusters(section_id, scan_range_start, "
+            "scan_range_end, status)"
         )
     except sqlite3.OperationalError:  # pragma: no cover
         pass
