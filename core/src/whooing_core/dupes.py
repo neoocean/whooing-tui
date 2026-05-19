@@ -216,6 +216,36 @@ def _pair_verdict(
         reasons.append("금액·날짜·계정 일치 (item 만 다름) — 이중 입력 가능")
         return ("very_likely", tuple(reasons))
 
+    # CL #53092+: 한 쪽은 TUI 자동 import, 다른 쪽은 사람 입력 — 같은 금액 +
+    # 같은 날 + (계정 일치 || 가맹점 substring 일치) 이면 매우 가능성 높음.
+    # 카드 명세서 import 와 수기 거래의 가장 흔한 겹침 패턴.
+    one_auto = is_tui_auto_imported(a) ^ is_tui_auto_imported(b)
+    if same_money and same_date and one_auto:
+        item_similar = bool(a_item) and bool(b_item) and (
+            a_item == b_item
+            or merchant_similar(a.get("item") or "", b.get("item") or "")
+        )
+        if same_accounts:
+            reasons.append("한쪽 자동 import + 한쪽 수기 입력 — 금액·날짜·계정 일치")
+            return ("very_likely", tuple(reasons))
+        if item_similar:
+            reasons.append(
+                "한쪽 자동 import + 한쪽 수기 입력 — 금액·날짜·가맹점 (유사) 일치",
+            )
+            return ("very_likely", tuple(reasons))
+
+    # CL #53092+: 가맹점명 substring 일치 + 금액 + 날짜 일치 → 매우 가능성.
+    # "스타벅스" vs "스타벅스 강남점" 같은 case 가 same_money + same_date
+    # + same_accounts 라도 위 item 정규화 분기 (a_item == b_item) 에 안
+    # 걸리는 경우 보완.
+    if (
+        same_money and same_date and same_accounts and a_item and b_item
+        and a_item != b_item
+        and merchant_similar(a.get("item") or "", b.get("item") or "")
+    ):
+        reasons.append("가맹점명 (substring) 유사 + 금액·날짜·계정 일치")
+        return ("very_likely", tuple(reasons))
+
     # 금액 절대값 + 날짜 + 좌우 계정 일치, 부호만 반대 → 환불/취소 묶음.
     if same_abs_money and same_date and same_accounts:
         reasons.append("금액 부호만 반대 (환불/취소 묶음 가능)")
@@ -236,6 +266,106 @@ def _pair_verdict(
         return ("possible", tuple(reasons))
 
     return ("different", tuple(reasons))
+
+
+# ----------------------------------------------------------------------
+# 사람 입력 vs 자동 입력 선호도 — keep / delete 추천 강화 (CL #53092+).
+# ----------------------------------------------------------------------
+#
+# 사용자 요청 (2026-05-19): "중복 거래를 정리할 때 남길 거래와 삭제할
+# 거래를 선택할 때 사람이 입력한 것처럼 보이는 것을 우선시하고 자동으로
+# 입력된 것처럼 보이는 것은 삭제 대상으로 추천하도록 보완해주세요."
+#
+# 강한 신호 (점수가 크게 떨어지는 = 자동 입력):
+#  - memo 가 "TUI:" prefix — `screens/statement_import.py` 가 명세서 import
+#    시 자동 부여 (`memo=f"TUI: {file_path[-40:]}"`). 가장 신뢰할 수 있는
+#    auto-import marker.
+#
+# 약한 신호 (사람 입력의 가능성):
+#  - 짧은 item (raw card statement 의 긴 가맹점명과 대비).
+#  - 한글 괄호 / 구두점 같은 사람 표기 패턴 (예: "간식 (지에스 25...)" ).
+#  - 비어있지 않은 memo (TUI: 가 아닌 자유 텍스트).
+#
+# `find_duplicate_clusters` 가 `keep_suggestion` 결정에 사용. 점수가 높은
+# = 사람 입력 → keep. 점수가 낮은 = 자동 → 삭제 후보. 동점 시 기존 정책
+# (oldest entry_date → entry_id 사전순).
+
+
+# memo 가 TUI 의 자동 import marker 인지 — strip 후 prefix 검사.
+_TUI_AUTO_MARKERS = ("TUI:", "tui:", " TUI:", " tui:")
+
+
+def is_tui_auto_imported(entry: dict[str, Any]) -> bool:
+    """`memo` 가 카드 명세서 import 의 자동 marker 를 포함하는지.
+
+    `screens/statement_import.py · _save_worker` 가 모든 import 거래에
+    `memo=f"TUI: {file_path[-40:]}"` 부여 (CL #51126+). substring 매칭 —
+    사용자가 직접 memo 를 수정해도 marker 가 남아있으면 자동 인지.
+    """
+    memo = str(entry.get("memo") or "")
+    if not memo:
+        return False
+    if memo.startswith("TUI:") or memo.startswith("tui:"):
+        return True
+    if " TUI:" in memo or " tui:" in memo:
+        return True
+    return False
+
+
+def keep_preference_score(entry: dict[str, Any]) -> int:
+    """한 entry 가 '남길 만한가' 점수 — 높을수록 keep.
+
+    pure function. entry dict 만 보고 추론 — sqlite 의 해시태그/첨부 같은
+    추가 메타는 호출자가 `_score_bonus` 인자로 추가 보정 가능 (현재는 미사용).
+
+    스케일:
+      +10..+100  사람 입력 (직접 작성 / 풍부한 자유 텍스트)
+      0..+5      평범 (information 부족 — neutral)
+      -100..0    자동 import (TUI: marker 등)
+    """
+    score = 0
+    memo = str(entry.get("memo") or "")
+    item = str(entry.get("item") or "")
+
+    # 자동 import marker — 가장 강한 negative.
+    if is_tui_auto_imported(entry):
+        score -= 100
+
+    # 사람 표기 패턴 — 괄호로 가맹점 설명 (예: "간식 (지에스 25 S논현역점)").
+    if "(" in item or "(" in memo or "（" in item or "（" in memo:
+        score += 3
+
+    # item 이 짧고 깔끔하면 사람이 직접 분류한 결과 가능성.
+    # 카드 명세서 raw 는 보통 영문대문자 + 한글 혼합 + 점포코드 등 길다.
+    if item and len(item) <= 12:
+        score += 2
+
+    # memo 가 비어있지 않고 TUI: 가 아니면 사람이 노트 작성한 신호.
+    if memo and not is_tui_auto_imported(entry):
+        score += 5
+        # 한글 자유 텍스트 (가나다 범위) 가 들어있으면 더 강한 신호.
+        if any("가" <= ch <= "힣" for ch in memo):
+            score += 2
+
+    return score
+
+
+def _pick_keep_id(entries: list[dict[str, Any]]) -> str | None:
+    """cluster 안에서 남길 entry_id 추천 — keep_preference_score 최고 +
+    동점 시 (oldest entry_date, entry_id 사전순) fallback (CL #53092+).
+    """
+    if not entries:
+        return None
+
+    def _sort_key(e: dict[str, Any]) -> tuple:
+        return (
+            -keep_preference_score(e),   # 높은 점수가 먼저 (음수로 desc).
+            _date(e.get("entry_date")),  # oldest first.
+            str(e.get("entry_id") or ""),
+        )
+
+    best = min(entries, key=_sort_key)
+    return str(best.get("entry_id") or "") or None
 
 
 _VERDICT_ORDER: dict[Verdict, int] = {
@@ -277,11 +407,8 @@ def evaluate_duplicates(entries: Iterable[dict[str, Any]]) -> DupeReport:
                 strongest = v
                 strongest_reasons = r
 
-    def _keep_key(e: dict[str, Any]) -> tuple[str, str]:
-        return (_date(e.get("entry_date")), str(e.get("entry_id") or ""))
-
-    keep = min(items, key=_keep_key)
-    keep_id = str(keep.get("entry_id") or "") or None
+    # CL #53092+: keep_preference_score (사람 입력 우선) 사용.
+    keep_id = _pick_keep_id(items)
 
     return DupeReport(
         verdict=strongest,
@@ -484,13 +611,18 @@ def find_duplicate_clusters(
             continue
 
         members = [deduped[i] for i in member_idxs]
-        # keep_suggestion — entry_date 가장 오래된 것 (먼저 기록), 동률이면
-        # entry_id 사전순 작은 것.
+        # CL #53092+: keep_preference_score (사람 입력 우선) 로 keep_suggestion
+        # 결정. entries 정렬은 사용자 표시용 — 점수 높은 (keep 후보) 가 위로,
+        # 그 다음 entry_date / entry_id.
         members_sorted = sorted(
             members,
-            key=lambda e: (_date(e.get("entry_date")), str(e.get("entry_id") or "")),
+            key=lambda e: (
+                -keep_preference_score(e),
+                _date(e.get("entry_date")),
+                str(e.get("entry_id") or ""),
+            ),
         )
-        keep_id = str(members_sorted[0].get("entry_id") or "") or None
+        keep_id = _pick_keep_id(members)
         clusters.append(DupeCluster(
             entries=tuple(members_sorted),
             verdict=strongest,
@@ -511,5 +643,6 @@ def find_duplicate_clusters(
 __all__ = [
     "DupeReport", "DupeCluster", "Verdict", "VERDICT_LABELS_KO",
     "evaluate_duplicates", "find_duplicate_clusters", "is_duplicate",
+    "is_tui_auto_imported", "keep_preference_score",
     "normalize_text", "merchant_similar",
 ]

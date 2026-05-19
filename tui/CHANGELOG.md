@@ -5,6 +5,95 @@
 > **0.17.x 이전** (CL #51119 ~ #1) 항목은 분량 정리 차원에서
 > [`CHANGELOG-archive-0.17.md`](./CHANGELOG-archive-0.17.md) 로 분리 보존.
 
+## CL #53092 — 0.78.0 — 중복 정리: 사람 입력 우선 + 매칭 휴리스틱 강화 (2026-05-19)
+
+배경 (사용자 요청, 2026-05-19): "중복 거래를 정리할 때 남길 거래와 삭제할
+거래를 선택할 때 사람이 입력한 것처럼 보이는 것을 우선시하고 자동으로
+입력된 것처럼 보이는 것은 삭제 대상으로 추천하도록 보완해주세요. 이외에도
+중복 거래에서 삭제할 거래와 남길 거래를 탐지하는 로직을 강화해주세요."
+
+### 신규 — 사람 vs 자동 입력 구분
+
+`core/dupes.py`:
+
+```python
+def is_tui_auto_imported(entry: dict) -> bool:
+    """memo 가 'TUI:' marker 를 포함 — screens/statement_import.py 의
+    자동 부여 (memo=f'TUI: {file_path[-40:]}')."""
+
+def keep_preference_score(entry: dict) -> int:
+    """높을수록 keep 권장. 사람 입력 +, 자동 import -."""
+```
+
+신호:
+| 패턴 | 점수 | 의미 |
+|---|---|---|
+| memo 가 "TUI:" prefix / substring | **-100** | 자동 import — 강한 삭제 후보 |
+| memo 에 한글 자유 텍스트 | +5 ~ +7 | 사람 노트 |
+| item / memo 에 괄호 (예: "간식 (스타벅스)") | +3 | 사람 표기 패턴 |
+| 짧고 깔끔한 item (≤ 12 자) | +2 | 사람의 분류 결과 |
+
+`_pick_keep_id(entries)` 가 점수 기반 keep_suggestion 선정. 동점 시
+기존 정책 (oldest entry_date → entry_id 사전순) fallback.
+
+### 휴리스틱 강화 — `_pair_verdict`
+
+신규 분기 (CL #53092+):
+
+1. **한쪽 자동 + 한쪽 사람 + 금액/날짜/계정 일치** → very_likely
+   ("한쪽 자동 import + 한쪽 수기 입력 — 금액·날짜·계정 일치")
+2. **한쪽 자동 + 한쪽 사람 + 금액/날짜/가맹점 substring 유사** → very_likely
+   카드 명세서 "스타벅스코리아유한회사 강남점" vs 수기 "스타벅스" 케이스.
+3. **가맹점 substring 일치 + 금액/날짜/계정 일치** (raw item 달라도) →
+   very_likely. `merchant_similar` (NFKC + casefold + 공백/구두점 제거 +
+   substring) 재사용.
+
+기존 분기 (identical / swapped accounts / item 정규화 일치 등) 그대로
+보존 — 새 분기는 후순위로 보완.
+
+### UI — 출처 표시 추가
+
+`screens/duplicate_scan.py · DuplicateScanScreen` 의 DataTable 에 "출처"
+컬럼 추가:
+
+| 출처 | 표시 |
+|---|---|
+| 자동 import (TUI: marker) | `🤖 자동` (dim) |
+| 사람 입력 | `👤 사람` (cyan) |
+
+`keep_suggestion` 이 자동으로 사람 entry 를 keep 으로 잡으므로 사용자
+는 별도 조작 없이 *자동 entry 가 ✓ 삭제* / *사람 entry 가 ✗ 보존* 으로
+초기 mark. Space 로 override 가능.
+
+### 결과 — 예시 cluster
+
+cluster A (1×자동 + 1×사람):
+```
+삭제      출처      날짜       금액    왼쪽 오른쪽    적요/메모
+✗ 보존    👤 사람   20260418  2,600  식비  하나카드  간식 (지에스 25 S논현역점)
+✓ 삭제    🤖 자동   20260418  2,600  식비  하나카드  지에스 25 S논현역점 · TUI: …
+```
+
+cluster B (1×자동 + 1×자동, 같은 명세서 중복 import):
+```
+✗ 보존    🤖 자동   20260417  3,500  식비  하나카드  스벅 · TUI: card1.html
+✓ 삭제    🤖 자동   20260417  3,500  식비  하나카드  스벅 · TUI: card2.html
+```
+이 경우 점수 동률 → entry_date 동률 → entry_id 사전순 (예전 기본 정책
+유지).
+
+### 테스트 (+6, total 1118 → 1124)
+
+`core/tests/test_dupes.py`:
+- `test_is_tui_auto_imported_detects_memo_prefix` — TUI: / tui: / substring.
+- `test_keep_preference_score_human_over_auto` — 사람 > 자동.
+- `test_find_clusters_human_entry_preferred_for_keep` — 통합 검증.
+- `test_find_clusters_auto_vs_manual_different_item_still_matched` — 자동/사람
+  쌍이 item 달라도 cluster.
+- `test_pair_verdict_merchant_substring_match` — "스타벅스" vs "스타벅스
+  강남점" → very_likely.
+- `test_keep_preference_score_no_memo_neutral` — memo 없으면 중립.
+
 ## CL #53015 — 0.77.3 — delete_entry 공식 MCP 위임 (REST DELETE 의 section_id 회귀 2회 재발) (2026-05-19)
 
 배경 (사용자 보고 *2회 재발*, 2026-05-19): "또 다시 중복 제거에 실패했습니다."

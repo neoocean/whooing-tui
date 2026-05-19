@@ -363,3 +363,84 @@ def test_find_clusters_dedup_input_by_entry_id():
     same = _e(entry_id="a")
     clusters = find_duplicate_clusters([same, same])
     assert clusters == []
+
+
+# ----------------------------------------------------------------------
+# 사람 입력 vs 자동 import 추천 (CL #53067+).
+# ----------------------------------------------------------------------
+
+
+def test_is_tui_auto_imported_detects_memo_prefix():
+    from whooing_core.dupes import is_tui_auto_imported
+    assert is_tui_auto_imported({"memo": "TUI: /Users/me/file.html"}) is True
+    assert is_tui_auto_imported({"memo": "tui: lowercase"}) is True
+    assert is_tui_auto_imported({"memo": "before TUI: marker"}) is True
+    assert is_tui_auto_imported({"memo": "사용자 메모"}) is False
+    assert is_tui_auto_imported({"memo": ""}) is False
+    assert is_tui_auto_imported({}) is False
+
+
+def test_keep_preference_score_human_over_auto():
+    """사람 입력이 자동 import 보다 높은 score."""
+    from whooing_core.dupes import keep_preference_score
+    auto = {"memo": "TUI: /Users/me/Downloads/card.html", "item": "지에스 25 S논현역점"}
+    human = {"memo": "친구와 점심", "item": "간식 (스타벅스)"}
+    assert keep_preference_score(human) > keep_preference_score(auto)
+
+
+def test_find_clusters_human_entry_preferred_for_keep():
+    """cluster 에 사람 입력 + 자동 import 가 같이 있으면 사람 쪽이 keep."""
+    from whooing_core.dupes import find_duplicate_clusters
+    clusters = find_duplicate_clusters([
+        {"entry_id": "auto", "entry_date": "20260510", "money": 10000,
+         "l_account_id": "x20", "r_account_id": "x11",
+         "item": "지에스 25 S논현역점",
+         "memo": "TUI: eoocean/Downloads/hanacard.html"},
+        {"entry_id": "human", "entry_date": "20260510", "money": 10000,
+         "l_account_id": "x20", "r_account_id": "x11",
+         "item": "간식 (GS25)", "memo": "운동 후"},
+    ])
+    assert len(clusters) == 1
+    # 사람 입력 entry 가 keep_suggestion.
+    assert clusters[0].keep_suggestion == "human"
+
+
+def test_find_clusters_auto_vs_manual_different_item_still_matched():
+    """한쪽 자동 / 한쪽 사람 — item 다르더라도 금액·날짜·계정 일치면 cluster."""
+    from whooing_core.dupes import find_duplicate_clusters
+    clusters = find_duplicate_clusters([
+        {"entry_id": "auto", "entry_date": "20260510", "money": 5000,
+         "l_account_id": "x20", "r_account_id": "x11",
+         "item": "스타벅스코리아유한회사 강남점",
+         "memo": "TUI: card.html"},
+        {"entry_id": "human", "entry_date": "20260510", "money": 5000,
+         "l_account_id": "x20", "r_account_id": "x11",
+         "item": "커피", "memo": ""},
+    ])
+    assert len(clusters) == 1
+    assert clusters[0].verdict == "very_likely"
+    assert clusters[0].keep_suggestion == "human"
+
+
+def test_pair_verdict_merchant_substring_match():
+    """가맹점 substring 일치 + 금액·날짜·계정 일치 → very_likely (raw item 달라도)."""
+    from whooing_core.dupes import evaluate_duplicates
+    rep = evaluate_duplicates([
+        {"entry_id": "a", "entry_date": "20260510", "money": 5000,
+         "l_account_id": "x20", "r_account_id": "x11",
+         "item": "스타벅스"},
+        {"entry_id": "b", "entry_date": "20260510", "money": 5000,
+         "l_account_id": "x20", "r_account_id": "x11",
+         "item": "스타벅스 강남점"},
+    ])
+    # item 정규화 후도 다름 (substring 일치만). very_likely 분기에 잡혀야.
+    assert rep.verdict == "very_likely"
+
+
+def test_keep_preference_score_no_memo_neutral():
+    """memo 없으면 score 가 너무 한쪽으로 치우치지 않음."""
+    from whooing_core.dupes import keep_preference_score
+    a = {"item": "스타벅스"}
+    b = {"item": "스타벅스"}
+    # 둘 다 같은 score (둘 다 auto 아님 + 짧은 item).
+    assert keep_preference_score(a) == keep_preference_score(b)

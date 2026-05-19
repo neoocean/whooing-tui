@@ -486,12 +486,15 @@ class DuplicateScanScreen(ModalScreen[bool]):
         self._render_table()
 
     def _render_table(self) -> None:
+        from whooing_core.dupes import is_tui_auto_imported
         table = self.query_one("#scan-table", DataTable)
         table.clear(columns=True)
         # ✓ 컬럼 = 삭제 대상 표시 (DuplicateEvalScreen 은 "★ = keep" 으로
         # 반대 — 본 화면은 cluster 안 여러 건 삭제가 흔하므로 명시적 "삭제"
-        # 마크가 사용자 의도와 일치).
+        # 마크가 사용자 의도와 일치). CL #53092+: 입력 출처 (사람/자동) 도
+        # 새 컬럼으로 표시 — keep / delete 추천 근거 가시화.
         table.add_column("삭제", width=6)
+        table.add_column("출처", width=8)
         table.add_column("날짜", width=10)
         table.add_column("금액", width=14)
         table.add_column("왼쪽", width=14)
@@ -503,6 +506,11 @@ class DuplicateScanScreen(ModalScreen[bool]):
         for e in c.entries:
             eid = str(e.get("entry_id") or "")
             mark = "[red]✓ 삭제[/red]" if marks.get(eid) else "[green]✗ 보존[/green]"
+            origin = (
+                "[dim]🤖 자동[/dim]"
+                if is_tui_auto_imported(e)
+                else "[cyan]👤 사람[/cyan]"
+            )
             l_name = self._account_title(e.get("l_account_id") or "")
             r_name = self._account_title(e.get("r_account_id") or "")
             item = str(e.get("item") or "")
@@ -512,6 +520,7 @@ class DuplicateScanScreen(ModalScreen[bool]):
                 label = f"{item}  ·  {memo}" if item else memo
             table.add_row(
                 mark,
+                origin,
                 str(e.get("entry_date") or "")[:8],
                 _fmt_money(e.get("money")),
                 l_name,
