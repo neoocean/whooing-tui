@@ -41,7 +41,8 @@ from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical
 from textual.screen import ModalScreen
-from textual.widgets import Button, DataTable, Static
+from textual.widgets import Button, DataTable, OptionList, Static
+from textual.widgets.option_list import Option
 
 from whooing_core.dupes import (
     VERDICT_LABELS_KO,
@@ -67,6 +68,133 @@ def _fmt_money(v: Any) -> str:
 
 # delete callback signature: list of entry_ids → (deleted_count, failed_msgs).
 DeleteCallback = Callable[[list[str]], Awaitable[tuple[int, list[str]]]]
+
+
+class DupeScanRangeModal(ModalScreen[int | None]):
+    """중복 검사 범위 선택 popup (CL #53006+).
+
+    사용자 요청 (2026-05-19): "중복거래검사 범위를 1개월, 3개월 6개월
+    1년 등으로 조절해 시작할 수 있도록 팝업에서 설정하게 해주세요."
+
+    `dismiss` 값 = 검사할 일수 (int). 사용자가 Esc / 취소 누르면 None.
+    호출자 (worker) 가 days 를 받아 `days_ago_yyyymmdd(days)` 로 start_date
+    계산. 각 범위는 별도 sqlite cache slot 이므로 한 사용자가 여러 범위를
+    번갈아 검사해도 상호 간섭 없음 (CL #52989+ 영구화 정책).
+    """
+
+    # (한글 라벨, 일수). 정렬 = 작은 범위 → 큰 범위. 3년이 default.
+    OPTIONS: tuple[tuple[str, int], ...] = (
+        ("1 개월", 30),
+        ("3 개월", 90),
+        ("6 개월", 180),
+        ("1 년", 365),
+        ("3 년 (기본)", 365 * 3),
+        ("5 년", 365 * 5),
+    )
+    DEFAULT_DAYS: int = 365 * 3
+
+    DEFAULT_CSS = """
+    DupeScanRangeModal {
+        align: center middle;
+    }
+    #range-frame {
+        width: auto;
+        min-width: 40;
+        max-width: 60;
+        height: auto;
+        padding: 1 2;
+        border: thick $accent;
+        background: $surface;
+    }
+    #range-title {
+        height: 1;
+        content-align: center middle;
+        color: $accent;
+        text-style: bold;
+    }
+    #range-prompt {
+        height: 1;
+        margin-top: 1;
+        content-align: center middle;
+        color: $text-muted;
+    }
+    #range-list {
+        height: auto;
+        max-height: 10;
+        margin-top: 1;
+    }
+    #range-hint {
+        height: 1;
+        margin-top: 1;
+        content-align: center middle;
+        color: $text-muted;
+    }
+    """
+
+    BINDINGS = [
+        Binding("escape", "cancel", "취소", show=True),
+    ]
+
+    def __init__(self, default_days: int | None = None) -> None:
+        super().__init__()
+        # 호출자가 마지막 선택값을 기억해 다음 진입 시 그 항목이 highlight
+        # 되도록 — None 이면 클래스 DEFAULT_DAYS.
+        self._initial_days: int = default_days or self.DEFAULT_DAYS
+        # 테스트 친화.
+        self.last_choice: int | None = None
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="range-frame"):
+            yield Static(
+                "[bold]🔍 중복 거래 검사 — 범위 선택[/bold]",
+                id="range-title",
+            )
+            yield Static(
+                "어느 기간의 거래를 검사할까요?", id="range-prompt",
+            )
+            yield OptionList(
+                *[Option(label, id=str(days)) for label, days in self.OPTIONS],
+                id="range-list",
+            )
+            yield Static(
+                "↑/↓ 이동 · Enter: 시작 · Esc: 취소",
+                id="range-hint",
+            )
+
+    def on_mount(self) -> None:
+        try:
+            ol = self.query_one("#range-list", OptionList)
+            # default_days 와 일치하는 항목을 highlight. 일치 없으면 첫번째.
+            try:
+                idx = next(
+                    i for i, (_, d) in enumerate(self.OPTIONS)
+                    if d == self._initial_days
+                )
+            except StopIteration:
+                idx = next(
+                    i for i, (_, d) in enumerate(self.OPTIONS)
+                    if d == self.DEFAULT_DAYS
+                )
+            ol.highlighted = idx
+            ol.focus()
+        except Exception:  # pragma: no cover
+            pass
+
+    def on_option_list_option_selected(
+        self, event: OptionList.OptionSelected,
+    ) -> None:
+        if event.option.id is None:
+            return
+        try:
+            days = int(event.option.id)
+        except (TypeError, ValueError):  # pragma: no cover
+            self.dismiss(None)
+            return
+        self.last_choice = days
+        self.dismiss(days)
+
+    def action_cancel(self) -> None:
+        self.dismiss(None)
 
 
 class ScanProgressModal(ModalScreen[None]):

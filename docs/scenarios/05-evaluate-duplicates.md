@@ -92,8 +92,13 @@ UI 로 확장.
 ```
 EntriesScreen
   └─ 입력 메뉴 → "중복 거래 검사… (지난 3년)"
+      └─ DupeScanRangeModal (CL #53006+ — 범위 선택)
+          │   1개월 / 3개월 / 6개월 / 1년 / 3년 (기본) / 5년
+          │   default 는 이전 선택 (세션 단위 기억) 또는 3년.
+          │   Esc → wizard 취소.
+          ▼
       └─ ScanProgressModal (캐시 hit 면 잠깐만 표시)
-          │   "📊 거래 fetch 중… {start} ~ {end} (3년치)"
+          │   "📊 거래 fetch 중… {start} ~ {end} ({범위명})"
           │   "🔍 중복 cluster 검색 중… N 건 분석"
           │   "💾 결과 저장 중… M 개 cluster sqlite 영구화"
           ▼
@@ -184,9 +189,10 @@ worker 가 메뉴 dispatch 즉시 status + log.info 로 피드백
 ### 메뉴 중심 스캔 관련 코드
 
 - [`screens/dupe_scan_overview.py`](../../tui/src/whooing_tui/screens/dupe_scan_overview.py)
-  — `DupeScanOverviewScreen` (Stage 1).
+  — `DupeScanOverviewScreen` (Stage 1 결과 목록).
 - [`screens/duplicate_scan.py`](../../tui/src/whooing_tui/screens/duplicate_scan.py)
-  — `DuplicateScanScreen` (Stage 2) + `ScanProgressModal`.
+  — `DuplicateScanScreen` (Stage 2 cluster 1개씩) + `ScanProgressModal`
+  (진행 안내) + `DupeScanRangeModal` (CL #53006+ 범위 선택).
 - [`dupe_scan_repo.py`](../../tui/src/whooing_tui/dupe_scan_repo.py)
   — `DupeScanRepository` + `StoredCluster` dataclass.
 - [`core/dupes.py`](../../core/src/whooing_core/dupes.py)

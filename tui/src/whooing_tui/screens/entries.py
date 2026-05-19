@@ -412,6 +412,10 @@ class EntriesScreen(MenuBarMixin, Screen):
         self._selection_anchor: int | None = None
         # CL #51151+ (H11): tag → color (Rich/Textual 색명).
         self._tag_colors: dict[str, str] = {}
+        # CL #53006+: 중복 거래 검사의 마지막 선택 일수 — 다음 진입 시 같은
+        # 항목 highlight. 첫 진입은 None → range modal 이 클래스 기본값
+        # (3년) 사용.
+        self._last_dupe_scan_days: int | None = None
         # 태그 단위 column 네비 — `_active_col == _COL_INDEX["item"]` +
         # `_column_active=True` 인 상태에서 → 한 번 더 누르면 0 부터 그 row
         # 의 태그 개수 - 1 까지 sliding. None = 태그 모드 아님 (item 셀 자체
@@ -1049,20 +1053,26 @@ class EntriesScreen(MenuBarMixin, Screen):
 
     @work(exclusive=True, group="dupe_scan", name="scan_duplicates")
     async def _scan_duplicates_worker(self) -> None:
-        """3년 거래 fetch → cluster 추출 → 결과 sqlite 영구화 → 2단계 UI.
+        """범위 선택 → 거래 fetch → cluster 추출 → sqlite 영구화 → 2단계 UI.
 
-        CL #52989+: sqlite 캐싱 + 2단계 UI 도입. 흐름:
+        CL #53006+: 사용자가 1개월/3개월/6개월/1년/3년/5년 중 선택
+        (`DupeScanRangeModal`). 각 범위는 별도 sqlite cache slot 이라
+        번갈아 검사 가능. Esc 면 wizard 취소.
 
-          1) repo.has_open_scan(...) → 같은 (section, range) 에 pending 이
-             있으면 cache hit → fetch skip → 바로 overview push.
-          2) cache miss 면 종래 fetch + cluster 분석 → repo.save_scan → overview.
-          3) overview 의 F5 시 _refresh_callback 이 same worker logic 재호출
-             (repo.clear + fetch + save + 새 list 반환).
+        CL #52989+: sqlite 캐싱 + 2단계 UI. 흐름:
+
+          1) range modal push → 사용자가 일수 선택 (Esc = 취소).
+          2) repo.has_open_scan(...) → 같은 (section, range) 의 pending 이
+             있으면 cache hit → fetch skip → overview push.
+          3) cache miss 면 fetch + cluster 분석 → repo.save_scan → overview.
+          4) overview 의 F5 시 refresh_callback 이 worker 로직 재호출
+             (clear + fetch + save + 새 list 반환).
 
         CL #52977+: fetch / 분석 단계 동안 `ScanProgressModal` 진행 안내.
         """
         import asyncio
         from whooing_tui.dupe_scan_repo import DupeScanRepository
+        from whooing_tui.screens.duplicate_scan import DupeScanRangeModal
         from whooing_tui.screens.dupe_scan_overview import (
             DupeScanOverviewScreen,
         )
@@ -1075,9 +1085,19 @@ class EntriesScreen(MenuBarMixin, Screen):
             )
             return
 
+        # 1) 범위 선택 — Esc 면 wizard 취소.
+        days = await self.app.push_screen_wait(  # type: ignore[attr-defined]
+            DupeScanRangeModal(default_days=self._last_dupe_scan_days),
+        )
+        if days is None:
+            self.set_status("중복 검사 취소.")
+            return
+        # 다음 진입 시 같은 항목 highlight.
+        self._last_dupe_scan_days = int(days)
+
         repo = DupeScanRepository()
         end_date = today_yyyymmdd()
-        start_date = days_ago_yyyymmdd(365 * 3)
+        start_date = days_ago_yyyymmdd(int(days))
 
         # 1) 캐시 hit 검사.
         cached_clusters = repo.load_all_clusters(

@@ -5,6 +5,96 @@
 > **0.17.x 이전** (CL #51119 ~ #1) 항목은 분량 정리 차원에서
 > [`CHANGELOG-archive-0.17.md`](./CHANGELOG-archive-0.17.md) 로 분리 보존.
 
+## CL #53006 — 0.77.1 — 중복 검사 범위 선택 popup (DupeScanRangeModal) (2026-05-19)
+
+배경 (사용자 요청, 2026-05-19): "중복거래검사 범위를 1개월, 3개월 6개월
+1년 등으로 조절해 시작할 수 있도록 팝업에서 설정하게 해주세요."
+
+### 기존 한계 (CL #52989 0.77.0)
+
+`_scan_duplicates_worker` 가 3년 윈도우로 hardcode (`days_ago_yyyymmdd(365 * 3)`).
+범위 짧게 검사하고 싶을 때 (예: 최근 1개월만) 코드 수정 필요했음.
+
+### 신규 `DupeScanRangeModal`
+
+`screens/duplicate_scan.py`:
+
+```python
+class DupeScanRangeModal(ModalScreen[int | None]):
+    OPTIONS = (
+        ("1 개월", 30),
+        ("3 개월", 90),
+        ("6 개월", 180),
+        ("1 년", 365),
+        ("3 년 (기본)", 365 * 3),
+        ("5 년", 365 * 5),
+    )
+```
+
+레이아웃:
+```
+        ╭─ 🔍 중복 거래 검사 — 범위 선택 ─╮
+        │  어느 기간의 거래를 검사할까요?   │
+        │   1 개월                          │
+        │   3 개월                          │
+        │   6 개월                          │
+        │   1 년                            │
+        │ ▶ 3 년 (기본)                     │
+        │   5 년                            │
+        │  ↑/↓ 이동 · Enter: 시작 · Esc: 취소│
+        ╰────────────────────────────────────╯
+```
+
+- ModalScreen — 본 화면 위에 작은 popup.
+- OptionList — ↑/↓ + Enter 로 선택. `OPTIONS` 의 일수가 단조 증가.
+- `default_days` 파라미터 — 이전 선택을 highlight. EntriesScreen 의
+  `_last_dupe_scan_days` 가 세션 단위로 기억.
+- Esc / dismiss(None) → wizard 취소.
+
+### `_scan_duplicates_worker` 변경
+
+```python
+# 1) 범위 선택 — Esc 면 wizard 취소.
+days = await self.app.push_screen_wait(
+    DupeScanRangeModal(default_days=self._last_dupe_scan_days),
+)
+if days is None:
+    self.set_status("중복 검사 취소.")
+    return
+self._last_dupe_scan_days = int(days)
+
+end_date = today_yyyymmdd()
+start_date = days_ago_yyyymmdd(int(days))
+# 이하 기존 flow — 단 days 가 사용자 선택값.
+```
+
+각 범위는 `dupe_scan_clusters` 의 별도 cache slot 이라 (key = `section_id`
++ `scan_range_start` + `scan_range_end`) 사용자가 1개월 / 3년 등을 번갈아
+검사해도 상호 간섭 없음. CL #52989 의 영구화 정책과 자연스럽게 결합.
+
+### 결과 — 사용자 흐름
+
+```
+입력 메뉴 → 중복 거래 검사
+       ↓
+   DupeScanRangeModal   ← 첫 화면 (범위 선택)
+       │
+       ├ Enter (예: 6 개월)  → ScanProgressModal → overview ...
+       └ Esc                 → "중복 검사 취소." status 만, 그대로 복귀
+```
+
+### 테스트 (+5, total 1109 → 1114)
+
+- `test_range_modal_appears_first` — 첫 화면 검증.
+- `test_range_modal_esc_cancels_scan` — Esc → fetch 안 함.
+- `test_range_modal_picks_one_month_uses_30_days` — 1개월 선택 시
+  `list_entries` 의 `start_date` = today-30일.
+- `test_range_modal_remembers_last_choice` — 두번째 진입 시 이전 일수가
+  default.
+- `test_range_modal_options_are_sorted` — OPTIONS 단조 증가.
+
+기존 19개 테스트도 `_accept_range_modal(app, days=…)` helper 통해 패치.
+
 ## CL #52989 — 0.77.0 — 중복 스캔 결과 영구화 + 2단계 UI (overview → cleanup) (2026-05-19)
 
 배경 (사용자 요청, 2026-05-19):

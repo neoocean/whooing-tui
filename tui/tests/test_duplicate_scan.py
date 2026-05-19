@@ -14,6 +14,7 @@ import pytest
 from whooing_tui.app import WhooingTuiApp
 from whooing_tui.models import ToolError
 from whooing_tui.screens.duplicate_scan import (
+    DupeScanRangeModal,
     DuplicateScanScreen,
     ScanProgressModal,
 )
@@ -103,13 +104,25 @@ async def _open_entries(app) -> EntriesScreen:
     return app.screen  # type: ignore[return-value]
 
 
-async def _drive_to_cluster_screen(app) -> DuplicateScanScreen:
-    """CL #52989+: action_scan_duplicates → overview → DuplicateScanScreen.
+async def _accept_range_modal(app, days: int = 365 * 3) -> None:
+    """CL #53006+: 새 첫 화면은 DupeScanRangeModal. 사용자가 일수 선택해야
+    worker 가 진행. 본 helper 가 자동으로 default (3년) 선택해 통과시킴.
+    """
+    await _wait_for(
+        lambda: isinstance(app.screen, DupeScanRangeModal),
+        timeout=3.0,
+    )
+    app.screen.dismiss(days)
 
-    overview 에 도달하면 action_start_cleanup 으로 cluster 화면 진입.
+
+async def _drive_to_cluster_screen(app, days: int = 365 * 3) -> DuplicateScanScreen:
+    """CL #52989+: action_scan_duplicates → range → overview → cluster.
+
+    CL #53006+: range modal 도 통과.
     """
     es = app.screen
     es.action_scan_duplicates()
+    await _accept_range_modal(app, days=days)
     await _wait_for(
         lambda: isinstance(app.screen, DupeScanOverviewScreen),
         timeout=5.0,
@@ -182,7 +195,13 @@ async def test_menu_popup_enter_press_dispatches_scan_duplicates():
         ol.highlighted = idx
         await pilot.pause()
         await pilot.press("enter")
-        # CL #52989+: 첫 화면은 DupeScanOverviewScreen.
+        # CL #53006+: 첫 화면은 DupeScanRangeModal (범위 선택).
+        ok = await _wait_for(
+            lambda: isinstance(app.screen, DupeScanRangeModal),
+            timeout=5.0,
+        )
+        assert ok
+        await _accept_range_modal(app)
         ok = await _wait_for(
             lambda: isinstance(app.screen, DupeScanOverviewScreen),
             timeout=5.0,
@@ -233,7 +252,13 @@ async def test_menu_popup_dispatches_scan_duplicates():
         assert popup.spec.name == "입력"
         # "중복 거래 검사" 선택 = popup 이 action_id 로 dismiss.
         popup.dismiss("scan_duplicates")
-        # CL #52989+: worker → fetch → save → DupeScanOverviewScreen push.
+        # CL #53006+: worker → range modal → fetch → DupeScanOverviewScreen.
+        ok = await _wait_for(
+            lambda: isinstance(app.screen, DupeScanRangeModal),
+            timeout=5.0,
+        )
+        assert ok
+        await _accept_range_modal(app)
         ok = await _wait_for(
             lambda: isinstance(app.screen, DupeScanOverviewScreen),
             timeout=5.0,
@@ -256,6 +281,7 @@ async def test_scan_shows_progress_modal_during_fetch():
         es = app.screen
         assert isinstance(es, EntriesScreen)
         es.action_scan_duplicates()
+        await _accept_range_modal(app)
         ok = await _wait_for(
             lambda: isinstance(
                 app.screen,
@@ -301,12 +327,111 @@ async def test_scan_progress_modal_dismissed_when_no_clusters():
         es = app.screen
         assert isinstance(es, EntriesScreen)
         es.action_scan_duplicates()
+        await _accept_range_modal(app)
         await _wait_for(
             lambda: "중복 후보 없음" in es.last_status, timeout=3.0,
         )
         assert not isinstance(app.screen, ScanProgressModal)
         assert not isinstance(app.screen, DuplicateScanScreen)
         assert not isinstance(app.screen, DupeScanOverviewScreen)
+
+
+@pytest.mark.asyncio
+async def test_range_modal_appears_first():
+    """CL #53006+: action_scan_duplicates 의 첫 화면은 DupeScanRangeModal."""
+    fake = FakeClient()
+    app = WhooingTuiApp(client=fake)  # type: ignore[arg-type]
+    async with app.run_test() as pilot:
+        await _open_entries(app)
+        es = app.screen
+        es.action_scan_duplicates()
+        ok = await _wait_for(
+            lambda: isinstance(app.screen, DupeScanRangeModal),
+            timeout=3.0,
+        )
+        assert ok
+
+
+@pytest.mark.asyncio
+async def test_range_modal_esc_cancels_scan():
+    """Esc 면 wizard 취소 — fetch 호출 X, overview/cluster 화면 안 뜸."""
+    fake = FakeClient()
+    app = WhooingTuiApp(client=fake)  # type: ignore[arg-type]
+    async with app.run_test() as pilot:
+        await _open_entries(app)
+        es = app.screen
+        before = len(fake.list_entries_calls)
+        es.action_scan_duplicates()
+        await _wait_for(
+            lambda: isinstance(app.screen, DupeScanRangeModal),
+            timeout=3.0,
+        )
+        # 취소.
+        app.screen.dismiss(None)
+        await _wait_for(
+            lambda: "중복 검사 취소" in es.last_status, timeout=2.0,
+        )
+        # 취소 후엔 추가 fetch 가 없어야 (entries init 호출 외).
+        assert len(fake.list_entries_calls) == before
+        assert not isinstance(app.screen, DupeScanOverviewScreen)
+
+
+@pytest.mark.asyncio
+async def test_range_modal_picks_one_month_uses_30_days():
+    """1개월 선택 시 list_entries 의 start_date 가 today-30일."""
+    from whooing_tui.dates import days_ago_yyyymmdd, today_yyyymmdd
+    fake = FakeClient()
+    app = WhooingTuiApp(client=fake)  # type: ignore[arg-type]
+    async with app.run_test() as pilot:
+        await _open_entries(app)
+        es = app.screen
+        es.action_scan_duplicates()
+        await _accept_range_modal(app, days=30)
+        await _wait_for(
+            lambda: isinstance(app.screen, DupeScanOverviewScreen),
+            timeout=5.0,
+        )
+        assert fake.list_entries_calls
+        section_id, start, end = fake.list_entries_calls[-1]
+        # 30일 = 1 개월.
+        assert start == days_ago_yyyymmdd(30)
+        assert end == today_yyyymmdd()
+
+
+@pytest.mark.asyncio
+async def test_range_modal_remembers_last_choice():
+    """두번째 진입 시 default_days 가 이전 선택 (다른 항목 highlight)."""
+    fake = FakeClient(entries=[
+        # 중복 없도록 — 첫 스캔 후 status 만 출력하고 overview 안 뜨게.
+        {"entry_id": "x", "entry_date": "20260510", "money": 1000,
+         "l_account_id": "x20", "r_account_id": "x11", "item": "A"},
+    ])
+    app = WhooingTuiApp(client=fake)  # type: ignore[arg-type]
+    async with app.run_test() as pilot:
+        await _open_entries(app)
+        es = app.screen
+        # 1차: 6개월 선택.
+        es.action_scan_duplicates()
+        await _accept_range_modal(app, days=180)
+        await _wait_for(
+            lambda: "중복 후보 없음" in es.last_status, timeout=3.0,
+        )
+        assert es._last_dupe_scan_days == 180
+        # 2차: range modal 의 _initial_days 가 180.
+        es.action_scan_duplicates()
+        await _wait_for(
+            lambda: isinstance(app.screen, DupeScanRangeModal),
+            timeout=2.0,
+        )
+        assert app.screen._initial_days == 180
+        app.screen.dismiss(None)
+
+
+def test_range_modal_options_are_sorted():
+    """OPTIONS 의 일수가 단조증가."""
+    days = [d for _, d in DupeScanRangeModal.OPTIONS]
+    assert days == sorted(days)
+    assert days[0] == 30 and days[-1] == 365 * 5
 
 
 @pytest.mark.asyncio
@@ -319,6 +444,7 @@ async def test_scan_finds_two_clusters_and_opens_overview():
         es = app.screen
         assert isinstance(es, EntriesScreen)
         es.action_scan_duplicates()
+        await _accept_range_modal(app)
         await _wait_for(
             lambda: isinstance(app.screen, DupeScanOverviewScreen),
             timeout=3.0,
@@ -344,6 +470,7 @@ async def test_scan_caches_clusters_in_sqlite_for_reuse():
         await _open_entries(app)
         es = app.screen
         es.action_scan_duplicates()
+        await _accept_range_modal(app)
         await _wait_for(
             lambda: isinstance(app.screen, DupeScanOverviewScreen),
             timeout=5.0,
@@ -363,6 +490,7 @@ async def test_scan_caches_clusters_in_sqlite_for_reuse():
         app.screen.action_close()
         await pilot.pause()
         es.action_scan_duplicates()
+        await _accept_range_modal(app)
         await _wait_for(
             lambda: isinstance(app.screen, DupeScanOverviewScreen),
             timeout=5.0,
@@ -386,6 +514,7 @@ async def test_scan_refresh_clears_cache_and_refetches():
         await _open_entries(app)
         es = app.screen
         es.action_scan_duplicates()
+        await _accept_range_modal(app)
         await _wait_for(
             lambda: isinstance(app.screen, DupeScanOverviewScreen),
             timeout=5.0,
@@ -470,6 +599,7 @@ async def test_scan_no_duplicates_status_message():
         es = app.screen
         assert isinstance(es, EntriesScreen)
         es.action_scan_duplicates()
+        await _accept_range_modal(app)
         # worker 가 status 까지 진행하도록 대기.
         await _wait_for(
             lambda: "중복 후보 없음" in es.last_status, timeout=3.0,
