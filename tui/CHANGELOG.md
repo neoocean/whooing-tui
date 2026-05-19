@@ -5,6 +5,76 @@
 > **0.17.x 이전** (CL #51119 ~ #1) 항목은 분량 정리 차원에서
 > [`CHANGELOG-archive-0.17.md`](./CHANGELOG-archive-0.17.md) 로 분리 보존.
 
+## CL #52979 — 0.76.3 — DELETE 도 form-body 필수 + 저장소 trade-off 문서 (2026-05-19)
+
+### 1. delete_* 가 "`section_id` parameter is required." 로 실패 (사용자 보고)
+
+중복 일괄 삭제 화면에서 Enter 누르면 "0건 삭제, 3건 실패 — 첫 실패:
+{eid} `section_id` parameter is required." 로 모두 거절. CL #52928
+(0.73.2) 이 POST/PUT 에 form-encoded body 를 추가한 것과 같은 정책을
+DELETE 에도 적용 누락이었음.
+
+#### 원인
+
+`delete_entry` / `delete_account` / `delete_monthly` / `delete_budget`
+이 section_id 를 query param 으로만 send. 후잉 server 는 DELETE 의
+form-urlencoded body 에서도 section_id 를 *요구* 한다 — query 만으로는
+파싱 안 함.
+
+#### 수정 (`client.py`)
+
+`_delete` 시그니처 확장:
+```python
+async def _delete(
+    self, path, params=None, *, form_data=None,
+) -> Any:
+    return await self._request(
+        "DELETE", path, params=params, form_data=form_data,
+    )
+```
+
+모든 `delete_*` 가 `form_data={...}` 동봉 (query 도 belt-and-suspenders
+로 유지):
+
+```python
+async def delete_entry(self, *, section_id, entry_id):
+    return await self._delete(
+        self._entry_path(entry_id),
+        params={"section_id": section_id},
+        form_data={"section_id": section_id},  # ← 신규
+    )
+```
+
+#### 테스트 +1
+
+`test_delete_entry_sends_section_id_in_form_body` — `respx` 로
+Content-Type 이 `application/x-www-form-urlencoded` 이고 body 에
+`section_id=s7` 포함됨 검증.
+
+총 테스트 1093 → 1094 통과.
+
+### 2. 저장소 시나리오 문서 — sqlite vs plaintext
+
+`docs/scenarios/10-storage-sqlite-vs-plaintext.md` 신규.
+
+사용자 검토 요청: 현재 sqlite (annotations / hashtags / attachments /
+import_log / entries_cache) 를 markdown 또는 JSON plaintext 로 옮기면
+어떤 장단점?
+
+문서 내용:
+- §1 sqlite 가 *무엇을* 보관하는지 (5 테이블 + 첨부 본체).
+- §2 후보 포맷 비교 (JSON line, single JSON, TOML, markdown per-entry, CSV).
+- §3 기능별 비교표 — latency, transaction, indexing, migration, diff
+  가독성, 손상 복구, 외부 도구 통합.
+- §4 plaintext 장점 — 가독성, diff, 손상 격리, LLM/grep, P4 submit 단위.
+- §5 plaintext 단점 — race, index 부재 → 검색 성능, migration cost,
+  1:N 관계 부자연스러움, 파일 수 폭증.
+- §6 하이브리드 안 — annotations/hashtags 만 md 분리.
+- §7 **권고: 현재 sqlite 유지** + 재검토 trigger 정리.
+- §8 결정 + 재검토 시점.
+
+`docs/README.md` 의 시나리오 index 에 10번 항목 추가.
+
 ## CL #52977 — 0.76.2 — 중복 검사 진행 popup (ScanProgressModal) (2026-05-19)
 
 배경 (사용자 요청, 2026-05-19): "중복 검사중일 때 화면을 작은 팝업으로

@@ -173,8 +173,27 @@ class WhooingClient:
     async def _put(self, path: str, json_body: dict[str, Any]) -> Any:
         return await self._request("PUT", path, json_body=json_body)
 
-    async def _delete(self, path: str, params: dict[str, Any] | None = None) -> Any:
-        return await self._request("DELETE", path, params=params)
+    async def _delete(
+        self,
+        path: str,
+        params: dict[str, Any] | None = None,
+        *,
+        form_data: dict[str, Any] | None = None,
+    ) -> Any:
+        """DELETE 헬퍼 — query params + (CL #52979+) form-urlencoded body.
+
+        후잉 server 는 POST/PUT 에서 JSON body 를 안 읽고 form-encoded 만
+        인식 (CL #52918, 52928 의 누적 발견). DELETE 도 같은 정책으로
+        section_id 를 body 에서 *읽으려* 시도 — query 만 보내면
+        "`section_id` parameter is required." 로 거절 (사용자 보고
+        2026-05-19, 중복 일괄 삭제 시).
+
+        호출자는 query param 만 보내고 싶을 때 form_data=None, 양쪽
+        send 가 필요하면 form_data=body 전달. `_request` 가 그대로 위임.
+        """
+        return await self._request(
+            "DELETE", path, params=params, form_data=form_data,
+        )
 
     def _handle(self, r: httpx.Response) -> Any:
         """공식 응답 포맷을 파싱해 results 만 추출 + 에러 매핑."""
@@ -428,10 +447,18 @@ class WhooingClient:
         return _coerce_dict(results)
 
     async def delete_entry(self, *, section_id: str, entry_id: str) -> dict[str, Any]:
-        """거래 영구 삭제. 후잉은 soft-delete 가 아니므로 복구 불가."""
+        """거래 영구 삭제. 후잉은 soft-delete 가 아니므로 복구 불가.
+
+        CL #52979+ (사용자 보고 2026-05-19): 중복 일괄 삭제 시 "`section_id`
+        parameter is required." 로 거절. 후잉 server 가 DELETE 의 query
+        param 만으로는 section_id 를 인식 못함 — POST/PUT (CL #52918, 52928)
+        과 동일하게 form-urlencoded body 도 필수. query 와 body 양쪽 send
+        (belt-and-suspenders).
+        """
         results = await self._delete(
             self._entry_path(entry_id),
             params={"section_id": section_id},
+            form_data={"section_id": section_id},
         )
         return _coerce_dict(results)
 
@@ -522,9 +549,11 @@ class WhooingClient:
         """계정과목 강제 삭제. 거래 내역이 있으면 거부될 수 있음 — 호출 전
         `check_account_deletable` 로 확인하는 것을 권장.
         """
+        # CL #52979+: DELETE 도 form-body 동봉 (delete_entry 와 동일 정책).
         results = await self._delete(
             self._account_path(account_id),
             params={"section_id": section_id, "account": account},
+            form_data={"section_id": section_id, "account": account},
         )
         return _coerce_dict(results)
 
@@ -878,10 +907,14 @@ class WhooingClient:
     async def delete_monthly(
         self, *, section_id: str, monthly_id: str,
     ) -> dict[str, Any]:
-        """매월 입력 거래 삭제. CL #51152+."""
+        """매월 입력 거래 삭제. CL #51152+.
+
+        CL #52979+: DELETE 도 form-body 동봉 (delete_entry 와 동일 정책).
+        """
         results = await self._delete(
             self._monthly_path(monthly_id),
             params={"section_id": section_id},
+            form_data={"section_id": section_id},
         )
         return _coerce_dict(results)
 
@@ -922,10 +955,15 @@ class WhooingClient:
         account: str,
         account_id: str,
     ) -> dict[str, Any]:
-        """예산 1건 제거. CL #51153+."""
+        """예산 1건 제거. CL #51153+.
+
+        CL #52979+: DELETE 도 form-body 동봉 (delete_entry 와 동일 정책).
+        """
+        body = {"section_id": section_id, "account_id": account_id}
         results = await self._delete(
             f"/budget/{account}.json",
-            params={"section_id": section_id, "account_id": account_id},
+            params=body,
+            form_data=body,
         )
         return _coerce_dict(results)
 

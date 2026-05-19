@@ -125,6 +125,30 @@ async def test_delete_entry_uses_delete_method_with_section_query():
 
 
 @respx.mock
+async def test_delete_entry_sends_section_id_in_form_body():
+    """CL #52979+: DELETE 도 form-body 에 section_id 동봉.
+
+    사용자 보고 (2026-05-19, 중복 일괄 삭제 0건/3건 실패): query 만으로는
+    후잉 server 가 "section_id parameter is required" 로 거절. POST/PUT
+    (CL #52918, 52928) 와 동일하게 form-urlencoded body 에도 동봉해야.
+    """
+    route = respx.delete("https://whooing.com/api/entries/e999.json").mock(
+        return_value=Response(200, json={"code": 200, "results": {}})
+    )
+    c = _client()
+    await c.delete_entry(section_id="s7", entry_id="e999")
+    assert route.call_count == 1
+    req = route.calls[0].request
+    # Query param.
+    assert b"section_id=s7" in req.url.query
+    # form-urlencoded body.
+    assert req.headers.get("Content-Type", "").startswith(
+        "application/x-www-form-urlencoded"
+    )
+    assert b"section_id=s7" in req.content
+
+
+@respx.mock
 async def test_create_entry_400_carries_user_input():
     respx.post("https://whooing.com/api/entries.json").mock(
         return_value=Response(

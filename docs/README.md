@@ -23,6 +23,7 @@
 | 07 | [필터 + 검색](scenarios/07-filter-and-search.md) | `←/→` + `Enter` / `/` | `filters.py`, `screens/entries.py` |
 | 08 | [보고서 + 통계](scenarios/08-reports.md) | `t` | `screens/reports.py`, `official_mcp.py` |
 | 09 | [시작·종료 시 P4 동기화](scenarios/09-startup-shutdown.md) | (자동) / `q` | `app.py` (`_StartupCheckScreen`/`_ShutdownModal`), `p4_sync.py` |
+| 10 | [저장소: SQLite vs plaintext 검토](scenarios/10-storage-sqlite-vs-plaintext.md) | (설계 문서) | `core/db.py` |
 
 ## 부속 문서
 
