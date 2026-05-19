@@ -5,6 +5,58 @@
 > **0.17.x 이전** (CL #51119 ~ #1) 항목은 분량 정리 차원에서
 > [`CHANGELOG-archive-0.17.md`](./CHANGELOG-archive-0.17.md) 로 분리 보존.
 
+## CL #52859 — 0.71.2 — 필터 5년 확장 + AccountEditDialog int crash 수정 (2026-05-19)
+
+본 CL 은 사용자 보고 두 건을 동시 처리.
+
+### 1. 필터 점진 확장 한계 — 2년 → 5년
+
+사용자 보고: "칼럼을 선택해 기록을 필터링할 때 2024년 이전 정보는 가져
+오지 않는다." 원인: `_expand_filter_in_past` worker 의 default step
+boundary 가 `3,6,12,24` (개월) — 마지막 24 개월이 한계라 오늘 (2026-05) -
+24 개월 = 2024-05 이하의 매칭은 fetch X.
+
+수정:
+- `constants.py` 에 `FILTER_EXPAND_STEP_MONTHS = (3,6,12,24,36,48,60)` —
+  60 개월 (≈ 5 년) 까지. `MAX_WINDOW_DAYS` 와 일관성.
+- `screens/entries.py` 가 위 상수를 default 로 사용. env override
+  (`WHOOING_FILTER_EXPAND_MONTHS`) 정책 동일.
+
+### 2. AccountEditDialog crash — `value=int`
+
+사용자 보고: `python3 whooing.py` 후 계정과목 수정 dialog 진입 시
+`AttributeError: 'int' object has no attribute 'translate'` traceback.
+원인: 후잉 API 가 `open_date` / `close_date` 등을 *int* 로 돌려주는
+경우가 있는데 (예: 20161216), Textual Input `value=int` 는 내부에서
+`rich.text.Text(value)` → `strip_control_codes` → `value.translate(...)` 가
+str method 라 폭주.
+
+수정 (방어적 `str()` coercion):
+- `screens/accounts.py` 의 `AccountEditDialog.compose`: title / open_date /
+  close_date / memo Input 의 value 를 `str(...)` 으로 wrap.
+- `screens/edit_entry.py` 의 `EntryEditDialog.compose`: entry_date / item /
+  memo 도 동일하게 str wrap. 후잉 응답에서 비-str 가능성을 같은 패턴으로
+  방어.
+
+### 회귀 테스트 (+8)
+
+- `tui/tests/test_constants.py` (+7) — window / hangul / filter expand
+  단조 증가 / 5 년 도달 / MAX_WINDOW_DAYS 일관성 / p4 timeout / compact
+  threshold descending sanity. 24 개월 default 로 회귀하면 즉시 fail.
+- `tui/tests/test_accounts_screen.py::test_account_edit_dialog_composes_
+  with_int_open_date` (+1) — int 타입 open_date / close_date / memo 가
+  들어와도 dialog 가 compose 완료. f-open Input.value 가 str
+  "20161216" 인지 검증.
+
+총 1007 → 1015 (+8, 0 regression).
+
+### 영향
+
+- 5 년 윈도우 도달로 종전에 안 보이던 매칭이 점진적으로 화면에 추가됨.
+  footer status 가 "과거 36개월 확인 → 48개월 → 60개월" 식으로 단계 보고.
+- 계정과목 수정 dialog 가 *모든* 후잉 응답 shape 에서 정상 진입.
+- `str()` wrap 은 fallback 후이라 None / 빈 문자 케이스는 의미 변화 X.
+
 ## CL #52853 — 0.71.1 — 읽기 전용 세션은 종료 시 submit 생략 (2026-05-18)
 
 배경 (사용자 질문): "만약 앱을 실행한 다음 아무것도 편집하지 않았다면

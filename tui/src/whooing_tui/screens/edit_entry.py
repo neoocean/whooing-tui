@@ -383,7 +383,9 @@ class EntryEditDialog(ModalScreen[EntryDraft | None]):
     def compose(self) -> ComposeResult:
         title = "거래 수정" if self._is_edit else "거래 추가"
         # 초기 date 값: existing 이 8자리 YYYYMMDD 면 그대로, 신규면 today.
-        date_init = self._existing.get("entry_date") or today_yyyymmdd()
+        # CL #52859+: 후잉 응답이 entry_date 를 int 로 돌려주는 경우 방어.
+        # `str()` wrap — None/빈문자 fallback 후라 의미 변화 없음.
+        date_init = str(self._existing.get("entry_date") or today_yyyymmdd())
         money_init = str(self._existing.get("money") or "")
         # CL #51115+: tags 는 사용자 입장에서 항상 `#` 시작으로 보이도록.
         # 내부 저장은 bare (#X 없이) — `parse_hashtags_input` 가 분리/스트립.
@@ -418,13 +420,15 @@ class EntryEditDialog(ModalScreen[EntryDraft | None]):
                     button_id="f-right",
                 )
                 yield Label("item")
+                # CL #52859+: 후잉 응답이 item/memo 를 int 등 비-str 로
+                # 돌려주는 경우 방어 — Textual Input.value 는 str 만 허용.
                 yield Input(
-                    value=self._existing.get("item") or "",
+                    value=str(self._existing.get("item") or ""),
                     placeholder="적요 (예: 스타벅스)", id="f-item",
                 )
                 yield Label("memo")
                 yield Input(
-                    value=self._existing.get("memo") or "",
+                    value=str(self._existing.get("memo") or ""),
                     placeholder="(후잉 + 로컬 db 양쪽 저장)", id="f-memo",
                 )
                 yield Label("tags")

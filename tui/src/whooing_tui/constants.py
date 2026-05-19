@@ -34,6 +34,18 @@ MAX_WINDOW_DAYS: int = 365 * 5
 # 윈도우 최소 크기.
 MIN_WINDOW_DAYS: int = 1
 
+# CL #52858+: 필터 점진 확장 worker (`_expand_filter_in_past`) 의 step 경계
+# 후보 — 단위는 *개월*. 각 step 은 직전 step 의 start 부터 더 과거로 끝
+# 점을 미는 방식. 마지막 값이 가장 과거.
+#
+# 종전 default `(3, 6, 12, 24)` 는 ~24 개월 (≈ 2 년) 까지만 도달 — 사용자
+# 보고: "2024년 이전 정보가 안 나옴". 오늘이 2026-05 일 때 24 개월 = 2024-05.
+# 본 default 는 MAX_WINDOW_DAYS (5 년) 와 일관되게 60 개월까지 확장.
+# 기하급수적 증가로 초기 step 이 빨라 사용자가 결과를 빨리 본다.
+#
+# `WHOOING_FILTER_EXPAND_MONTHS` env 로 override 가능 ("3,6,12,24" 등 콤마).
+FILTER_EXPAND_STEP_MONTHS: tuple[int, ...] = (3, 6, 12, 24, 36, 48, 60)
+
 
 # ---- 한글 (Hangul Syllables 블록) -------------------------------------
 
@@ -85,6 +97,7 @@ __all__ = [
     "WHOOING_SERVER_PAGE_CAP",
     "DEFAULT_WINDOW_DAYS", "WINDOW_STEP_DAYS",
     "MAX_WINDOW_DAYS", "MIN_WINDOW_DAYS",
+    "FILTER_EXPAND_STEP_MONTHS",
     "HANGUL_SYLLABLE_FIRST", "HANGUL_SYLLABLE_LAST",
     "ABBREV_KOREAN_CHARS",
     "COMPACT_THRESHOLDS",

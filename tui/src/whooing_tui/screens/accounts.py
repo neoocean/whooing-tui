@@ -164,7 +164,7 @@ class AccountEditDialog(ModalScreen[AccountDraft | None]):
             with Grid(id="acc-grid"):
                 yield Label("title")
                 yield Input(
-                    value=self._existing.get("title") or "",
+                    value=str(self._existing.get("title") or ""),
                     placeholder="항목 이름 (최대 30자)",
                     id="f-title", max_length=30,
                 )
@@ -173,14 +173,18 @@ class AccountEditDialog(ModalScreen[AccountDraft | None]):
                 yield Label("type")
                 yield Select(type_options, value=type_initial, id="f-type", allow_blank=False)
                 yield Label("open_date")
+                # CL #52859+: 후잉 응답이 open_date / close_date 를 *int* 로
+                # 돌려주는 경우 있음 (계정에 따라 sparse). Textual Input 은
+                # str value 만 받아 AttributeError ('int' has no attribute
+                # 'translate'). 명시 str 강제 — None / 빈문자 fallback 후.
                 yield Input(
-                    value=self._existing.get("open_date") or today_yyyymmdd(),
+                    value=str(self._existing.get("open_date") or today_yyyymmdd()),
                     placeholder="YYYYMMDD",
                     id="f-open", max_length=8,
                 )
                 yield Label("close_date")
                 yield Input(
-                    value=self._existing.get("close_date") or _CLOSE_DATE_INDEFINITE,
+                    value=str(self._existing.get("close_date") or _CLOSE_DATE_INDEFINITE),
                     placeholder="YYYYMMDD (29991231 = 무기한)",
                     id="f-close", max_length=8,
                 )
@@ -188,7 +192,7 @@ class AccountEditDialog(ModalScreen[AccountDraft | None]):
                 yield Select(cat_options, value=cat_initial, id="f-category", allow_blank=False)
                 yield Label("memo")
                 yield Input(
-                    value=self._existing.get("memo") or "",
+                    value=str(self._existing.get("memo") or ""),
                     placeholder="(선택, 최대 80자)",
                     id="f-memo", max_length=80,
                 )

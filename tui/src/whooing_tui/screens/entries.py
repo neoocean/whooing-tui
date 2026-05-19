@@ -1940,12 +1940,19 @@ class EntriesScreen(MenuBarMixin, Screen):
         if not sid:
             return
 
-        # step boundary 후보 — 환경 변수로 override 가능.
-        steps_env = os.getenv("WHOOING_FILTER_EXPAND_MONTHS", "3,6,12,24")
-        try:
-            steps = [int(x) for x in steps_env.split(",") if x.strip()]
-        except ValueError:
-            steps = [3, 6, 12, 24]
+        # step boundary 후보 — `WHOOING_FILTER_EXPAND_MONTHS` env 로 override
+        # 가능 ("3,6,12,24" 등 콤마). 미지정 시 constants 의 default
+        # (CL #52858+: 60 개월까지 — 종전 24 개월에서 확장. 사용자 보고:
+        # "2024년 이전 정보가 안 나옴" → 오늘 - 24 개월 도달 한계).
+        steps_default = list(constants.FILTER_EXPAND_STEP_MONTHS)
+        steps_env = os.getenv("WHOOING_FILTER_EXPAND_MONTHS")
+        if steps_env:
+            try:
+                steps = [int(x) for x in steps_env.split(",") if x.strip()]
+            except ValueError:
+                steps = steps_default
+        else:
+            steps = steps_default
 
         # 시작점 — _all_entries 의 가장 오래된 날짜.
         window_oldest = self._window_oldest_yyyymmdd() or today_yyyymmdd()

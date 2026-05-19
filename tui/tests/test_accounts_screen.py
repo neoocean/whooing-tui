@@ -441,3 +441,49 @@ async def test_back_returns_to_entries():
             lambda: isinstance(app.screen, EntriesScreen), timeout=2.0,
         )
         assert ok
+
+
+# ---- CL #52859+ : Input value 가 int 인 경우 crash 회귀 가드 -----------
+
+
+def test_account_edit_dialog_composes_with_int_open_date():
+    """후잉이 open_date / close_date / memo 를 int 로 돌려주는 경우 — Textual
+    Input 의 value=int 는 AttributeError ('int' has no attribute 'translate').
+    CL #52859 의 str() coercion 이 살아있어야 dialog 가 compose 단계에서
+    crash 하지 않음.
+
+    본 테스트는 dialog 를 *실제로* mount 해서 compose 가 통과하는지 검증.
+    """
+    import asyncio
+    from textual.app import App
+    from whooing_tui.screens.accounts import AccountEditDialog
+
+    async def _main():
+        class _MiniApp(App):
+            def on_mount(self):
+                self.push_screen(
+                    AccountEditDialog(
+                        existing={
+                            "account_id": "x123",
+                            "title": 123,             # int (보호 대상)
+                            "open_date": 20161216,    # int (사용자 보고 trigger)
+                            "close_date": 29991231,   # int
+                            "memo": 0,                # int
+                            "category": "client",
+                        },
+                        existing_type_key="assets",
+                    ),
+                )
+
+        app = _MiniApp()
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            # crash 없이 modal 이 보이면 성공.
+            assert isinstance(app.screen, AccountEditDialog)
+            # value attr 가 str 인지 확인.
+            from textual.widgets import Input
+            open_input = app.screen.query_one("#f-open", Input)
+            assert isinstance(open_input.value, str)
+            assert open_input.value == "20161216"
+
+    asyncio.run(_main())
