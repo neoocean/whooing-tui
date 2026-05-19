@@ -107,21 +107,27 @@ class WhooingClient:
         *,
         params: dict[str, Any] | None = None,
         json_body: dict[str, Any] | None = None,
+        form_data: dict[str, Any] | None = None,
     ) -> Any:
         """공통 HTTP 호출 — throttle + 429 backoff 재시도 + 응답 매핑.
 
-        method: GET / POST / PUT / DELETE 중 하나. 본문 (json_body) 은
-        POST/PUT 에서만 의미가 있으나 다른 메서드에 줘도 httpx 가 알아서
-        무시한다 (RESTful 호환).
+        method: GET / POST / PUT / DELETE 중 하나.
+        - `json_body`: JSON 인코딩 body (Content-Type: application/json).
+        - `form_data` (CL #52918+): form-urlencoded body (Content-Type:
+          application/x-www-form-urlencoded). 후잉 API 의 POST/PUT 이
+          JSON body 의 `section_id` 를 안 읽어 form-encoded 가 필요.
+
+        한 호출에 둘 다 주지 말 것 — httpx 가 둘 중 하나를 우선.
 
         후잉 응답이 비-JSON 이거나 응답 본문 code 가 4xx/5xx 인 경우
         ToolError 로 변환되어 raise (자세한 매핑은 errors.map_response).
         """
         url = f"{self.base_url}{path}"
         log.debug(
-            "%s %s params=%s body=%s auth=%s",
+            "%s %s params=%s json=%s form=%s auth=%s",
             method.upper(), url, params,
             "<set>" if json_body is not None else None,
+            "<set>" if form_data is not None else None,
             sanitize_token(self.auth.token),
         )
 
@@ -129,12 +135,15 @@ class WhooingClient:
         for attempt, backoff in enumerate(DEFAULT_RETRY_BACKOFF):
             await self._throttle()
             async with httpx.AsyncClient(timeout=self.timeout) as client:
-                r = await client.request(
-                    method, url,
-                    headers=self.auth.headers(),
-                    params=params,
-                    json=json_body,
-                )
+                kwargs: dict[str, Any] = {
+                    "headers": self.auth.headers(),
+                    "params": params,
+                }
+                if form_data is not None:
+                    kwargs["data"] = form_data
+                elif json_body is not None:
+                    kwargs["json"] = json_body
+                r = await client.request(method, url, **kwargs)
             try:
                 return self._handle(r)
             except ToolError as e:
@@ -365,12 +374,14 @@ class WhooingClient:
             body["memo"] = memo
         if entry_date:
             body["entry_date"] = entry_date
-        # CL #52911+: section_id 를 query 로도 — 단일 entry / 일괄 import
-        # 양쪽이 같은 path 사용. _request 직접 호출 (params + json_body).
+        # CL #52918+: 후잉 API 가 POST 의 JSON body 를 안 읽고
+        # form-urlencoded 만 인식 → CL #52911 의 query-param 만으로는
+        # 부족 (사용자 보고: 16/16 모두 같은 에러 재발). form-encoded 로
+        # 전체 body 를 보내고 section_id 는 query 로도 belt-and-suspenders.
         results = await self._request(
             "POST", self._ENTRIES_PATH,
             params={"section_id": section_id},
-            json_body=body,
+            form_data=body,
         )
         return _coerce_dict(results)
 
@@ -408,12 +419,11 @@ class WhooingClient:
                 body[k] = v
         if money is not None:
             body["money"] = int(money)
-        # CL #52911+: create_entry 와 동일 — section_id 를 query 로도 보내
-        # 후잉 server 가 어느 쪽이든 인식하게.
+        # CL #52918+: create_entry 와 동일 — form-urlencoded + query 양쪽.
         results = await self._request(
             "PUT", self._entry_path(entry_id),
             params={"section_id": section_id},
-            json_body=body,
+            form_data=body,
         )
         return _coerce_dict(results)
 

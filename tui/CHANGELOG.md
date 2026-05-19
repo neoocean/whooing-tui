@@ -5,6 +5,64 @@
 > **0.17.x 이전** (CL #51119 ~ #1) 항목은 분량 정리 차원에서
 > [`CHANGELOG-archive-0.17.md`](./CHANGELOG-archive-0.17.md) 로 분리 보존.
 
+## CL #52918 — 0.73.2 — create/update_entry: form-urlencoded body (2026-05-19)
+
+배경 (사용자 보고 재현): CL #52911 (query 로도 section_id 전송) 적용 후
+에도 *동일한 에러로 16/16 실패*:
+
+```
+[1/16] 20260513 ... → ToolError: `section_id` parameter is required.
+...
+[16/16] 20260506 ... → ToolError: `section_id` parameter is required.
+```
+
+### 원인 (수정)
+
+이전 CL #52911 에서 "query param 으로도 보내면 해결될 것" 으로 추측했지만,
+재현 실패 → 후잉 API 가 POST 의 JSON body 도 query 도 *둘 다* 안 읽음.
+실제로는 **form-urlencoded** (Content-Type: `application/x-www-form-
+urlencoded`) 만 인식. 한국식 REST API 다수의 convention.
+
+### 수정
+
+`client.py:_request` 에 새 키워드 `form_data` 추가:
+- `json_body=` (기존, Content-Type `application/json`) — 보고서 등에 그대로.
+- `form_data=` (신규, Content-Type `application/x-www-form-urlencoded`) —
+  body 가 `section_id=s1&l_account=expenses&...` 형식.
+
+`create_entry` / `update_entry` 가 `json_body` → `form_data` 로 전환.
+`params={"section_id": ...}` 도 그대로 유지 (belt-and-suspenders).
+
+### 테스트 갱신
+
+`test_client_mutations.py` 에 새 helper:
+```python
+def _parse_form(req) -> dict[str, str]:
+    from urllib.parse import parse_qs
+    raw = req.read().decode("utf-8")
+    return {k: v[0] for k, v in parse_qs(raw, keep_blank_values=True).items()}
+```
+
+`test_create_entry_posts_expected_body` / `test_update_entry_puts_only_
+changed_fields` 가 form-encoded body 를 parse 해서 검증. 추가로
+Content-Type 헤더가 `application/x-www-form-urlencoded` 인지 확인.
+
+money 같은 int 값은 form-encoded 에서 문자열 ("12000") 로 직렬화 — 테스트
+assertion 도 그에 맞춰 갱신.
+
+### 영향
+
+- **카드 명세서 일괄 import 정상 동작 복구** (기대) — CL #52911 의 query
+  param 시도가 실패한 후 root cause 확인 + 정확한 fix.
+- **단일 거래 create/update** 모두 영향 — 같은 client 메서드 사용.
+- 다른 endpoint (보고서 등) 는 `json_body=` 그대로 — 영향 없음.
+
+### Backward compat
+
+- `_request` 의 새 `form_data` 인자는 keyword-only optional. 기존 caller 가
+  `json_body` 만 사용해도 동일 동작.
+- 테스트는 갱신 (form 검증으로 변환), 7개 → 7개 통과.
+
 ## CL #52917 — 0.73.1 — 일괄 import dedup 강화 (merchant 유사 / 명세서 내 중복) (2026-05-19)
 
 배경 (사용자 요청): "파일 import 를 통한 벌크 입력 때 dedup 기능을 강화해

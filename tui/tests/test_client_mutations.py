@@ -24,6 +24,16 @@ def _client() -> WhooingClient:
     )
 
 
+# CL #52918+: body 가 form-urlencoded 로 전환 — JSON 이 아닌 query-string
+# 형식으로 디코드해 비교.
+def _parse_form(req) -> dict[str, str]:
+    """form-urlencoded request body 를 dict 으로."""
+    from urllib.parse import parse_qs, unquote_to_bytes
+    raw = req.read().decode("utf-8")
+    # parse_qs 는 list[str] 을 반환 — 단일값으로 평탄화.
+    return {k: v[0] for k, v in parse_qs(raw, keep_blank_values=True).items()}
+
+
 @respx.mock
 async def test_create_entry_posts_expected_body():
     route = respx.post("https://whooing.com/api/entries.json").mock(
@@ -43,17 +53,18 @@ async def test_create_entry_posts_expected_body():
     assert out.get("entry_id") == "e_new_001"
     assert route.call_count == 1
     req = route.calls[0].request
-    # CL #52911+: section_id 가 query 로도 전송돼야 — 후잉 server 의 일괄
-    # import 회귀 (`section_id parameter is required`) 가드.
+    # CL #52911+: section_id 가 query 로도 전송.
     assert b"section_id=s1" in req.url.query
-    # body 에는 모든 필드 (section_id 포함) 가 그대로.
-    import json as _json
-    body = _json.loads(req.read())
+    # CL #52918+: body 가 form-urlencoded — Content-Type 검증 + 필드 확인.
+    assert b"application/x-www-form-urlencoded" in (
+        req.headers.get("content-type", "").encode()
+    )
+    body = _parse_form(req)
     assert body == {
         "section_id": "s1",
         "l_account": "expenses", "l_account_id": "x20",
         "r_account": "assets", "r_account_id": "x11",
-        "money": 12000,
+        "money": "12000",  # form-encoded 는 모두 문자열.
         "item": "스타벅스", "memo": "오후",
         "entry_date": "20260510",
     }
@@ -72,8 +83,7 @@ async def test_create_entry_omits_optional_empty_fields():
         r_account="assets", r_account_id="x11",
         money=1000,
     )
-    import json as _json
-    body = _json.loads(route.calls[0].request.read())
+    body = _parse_form(route.calls[0].request)
     assert "item" not in body
     assert "memo" not in body
     assert "entry_date" not in body
@@ -92,9 +102,8 @@ async def test_update_entry_puts_only_changed_fields():
     req = route.calls[0].request
     # CL #52911+: section_id 가 query param 으로도 전송.
     assert b"section_id=s1" in req.url.query
-    import json as _json
-    body = _json.loads(req.read())
-    assert body == {"section_id": "s1", "money": 99000, "item": "수정된 적요"}
+    body = _parse_form(req)
+    assert body == {"section_id": "s1", "money": "99000", "item": "수정된 적요"}
     # 미지정 필드는 절대 포함되어선 안 됨 (None 으로 덮어쓰기 방지)
     for k in ("l_account", "r_account_id", "memo", "entry_date"):
         assert k not in body
