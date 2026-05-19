@@ -276,6 +276,7 @@ class EntriesScreen(MenuBarMixin, Screen):
                     MenuItem("카드 명세서 import…", "import_card_statement"),
                     MenuItem("PDF 영수증/인보이스 첨부…", "attach_receipt"),
                     MenuItem("매월입력 거래 관리…", "open_monthly"),
+                    MenuItem("중복 거래 검사… (지난 3년)", "scan_duplicates"),
                 ),
             ),
             MenuSpec(
@@ -1029,6 +1030,98 @@ class EntriesScreen(MenuBarMixin, Screen):
         elif result is False:
             self.set_status("중복 평가 종료 (변경 없음).")
         # None (Esc) — silent.
+
+    def action_scan_duplicates(self) -> None:
+        """CL #52963+: 지난 3년 거래 일괄 중복 스캔 (입력 메뉴).
+
+        사용자 요청 — 거래내력에 중복 항목이 늘어났으니 메뉴로 한 번에
+        스캔해 cluster 마다 삭제/보존 선택. 실제 흐름은 worker 안.
+        """
+        self._scan_duplicates_worker()
+
+    @work(exclusive=True, group="dupe_scan", name="scan_duplicates")
+    async def _scan_duplicates_worker(self) -> None:
+        """3년 거래 fetch → cluster 추출 → DuplicateScanScreen push.
+
+        성공한 cluster 한 건이라도 있으면 entries 재로드. cluster 발견
+        못 하면 status 만 안내 (화면 띄우지 않음 — 작업 흐름 끊김 최소화).
+        """
+        from whooing_core.dupes import find_duplicate_clusters
+        from whooing_tui.screens.duplicate_scan import DuplicateScanScreen
+
+        session = self.app.session  # type: ignore[attr-defined]
+        if not session.section_id:
+            self.set_status(
+                "활성 섹션이 없습니다 — `s` 로 먼저 선택하세요.", error=True,
+            )
+            return
+        end_date = today_yyyymmdd()
+        # 365 * 3 + 1 — 3년 윈도우. list_entries 가 split_yearly_ranges
+        # 로 1년 단위 분할 호출, 100-cap 도 bisection 처리.
+        start_date = days_ago_yyyymmdd(365 * 3)
+        self.set_status(
+            f"⏳ 중복 검사 — 거래 fetch 중… ({start_date} ~ {end_date})",
+        )
+        try:
+            entries = await self._client.list_entries(
+                section_id=session.section_id,
+                start_date=start_date,
+                end_date=end_date,
+            )
+        except ToolError as e:
+            self.set_status(
+                f"거래 조회 실패 [{e.kind}] {e.message}", error=True,
+            )
+            return
+        except Exception as e:  # pragma: no cover
+            log.exception("scan_duplicates fetch failed")
+            self.set_status(f"거래 조회 실패 (INTERNAL): {e}", error=True)
+            return
+        self.set_status(f"🔍 중복 cluster 검색 중… (거래 {len(entries):,} 건)")
+        # pure func — sync 로 충분히 빠르지만 큰 부담은 worker 컨텍스트 이라 OK.
+        clusters = find_duplicate_clusters(entries, date_window_days=7)
+        if not clusters:
+            self.set_status(
+                f"✅ 거래 {len(entries):,} 건 검사 완료 — 중복 후보 없음.",
+            )
+            return
+
+        async def _delete_many(eids: list[str]) -> tuple[int, list[str]]:
+            deleted = 0
+            failed: list[str] = []
+            for eid in eids:
+                try:
+                    await self._client.delete_entry(
+                        section_id=session.section_id, entry_id=eid,
+                    )
+                    deleted += 1
+                    try:
+                        self._purge_local(eid)
+                    except Exception:  # pragma: no cover
+                        log.exception("purge_local %s failed", eid)
+                except ToolError as e:
+                    failed.append(f"{eid} [{e.kind}] {e.message}")
+                except Exception as e:  # pragma: no cover
+                    log.exception("dupe scan delete %s failed", eid)
+                    failed.append(f"{eid} INTERNAL: {e}")
+            return deleted, failed
+
+        total = len(clusters)
+        self.set_status(f"🔍 중복 cluster {total} 개 발견 — 하나씩 검토.")
+        result = await self.app.push_screen_wait(  # type: ignore[attr-defined]
+            DuplicateScanScreen(
+                clusters,
+                client=self._client,
+                session=session,
+                delete_callback=_delete_many,
+            ),
+        )
+        if result:
+            self._selected_entry_ids.clear()
+            self.set_status("중복 검사 완료 — 재로드 중…")
+            self.refresh_entries()
+        else:
+            self.set_status("중복 검사 종료 (변경 없음).")
 
     def action_open_monthly(self) -> None:
         """CL #51152+: 매월입력 거래 관리 화면."""

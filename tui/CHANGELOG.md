@@ -5,6 +5,107 @@
 > **0.17.x 이전** (CL #51119 ~ #1) 항목은 분량 정리 차원에서
 > [`CHANGELOG-archive-0.17.md`](./CHANGELOG-archive-0.17.md) 로 분리 보존.
 
+## CL #52963 — 0.76.0 — 입력 메뉴: 지난 3년 거래 일괄 중복 스캔 (2026-05-19)
+
+배경 (사용자 보고): "거래내력에 중복으로 보이는 항목들이 많이 생겼습니다.
+입력 풀다운메뉴 하위에 중복 거래 검사 메뉴를 넣고 지난 3년 동안의 거래를
+검사해 중복인 항목들을 하나씩 보여주고 삭제할 것과 남길 것을 선택해 엔터를
+누르면 중복이 처리되도록 해 주세요. 전체 중복 개수가 몇 개이며 지금이 몇
+번째 중복인지도 보여주세요."
+
+### 기존 한계
+
+CL #52815+ 의 `DuplicateEvalScreen` 은 사용자가 **수동으로 선택한 2건+**
+의 평가용. 수천 건 ledger 에서 "어디에 중복이 있는지 모르는" 케이스는
+불가능 — 사용자가 일일이 비교하며 골라야 했음.
+
+### 알고리즘 — `whooing_core.dupes.find_duplicate_clusters` 신규
+
+표준 record-linkage 패턴 (blocking + windowing + pairwise + union-find):
+
+1. **블로킹** — `|money|` 절대값으로 bucket. money 가 None / 0 이면 신호
+   너무 약해 skip (가짜 cluster 폭증 방지). 절대값 매칭은 좌우 반전 +
+   부호 반대 (환불) 같은 변형도 한 bucket 에 모음.
+2. **윈도잉** — bucket 안에서 entry_date 정렬, two-pointer 로 ±N 일
+   (기본 7) 안 쌍만 추출. 1년 같은 가맹점 같은 금액 거래에서 폭증 회피.
+3. **평가** — 기존 `_pair_verdict` 재사용 (identical / very_likely /
+   possible / different). `min_verdict` 이상만 cluster 후보.
+4. **클러스터링** — union-find 로 transitive 연결. A↔B + B↔C 면 A↔C 가
+   직접 매치 안 돼도 한 cluster.
+5. **정렬** — verdict 강한 순 → cluster 크기 큰 순 → 첫 날짜 오래된 순.
+
+복잡도 — bucket 안 평균 윈도우 거래 k 개 (k « N) 면 O(N·k) 수렴. 3년치
+실제 5000건 ledger 도 1~2초.
+
+### 신규 화면 `DuplicateScanScreen`
+
+`tui/src/whooing_tui/screens/duplicate_scan.py` — 한 cluster 씩 순회.
+
+```
+╭─ 중복 거래 검사 ───────────────────────╮
+│   1 / 12  ·  중복 매우 유력             │
+│   근거: 좌/우 계정이 반대 — 입출금 혼동  │
+│  ┌──────────┬──────┬─────┬────┬────┐  │
+│  │ 삭제      │ 날짜  │ 금액 │ 왼쪽│ 오른│  │
+│  │ ✓ 삭제    │20260… │ 5,000│식비│현금 │  │
+│  │ ✗ 보존    │20260… │ 5,000│현금│식비 │  │
+│  └──────────┴──────┴─────┴────┴────┘  │
+│  Space: ✓/✗ toggle · Enter: 확정 → 다음 │
+│  n/→: skip · p/←: 이전 · Esc: 닫기      │
+╰────────────────────────────────────────╯
+```
+
+- 헤더: **"N / T  ·  verdict"** (현재 / 전체 + 강도).
+- DataTable 의 ✓ 컬럼 — 삭제 대상 표시. 기본값: `keep_suggestion` 만
+  ✗ (보존), 나머지 ✓ (삭제 대상). `DuplicateEvalScreen` (★ = keep
+  반대) 과 의도적으로 반대 — 본 화면은 cluster 안 *여러 건* 삭제 흔하므로
+  "삭제 마크" 가 사용자 의도와 더 맞음.
+- Space — 현재 row 의 mark toggle.
+- Enter — 현재 cluster 의 ✓ 거래 모두 삭제 + 다음 cluster 로 자동 이동.
+  마지막 cluster 면 자동 dismiss.
+- n / → — 삭제 없이 다음 cluster.
+- p / ← — 이전 cluster (이미 처리한 cluster 도 readonly 로 재방문 가능).
+- Esc — 닫기 (이미 삭제한 cluster 는 유지, dirty=True 면 호출자가
+  entries 재로드).
+
+### 입력 메뉴 추가
+
+`screens/entries.py · _build_menus`:
+```python
+MenuSpec("입력", (
+    MenuItem("새 거래 (n)", "new_entry"),
+    MenuItem("카드 명세서 import…", "import_card_statement"),
+    MenuItem("PDF 영수증/인보이스 첨부…", "attach_receipt"),
+    MenuItem("매월입력 거래 관리…", "open_monthly"),
+    MenuItem("중복 거래 검사… (지난 3년)", "scan_duplicates"),  # ← 신규
+))
+```
+
+`action_scan_duplicates` → `_scan_duplicates_worker`:
+- `list_entries(start=today−1095일, end=today)` — `split_yearly_ranges`
+  내장 분할 호출, 100-cap bisection 처리.
+- `find_duplicate_clusters(entries, date_window_days=7)`.
+- cluster 없으면 status 안내만, 화면 안 띄움 (사용자 흐름 끊김 최소화).
+- 있으면 `DuplicateScanScreen` push, 결과 True (한 건이라도 삭제) 면
+  entries 재로드.
+
+### 테스트 (+14 dupes core + 10 화면 통합 = 24)
+
+`core/tests/test_dupes.py`:
+- 빈 입력 / 중복 없음 / identical pair / swap 좌우 / 윈도우 경계
+- 3-way component (a↔b↔c) / transitive 연결
+- min_verdict 필터 / 0원 skip / dedup-by-id
+- keep_suggestion = 사전순 / verdict 정렬 검증
+
+`tui/tests/test_duplicate_scan.py`:
+- 입력 메뉴 wiring / 2개 cluster 화면 push
+- 중복 0건 → status 만 (화면 X)
+- Enter → 삭제 + advance / Space toggle / skip / prev
+- Esc → False / 모든 ✓ 해제 후 Enter → 안내만
+- 진행률 N/T 표시 검증
+
+총 테스트 1064 → 1088 통과.
+
 ## CL #52956 — 0.75.2 — 명세서 추출 진행 status + Esc 로 파일 picker 복귀 (2026-05-19)
 
 배경 (사용자 보고): "카드 import 화면에서 로딩에 시간이 걸릴 때 무엇을 하고

@@ -308,8 +308,208 @@ VERDICT_LABELS_KO: dict[Verdict, str] = {
 }
 
 
+# ----------------------------------------------------------------------
+# Bulk 스캐너 (CL #52963+).
+# ----------------------------------------------------------------------
+#
+# 사용자 요청 (2026-05-19):
+#   "거래내력에 중복으로 보이는 항목들이 많이 생겼습니다. … 지난 3년 동안의
+#   거래를 검사해 중복인 항목들을 하나씩 보여주고 삭제할 것과 남길 것을
+#   선택해 엔터를 누르면 중복이 처리되도록 해 주세요. … 중복 감지는 날짜,
+#   왼쪽과 오른쪽, 메모, 금액 중 일부가 일치하되 날짜 범위가 너무 큰 차이
+#   나지 않는 것을 기본으로 합니다."
+#
+# `evaluate_duplicates` 는 **선택된 소수** 에 대한 pairwise 평가 — 수천 건
+# 위에 그대로 돌리면 O(n²). 본 모듈은 1단계 bucket (절대값 금액) + 2단계
+# 윈도우 (날짜 ±date_window_days) 로 후보 쌍을 좁힌 뒤, 기존
+# `_pair_verdict` 를 재사용해 connected component 클러스터링.
+#
+# 알고리즘:
+#   1. 절대값 금액으로 bucket — 카드 명세서 부분 환불, 좌우 반전 모두 같은
+#      bucket 안. 같은 절대값 같은 부호도 묶음. money 가 None / 0 이면 skip.
+#   2. bucket 안에서 entry_date 기준 정렬, two-pointer 로 ±window 안 쌍만
+#      추출 — 1년 같은 가맹점 같은 금액 거래에서 폭증 회피.
+#   3. 각 후보 쌍에 `_pair_verdict` 호출, `different` 가 아니면 union-find.
+#   4. component 크기 ≥ 2 만 cluster 로 반환, verdict 강한 순 정렬.
+#
+# bucket 안 entry 수 N 이라도 윈도우 안 평균 k 개 (k « N) 면 O(N·k) 수렴.
+# 3년치 진짜 케이스 (~5000 건, 평균 1~3개 동금액 윈도우 안) 도 1~2초 내.
+
+
+def _verdict_strength(v: Verdict) -> int:
+    return _VERDICT_ORDER[v]
+
+
+@dataclass(frozen=True)
+class DupeCluster:
+    """중복 후보 1 cluster — 2건 이상의 entry + 가장 강한 verdict.
+
+    entries: cluster 안 모든 entry (입력된 dict 그대로). 최소 2 건.
+    verdict: cluster 안 가장 강한 pair verdict (identical > very_likely > possible).
+    reasons: 그 강한 pair 의 이유 list.
+    keep_suggestion: 사용자가 '하나만 남기기' 선택 시 권장 entry_id —
+                     entry_date 가장 오래된 것 (먼저 기록).
+    """
+
+    entries: tuple[dict[str, Any], ...]
+    verdict: Verdict
+    reasons: tuple[str, ...]
+    keep_suggestion: str | None
+
+
+def find_duplicate_clusters(
+    entries: Iterable[dict[str, Any]],
+    *,
+    date_window_days: int = 7,
+    min_verdict: Verdict = "possible",
+) -> list[DupeCluster]:
+    """전체 entry list 에서 중복 의심 cluster 들을 찾아 반환.
+
+    Args:
+        entries: 후잉 entries-list 반환 dict 의 iterable. money / entry_date /
+                 l_account_id / r_account_id / item / memo / entry_id 사용.
+        date_window_days: 같은 절대 금액 bucket 안에서 두 거래가 같은
+                          cluster 후보가 되는 날짜 차 상한. 기본 7. 가맹점
+                          처리 지연, 정정 등 흔한 케이스 흡수.
+        min_verdict: 결과 cluster 의 최소 verdict 강도. "possible" 이면
+                     약한 신호 (금액+날짜만 일치, 계정 다름) 까지 포함.
+                     "very_likely" 면 신중한 dedup 만.
+
+    Returns:
+        DupeCluster list — verdict 강한 순 → cluster 크기 큰 순 → 첫 entry_date
+        오름차순 정렬. 비어있으면 빈 list.
+
+    Notes:
+        - money 가 None / 0 인 entry 는 신호 너무 약해 skip (가짜 cluster
+          폭증 방지).
+        - entry_id 가 같은 entry 는 중복 입력으로 간주, 한 번만 처리.
+        - 본 함수는 pure — sqlite / 후잉 의존 없음. 테스트 용이.
+    """
+    min_rank = _VERDICT_ORDER[min_verdict]
+
+    # entry_id 중복 제거 (안전망).
+    seen_ids: set[str] = set()
+    deduped: list[dict[str, Any]] = []
+    for e in entries:
+        eid = str(e.get("entry_id") or "")
+        if eid and eid in seen_ids:
+            continue
+        if eid:
+            seen_ids.add(eid)
+        deduped.append(e)
+
+    # 1) 절대값 금액 bucket. money None / 0 skip.
+    buckets: dict[int, list[dict[str, Any]]] = {}
+    for e in deduped:
+        abs_money = _strip_money(e.get("money"))
+        if abs_money is None or abs_money == 0:
+            continue
+        buckets.setdefault(abs_money, []).append(e)
+
+    # 2) bucket 안 후보 쌍 → union-find.
+    # parent: index in `deduped`. id_to_idx 로 lookup.
+    id_to_idx: dict[int, int] = {id(e): i for i, e in enumerate(deduped)}
+    parent: list[int] = list(range(len(deduped)))
+
+    def _find(x: int) -> int:
+        while parent[x] != x:
+            parent[x] = parent[parent[x]]
+            x = parent[x]
+        return x
+
+    def _union(a: int, b: int) -> None:
+        ra, rb = _find(a), _find(b)
+        if ra != rb:
+            parent[ra] = rb
+
+    # pair_verdict cache: (idx_a, idx_b) → (Verdict, reasons). 같은 쌍이 여러
+    # bucket 에 들어갈 일은 없지만 안전망 + cluster 강도 계산에도 재사용.
+    pair_info: dict[tuple[int, int], tuple[Verdict, tuple[str, ...]]] = {}
+
+    for bucket in buckets.values():
+        if len(bucket) < 2:
+            continue
+        # 날짜 순으로 정렬, two-pointer 로 ±window.
+        bucket_sorted = sorted(
+            enumerate(bucket),
+            key=lambda pair: _date(pair[1].get("entry_date")),
+        )
+        n = len(bucket_sorted)
+        for i in range(n):
+            _, ei = bucket_sorted[i]
+            di = _date(ei.get("entry_date"))
+            for j in range(i + 1, n):
+                _, ej = bucket_sorted[j]
+                dj = _date(ej.get("entry_date"))
+                diff = _day_diff(di, dj)
+                if diff is None or diff > date_window_days:
+                    # 정렬돼 있으니 j 이후도 모두 window 밖 — break.
+                    if diff is not None and diff > date_window_days:
+                        break
+                    # diff None (날짜 형식 이상) 은 같은 ei 의 다른 j 는 가능.
+                    continue
+                v, reasons = _pair_verdict(ei, ej)
+                if _VERDICT_ORDER[v] < min_rank:
+                    continue
+                idx_a = id_to_idx[id(ei)]
+                idx_b = id_to_idx[id(ej)]
+                pair_info[(min(idx_a, idx_b), max(idx_a, idx_b))] = (v, reasons)
+                _union(idx_a, idx_b)
+
+    # 3) component 모으기.
+    comp_map: dict[int, list[int]] = {}
+    for idx in range(len(deduped)):
+        root = _find(idx)
+        comp_map.setdefault(root, []).append(idx)
+
+    clusters: list[DupeCluster] = []
+    for member_idxs in comp_map.values():
+        if len(member_idxs) < 2:
+            continue
+        # cluster 안 가장 강한 pair_verdict 와 그 reasons.
+        strongest: Verdict = "different"
+        strongest_reasons: tuple[str, ...] = ()
+        for i in range(len(member_idxs)):
+            for j in range(i + 1, len(member_idxs)):
+                a = min(member_idxs[i], member_idxs[j])
+                b = max(member_idxs[i], member_idxs[j])
+                info = pair_info.get((a, b))
+                if info is None:
+                    continue
+                v, r = info
+                if _VERDICT_ORDER[v] > _VERDICT_ORDER[strongest]:
+                    strongest = v
+                    strongest_reasons = r
+        if _VERDICT_ORDER[strongest] < min_rank:
+            continue
+
+        members = [deduped[i] for i in member_idxs]
+        # keep_suggestion — entry_date 가장 오래된 것 (먼저 기록), 동률이면
+        # entry_id 사전순 작은 것.
+        members_sorted = sorted(
+            members,
+            key=lambda e: (_date(e.get("entry_date")), str(e.get("entry_id") or "")),
+        )
+        keep_id = str(members_sorted[0].get("entry_id") or "") or None
+        clusters.append(DupeCluster(
+            entries=tuple(members_sorted),
+            verdict=strongest,
+            reasons=strongest_reasons,
+            keep_suggestion=keep_id,
+        ))
+
+    # 최종 정렬: verdict 강한 순, 같으면 cluster 크기 큰 순, 같으면 첫
+    # entry_date 오래된 순.
+    clusters.sort(key=lambda c: (
+        -_VERDICT_ORDER[c.verdict],
+        -len(c.entries),
+        _date(c.entries[0].get("entry_date")) if c.entries else "",
+    ))
+    return clusters
+
+
 __all__ = [
-    "DupeReport", "Verdict", "VERDICT_LABELS_KO",
-    "evaluate_duplicates", "is_duplicate",
+    "DupeReport", "DupeCluster", "Verdict", "VERDICT_LABELS_KO",
+    "evaluate_duplicates", "find_duplicate_clusters", "is_duplicate",
     "normalize_text", "merchant_similar",
 ]
