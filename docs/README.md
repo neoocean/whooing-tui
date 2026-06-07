@@ -28,6 +28,8 @@
 
 ## 부속 문서
 
+- [`MANUAL.md`](MANUAL.md) — **사용자 매뉴얼** (설치~일상 사용, 실제 화면
+  SVG 스크린샷). 스크린샷 생성기: [`../scripts/gen_screenshots.py`](../scripts/gen_screenshots.py).
 - [`MAINTAINABILITY-REVIEW.md`](MAINTAINABILITY-REVIEW.md) — 코드 감사
   결과 + LLM 친화도 향상 제안 (실행 비순서 백로그).
 
