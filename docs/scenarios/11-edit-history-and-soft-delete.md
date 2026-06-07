@@ -1,8 +1,11 @@
 # 11. 거래 수정 이력 · 소프트 삭제 · 복원 (설계 문서)
 
-> **상태: 설계 제안 (미구현).** 본 문서는 구현 전 합의를 위한 설계
-> 스펙이다. 실제 코드/스키마는 아직 없으며, 합의 후 CL 로 단계 구현한다.
-> 현재 동작(파괴적 수정·삭제)은 [02. 거래 추가·수정·삭제](02-add-edit-delete-entry.md) 참조.
+> **상태: 구현됨 — v0.81.0 (2026-06-07).** 사용자 결정으로 **안 B**(후잉
+> 실삭제 + 복원 시 재생성, 동일성은 불변 `logical_id` 로 추적)를 채택하고
+> **즉시 기본 동작**으로 적용(설정 플래그 없음). 단계 구현 CL: 57522(코어
+> 스키마 v10 + revisions) → 57524(기록 배선) → 57526(휴지통·이력 UI).
+> 본 문서는 그 구현의 설계 근거이며 아래 시나리오는 **구현된 안 B** 기준.
+> 기본 CRUD 동작은 [02. 거래 추가·수정·삭제](02-add-edit-delete-entry.md) 참조.
 
 ## 목적
 
@@ -133,11 +136,14 @@ CREATE INDEX idx_head_deleted ON entry_head(is_deleted);
 - **단점**: 사용자 요구 "동일 entry_id 의 최신 버전"이 **물리 id 기준으론
   깨진다** (논리 id 로만 동일). 재생성 실패 시 정합성 처리 복잡.
 
-> **권장**: **안 A**. 사용자 스펙의 "마킹만/취소 가능/동일 entry_id"를 가장
-> 곧이곧대로 만족. 안 B 는 "삭제를 모든 기기에 전파"가 꼭 필요할 때의
-> 옵션으로 문서화만 한다. (설정으로 토글 가능하게 둘 수도 있음 — 미해결.)
+> **채택: 안 B (2026-06-07 사용자 결정).** 리뷰에서 안 A 의 허점 — 후잉에
+> 남은 "삭제" 거래가 잔액/보고서(official MCP·accounts-list 의 서버 집계)에
+> 계속 합산되어 "삭제했는데 합계엔 남는" 모순 — 이 드러나, 회계적 정확성을
+> 위해 안 B 를 택했다. 동일성은 불변 `logical_id` 로 잇고, 복원/되돌리기는
+> 같은 logical 의 새 최신 버전(새 후잉 entry_id)이 된다. 즉시 기본 동작으로
+> 적용(플래그 없음).
 
-이하 시나리오는 **안 A** 기준.
+이하 시나리오는 **구현된 안 B** 기준.
 
 ## 동작 시나리오 (단계별 흐름)
 
@@ -153,26 +159,28 @@ CREATE INDEX idx_head_deleted ON entry_head(is_deleted);
    e. `submit_db_to_p4` (이력 포함 동기화).
 3. 결과: 같은 entry_id, head=새 버전, 직전 버전 보존.
 
-### 삭제 (`d`, 소프트)
+### 삭제 (`d`, 소프트 — 안 B)
 
-1. `d` → ConfirmModal("삭제 마킹할까요? 휴지통에서 복원 가능").
-2. yes → 삭제 워커:
-   a. `entry_revisions` 에 `op=delete, is_deleted=1` 버전 append (본문은
-      직전 값 복사 — 무엇을 지웠는지 보존).
-   b. `entry_head.is_deleted=1`. **후잉은 건드리지 않음(안 A).**
-   c. 목록에서 사라짐(필터). `submit_db_to_p4`.
-3. 첨부/태그는 **purge 하지 않는다** (복원 대비). 현재 `purge()` 의
-   `.trash` 이동 로직은 소프트삭제에선 호출하지 않음.
+1. `d` → ConfirmModal("삭제할까요? 휴지통에서 복원 가능").
+2. yes → 삭제 워커(`_submit_delete`):
+   a. `client.delete_entry()` 로 **후잉에서 실제 삭제**(잔액/보고서 정확) —
+      기존 동작 유지.
+   b. `entry_revisions` 에 `op=delete, is_deleted=1, whooing_entry_id=NULL`
+      버전 append (직전 값 스냅샷 — 무엇을 지웠는지 보존), `entry_head.
+      is_deleted=1`, `entries_cache` 에서 제거.
+   c. 목록에서 사라짐. `submit_db_to_p4`.
+3. 첨부/태그/annotation 은 **purge 하지 않는다** (복원 대비 보존). 복원 시
+   `migrate_local` 이 새 entry_id 로 재키잉.
 
 ### 삭제 취소 / 복원 (휴지통)
 
 1. 화면 메뉴 → **휴지통…** → 삭제 마킹된 거래 목록(`is_deleted=1`).
-2. 항목 선택 → **복원** →
-   a. `entry_revisions` 에 `op=restore, is_deleted=0` 버전 append (직전
-      살아있던 본문 복원).
-   b. `entry_head.is_deleted=0`. 안 A 라 후잉 변경 불필요(원래 살아있음).
-      (안 B 라면 여기서 재생성 → 새 entry_id.)
-   c. 목록에 다시 나타남. `submit_db_to_p4`.
+2. 항목 선택 → **복원**(`_restore_logical`) →
+   a. `client.create_entry()` 로 **후잉에 재생성 → 새 entry_id** 발급(안 B).
+   b. `entry_revisions` 에 `op=restore, is_deleted=0, whooing_entry_id=새 id`
+      버전 append, `entry_head` 갱신(`current_entry_id=새 id`), `entries_cache`
+      반영. `migrate_local` 로 메모/태그/첨부를 옛 id→새 id 재키잉.
+   c. 목록에 다시 나타남. `logical_id` 는 그대로라 이력이 이어짐. `submit_db_to_p4`.
 
 ### 변경 이력 보기 + 되돌리기 (revert)
 
@@ -187,8 +195,9 @@ CREATE INDEX idx_head_deleted ON entry_head(is_deleted);
 3. 임의 버전 선택 → **이 버전으로 되돌리기** →
    a. 선택 버전의 본문으로 `op=revert` **새 head** append
       (`reverted_from=선택 rev#`).
-   b. 현재 살아있으면 `client.update_entry()` 제자리 갱신; 삭제 상태였다면
-      복원과 동일 절차. **entry_id 불변(안 A).**
+   b. 현재 **살아있으면** `client.update_entry()` 제자리 갱신(entry_id 불변)
+      → `op=revert`; **삭제 상태였으면** 재생성(새 entry_id) → `op=restore`
+      + `migrate_local` (복원과 동일 절차, 안 B).
    c. `entry_head`/`entries_cache` 갱신, P4 submit.
 4. 결과: 되돌림도 같은 entry 의 **새 최신 버전** — 이력은 끊기지 않고
    계속 누적(되돌리기 자체가 한 줄로 남아 추적 가능).
@@ -261,9 +270,14 @@ CREATE INDEX idx_head_deleted ON entry_head(is_deleted);
 | 신규 화면 | `screens/revision_history.py`, `screens/trash.py` |
 | P4 동기화 | `tui/src/whooing_tui/p4_sync.py` |
 
-## 미해결 결정
+## 결정 완료 / 미해결
 
-1. 소프트삭제 정책 **안 A vs 안 B** (또는 설정 토글) — **권장 A**.
-2. 다중 환경 `revision_no` 충돌 머지 규칙.
+**결정 완료**
+1. 소프트삭제 정책 → **안 B** (즉시 기본 동작, 2026-06-07).
+2. 이력 화면 진입 키 → **`H`** + context 메뉴 '수정 이력'; 휴지통 → **화면 메뉴**.
+
+**미해결 (향후)**
+1. 다중 환경 `revision_no` 충돌 머지 규칙 — 현재는 P4 last-writer.
+2. 외부(웹/공식앱/MCP) 변경 자동 감지(`op=external`) — 미구현. 현재는 TUI
+   경유 변경만 이력에 남는다. 다음 단계 후보.
 3. 이력 보존 기한 / 영구삭제 자동 정리 정책(있을지).
-4. 이력 화면 진입 키(`H`?) 와 휴지통 메뉴 위치 확정.

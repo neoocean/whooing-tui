@@ -24,7 +24,7 @@
 | 08 | [보고서 + 통계](scenarios/08-reports.md) | `t` | `screens/reports.py`, `official_mcp.py` |
 | 09 | [시작·종료 시 P4 동기화](scenarios/09-startup-shutdown.md) | (자동) / `q` | `app.py` (`_StartupCheckScreen`/`_ShutdownModal`), `p4_sync.py` |
 | 10 | [저장소: SQLite vs plaintext 검토](scenarios/10-storage-sqlite-vs-plaintext.md) | (설계 문서) | `core/db.py` |
-| 11 | [거래 수정 이력·소프트 삭제·복원](scenarios/11-edit-history-and-soft-delete.md) | (설계 문서) `e`/`d`/`H` | `repository.py`, `core/db.py`, `screens/edit_entry.py` |
+| 11 | [거래 수정 이력·소프트 삭제·복원](scenarios/11-edit-history-and-soft-delete.md) | `e`/`d`/`H` + 휴지통 | `revision_repo.py`, `core/revisions.py`, `screens/trash.py`, `screens/revision_history.py` |
 
 ## 부속 문서
 

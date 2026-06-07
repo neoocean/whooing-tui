@@ -5,6 +5,53 @@
 > **0.17.x 이전** (CL #51119 ~ #1) 항목은 분량 정리 차원에서
 > [`CHANGELOG-archive-0.17.md`](./CHANGELOG-archive-0.17.md) 로 분리 보존.
 
+## CL #57522, #57524, #57526 (+문서) — 0.81.0 — 거래 수정 이력 · 소프트 삭제 · 복원/되돌리기 (2026-06-07)
+
+시나리오 11 구현. 설계: [`docs/scenarios/11-edit-history-and-soft-delete.md`](../docs/scenarios/11-edit-history-and-soft-delete.md).
+
+후잉 REST 가 버전 이력을 제공하지 않으므로 로컬 sqlite 가 이력의 system of
+record. 사용자 결정으로 **안 B**(후잉 실삭제 + 복원 시 재생성, 동일성은
+불변 `logical_id` 추적)를 채택하고 즉시 기본 동작으로 적용.
+
+### 1. 스키마 v10 + 코어 (CL #57522)
+
+- `core/db.py`: `entry_revisions`(append-only 버전 로그) + `entry_head`
+  (logical_id 당 현재상태 캐시). SCHEMA_VERSION 9→10.
+- `core/revisions.py`: snapshot/diff/summary 순수 헬퍼 + record_revision /
+  ensure_baseline / list_revisions / list_deleted / logical_id_for_entry /
+  purge_logical.
+
+### 2. 기록 배선 (CL #57524)
+
+- `revision_repo.py`(`EntryRevisionRepository`): 코어를 open_rw/open_ro +
+  P4 자동 submit 으로 감싼 어댑터.
+- EntriesScreen 생성/수정/삭제 워커 연결 — 생성=op create, 수정=직전 상태
+  baseline 후 op edit(제자리 갱신, entry_id 불변), 삭제=후잉 실삭제 후
+  op delete + entries_cache 제거(annotation/첨부 보존). `p4_sync.
+  describe_revision`. 삭제 확인 문구 '휴지통 복원 가능'.
+
+### 3. 휴지통·이력 UI (CL #57526)
+
+- `screens/trash.py`: 소프트삭제 거래 목록 — Enter/r 복원, x 영구삭제.
+- `screens/revision_history.py`: 버전 목록(op/시각/diff, 최신순) — Enter 로
+  되돌리기.
+- 진입: 화면 메뉴 '휴지통…', `H` 키 + context 메뉴 '수정 이력'.
+- 워커 `_restore_logical`/`_revert_to`/`_purge_logical`,
+  `EntryRepository.migrate_local`(복원 시 메모/태그/첨부 old→new 재키잉).
+
+### 4. 문서/버전 (본 CL)
+
+- 시나리오 11 문서를 구현 현실(안 B)로 갱신, README 카탈로그, 버전 0.81.0.
+
+### 호환성/주의
+
+- **삭제 동작 변경**: 종전 즉시 purge(복구 불가) → 소프트삭제(휴지통 복원
+  가능; 잔액은 후잉 실삭제로 정확). 영구삭제는 휴지통에서 별도 확인.
+- **알려진 한계**: TUI 밖(웹/공식앱/MCP) 변경은 이력에 안 남는다
+  (`op=external` 자동 감지 미구현 — 향후). 복원 시 후잉 entry_id 는 새로
+  발급되며 동일성은 logical_id 로 유지.
+- 테스트: core 7 + tui 7 신규, 전체 통과.
+
 ## CL #56830 — 0.80.0 — 매월입력 등록 modal AccountPicker 통합 + worker race 수정 (2026-06-06)
 
 백로그 항목 **C13** (`docs/MAINTAINABILITY-REVIEW.md` / 코드 내 TODO) 적용.
