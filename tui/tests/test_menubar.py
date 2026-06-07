@@ -425,3 +425,97 @@ async def test_menubar_click_dispatches_menu_clicked_message():
         )
         await pilot.pause()
         assert received == [1]
+
+
+# ---- MenuPopup — 마우스 바깥/메뉴바 클릭 동작 (CL) -----------------------
+
+import types as _types  # noqa: E402
+
+from textual.geometry import Region  # noqa: E402
+
+from whooing_tui.widgets.menubar import menubar_ranges  # noqa: E402
+
+
+class _PopupNavApp(App):
+    """MenuPopup 를 menus/bar_region 과 함께 push — 클릭 분기 검증용."""
+
+    def __init__(self, spec, menus, menu_index, bar_region):
+        super().__init__()
+        self._spec = spec
+        self._menus = menus
+        self._mi = menu_index
+        self._br = bar_region
+        self.dismissed_with = "<unset>"
+
+    def on_mount(self) -> None:
+        async def _rec(value):
+            self.dismissed_with = value
+        self.push_screen(
+            MenuPopup(
+                self._spec,
+                menus=self._menus,
+                menu_index=self._mi,
+                bar_region=self._br,
+            ),
+            _rec,
+        )
+
+
+def _click(sx, sy):
+    return _types.SimpleNamespace(screen_x=sx, screen_y=sy, stop=lambda: None)
+
+
+@pytest.mark.asyncio
+async def test_menupopup_click_outside_box_closes():
+    menus = (MenuSpec("파일", ()), MenuSpec("입력", ()))
+    app = _PopupNavApp(menus[0], menus, 0, Region(0, 1, 40, 1))
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        popup = app.screen
+        # 박스 한참 아래(바깥, 메뉴바 행도 아님) 클릭 → 닫기.
+        popup.on_click(_click(5, 50))
+        await pilot.pause()
+        assert app.dismissed_with is None
+
+
+@pytest.mark.asyncio
+async def test_menupopup_click_other_menu_switches():
+    menus = (MenuSpec("파일", ()), MenuSpec("입력", ()))
+    ranges = menubar_ranges(menus)
+    # 메뉴 1(입력) 범위 내 x. bar_region.x=0, y=1.
+    sx = ranges[1][0]
+    app = _PopupNavApp(menus[0], menus, 0, Region(0, 1, 40, 1))
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        popup = app.screen
+        popup.on_click(_click(sx, 1))
+        await pilot.pause()
+        assert app.dismissed_with == ("switch", 1)
+
+
+@pytest.mark.asyncio
+async def test_menupopup_click_same_menu_closes():
+    menus = (MenuSpec("파일", ()), MenuSpec("입력", ()))
+    ranges = menubar_ranges(menus)
+    sx = ranges[0][0]  # 현재 열린 메뉴(0) 자신 클릭 → 닫기 토글.
+    app = _PopupNavApp(menus[0], menus, 0, Region(0, 1, 40, 1))
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        popup = app.screen
+        popup.on_click(_click(sx, 1))
+        await pilot.pause()
+        assert app.dismissed_with is None
+
+
+@pytest.mark.asyncio
+async def test_menupopup_click_inside_box_does_not_close():
+    menus = (MenuSpec("파일", (MenuItem("종료", "back"),)),)
+    app = _PopupNavApp(menus[0], menus, 0, Region(0, 1, 40, 1))
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        popup = app.screen
+        box = popup.query_one("#menupopup_box")
+        # 박스 내부 좌표 클릭 → on_click 은 관여 안 함 (dismiss 안 일어남).
+        popup.on_click(_click(box.region.x + 1, box.region.y + 1))
+        await pilot.pause()
+        assert app.dismissed_with == "<unset>"

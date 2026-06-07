@@ -1,4 +1,4 @@
-﻿"""StatementImportScreen — 카드 명세서 (HTML / PDF) 를 후잉에 import.
+"""StatementImportScreen — 카드 명세서 (HTML / PDF) 를 후잉에 import.
 
 Wizard 단계:
   1. 입력: file_path 가 주어진 상태로 진입 (또는 home 에서 'i' 로 진입 후 prompt)

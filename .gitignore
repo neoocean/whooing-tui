@@ -46,5 +46,9 @@ coverage.xml
 # 디렉토리에 동명 파일이 있어도 동일 정책으로 차단.
 MEMORY.md
 
+# 내부 운영/워크플로 문서 (세션 생성물) — Perforce 전용, GitHub 미러 금지.
+# 사용자 카드/계정 매핑 등 개인 컨텍스트 포함.
+/docs/internal/
+
 # OS
 .DS_Store

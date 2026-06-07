@@ -1,4 +1,4 @@
-﻿"""MonthlyEntriesScreen — 매월 입력 (정기/반복) 거래 list + 추가/삭제.
+"""MonthlyEntriesScreen — 매월 입력 (정기/반복) 거래 list + 추가/삭제.
 
 CL #51152+. 후잉의 "매월입력 거래" 기능 — 매달 같은 날 같은 패턴 (월세 /
 통신비 / 보험 등) 의 자동 후보. 사용자가 등록해 두면 후잉이 그 날짜에 입력
@@ -26,14 +26,16 @@ from textual import work
 from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Container, Horizontal, Vertical
-from textual.screen import ModalScreen, Screen
+from textual.screen import ModalScreen
 from textual.widgets import (
-    Button, DataTable, Footer, Header, Input, Label, Static,
+    Button, DataTable, Input, Label, Static,
 )
 
 from whooing_tui.client import WhooingClient
 from whooing_tui.ime import bind_ko
 from whooing_tui.models import ToolError
+from whooing_tui.screens.account_picker import AccountPickerScreen
+from whooing_tui.screens.edit_entry import _AccountButton
 from whooing_tui.state import SessionState
 from whooing_tui.widgets import (
     MenuBar, MenuBarMixin, MenuItem, MenuSpec, menubar_bindings,
@@ -75,12 +77,6 @@ class _MonthlyEditModal(ModalScreen[dict | None]):
         min-width: 40;
         height: auto;
     }
-    #me_grid {
-        layout: grid;
-        grid-size: 2;
-        grid-columns: 16 1fr;
-        grid-rows: 1;
-    }
     """
 
     def __init__(self, session: SessionState) -> None:
@@ -90,21 +86,16 @@ class _MonthlyEditModal(ModalScreen[dict | None]):
     def compose(self) -> ComposeResult:
         with Container(id="me_box"):
             yield Label("[bold]매월 입력 거래 등록[/bold]")
-            yield Label(
-                "[dim](TODO C13: AccountPicker 통합 — 현재 raw account_id 텍스트 입력)[/dim]",
-            )
             yield Label("target_day (1~31)")
             yield Input(placeholder="25", id="me-day")
             yield Label("money (KRW)")
             yield Input(placeholder="50000", id="me-money")
-            yield Label("l_account_id (차변)")
-            yield Input(placeholder="x20  (예: 식비)", id="me-l-id")
-            yield Label("l_account (type)")
-            yield Input(placeholder="expenses", id="me-l-type")
-            yield Label("r_account_id (대변)")
-            yield Input(placeholder="x11  (예: 현금)", id="me-r-id")
-            yield Label("r_account (type)")
-            yield Input(placeholder="assets", id="me-r-type")
+            # CL #56830+ (C13): raw account_id 텍스트 입력 → EntryEditDialog 와
+            # 동일한 AccountPickerScreen 트리 선택. 버튼 Enter → picker push.
+            yield Label("차변 (left) — Enter 로 선택")
+            yield _AccountButton(button_id="me-left")
+            yield Label("대변 (right) — Enter 로 선택")
+            yield _AccountButton(button_id="me-right")
             yield Label("item")
             yield Input(placeholder="월세 / 통신비 등", id="me-item")
             yield Label("memo")
@@ -126,10 +117,8 @@ class _MonthlyEditModal(ModalScreen[dict | None]):
         try:
             day = int(self.query_one("#me-day", Input).value.strip())
             money = int(self.query_one("#me-money", Input).value.replace(",", "").strip())
-            l_id = self.query_one("#me-l-id", Input).value.strip()
-            l_type = self.query_one("#me-l-type", Input).value.strip()
-            r_id = self.query_one("#me-r-id", Input).value.strip()
-            r_type = self.query_one("#me-r-type", Input).value.strip()
+            left = self.query_one("#me-left", _AccountButton)
+            right = self.query_one("#me-right", _AccountButton)
             item = self.query_one("#me-item", Input).value.strip()
             memo = self.query_one("#me-memo", Input).value.strip()
         except (ValueError, AttributeError) as e:
@@ -138,21 +127,46 @@ class _MonthlyEditModal(ModalScreen[dict | None]):
         if not (1 <= day <= 31):
             self.notify("target_day 는 1~31 사이여야 합니다.", severity="error")
             return
-        if not (l_id and l_type and r_id and r_type and money > 0):
-            self.notify("계정 + 금액 모두 필수.", severity="error")
+        if not (left.account_id and right.account_id and money > 0):
+            self.notify("차변·대변 계정 + 금액 모두 필수.", severity="error")
             return
         self.dismiss({
             "target_day": day, "money": money,
-            "l_account": l_type, "l_account_id": l_id,
-            "r_account": r_type, "r_account_id": r_id,
+            "l_account": left.type_key, "l_account_id": left.account_id,
+            "r_account": right.type_key, "r_account_id": right.account_id,
             "item": item, "memo": memo,
         })
 
+    def _open_account_picker(self, button_id: str) -> None:
+        """left/right 버튼 → AccountPickerScreen push, 결과로 버튼 갱신.
+
+        EntryEditDialog._open_account_picker 와 동일 패턴. 본 modal 은
+        그동안 push stack 아래에서 살아있다가 콜백으로 버튼만 갱신.
+        """
+        side = "left" if button_id == "me-left" else "right"
+        btn = self.query_one(f"#{button_id}", _AccountButton)
+
+        def _on_pick(result: tuple[str, str, str] | None) -> None:
+            if result is None:
+                return
+            aid, title, type_key = result
+            btn.set_account(aid, title, type_key)
+
+        self.app.push_screen(
+            AccountPickerScreen(
+                self._session, side=side, current_id=btn.account_id or None,
+            ),
+            _on_pick,
+        )
+
     def on_button_pressed(self, event: Button.Pressed) -> None:
-        if event.button.id == "me-save":
+        bid = event.button.id
+        if bid == "me-save":
             self.action_save()
-        else:
+        elif bid == "me-cancel":
             self.action_cancel()
+        elif bid in ("me-left", "me-right"):
+            self._open_account_picker(bid)
 
 
 # CL #51156+ (review C6): `_ConfirmModal` → `widgets.ConfirmModal` 사용.
@@ -260,6 +274,15 @@ class MonthlyEntriesScreen(MenuBarMixin, ModalScreen[None]):
         self.action_refresh()
 
     # ---- actions ---------------------------------------------------------
+    #
+    # CL #56830+ worker group 정책: refresh / new / delete 는 *서로 다른*
+    # exclusive group 을 쓴다. 종전엔 셋 다 group="monthly" 라, on_mount 의
+    # refresh 가 in-flight 인 동안 사용자가 n (new) 를 누르면 _new_worker 가
+    # 시작되며 같은 group 의 refresh 를 cancel — 반대로 refresh 가 나중에
+    # 시작되면 push_screen_wait 로 modal 을 await 중인 _new_worker 를 cancel
+    # 해 사용자의 저장이 조용히 유실됐다 (CLAUDE.md 함정 #3). group 을 쪼개
+    # refresh 가 사용자 다이얼로그를 죽이지 못하게 한다. 같은 group 내 중복
+    # (rapid r / rapid n) 만 자동 cancel.
 
     def action_back(self) -> None:
         # CL #52896+: ModalScreen 의 표준 종료 path — dismiss.
@@ -268,7 +291,7 @@ class MonthlyEntriesScreen(MenuBarMixin, ModalScreen[None]):
     def action_refresh(self) -> None:
         self._refresh_worker()
 
-    @work(exclusive=True, group="monthly", name="refresh")
+    @work(exclusive=True, group="monthly-refresh", name="refresh")
     async def _refresh_worker(self) -> None:
         try:
             rows = await self._client.list_monthly(
@@ -309,7 +332,7 @@ class MonthlyEntriesScreen(MenuBarMixin, ModalScreen[None]):
     def action_new_entry(self) -> None:
         self._new_worker()
 
-    @work(exclusive=True, group="monthly", name="new")
+    @work(exclusive=True, group="monthly-new", name="new")
     async def _new_worker(self) -> None:
         draft = await self.app.push_screen_wait(_MonthlyEditModal(self._session))
         if draft is None:
@@ -334,7 +357,7 @@ class MonthlyEntriesScreen(MenuBarMixin, ModalScreen[None]):
     def action_delete_entry(self) -> None:
         self._delete_worker()
 
-    @work(exclusive=True, group="monthly", name="delete")
+    @work(exclusive=True, group="monthly-delete", name="delete")
     async def _delete_worker(self) -> None:
         table = self.query_one("#m_table", DataTable)
         if not table.row_count:

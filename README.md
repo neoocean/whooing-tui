@@ -1,4 +1,4 @@
-﻿# whooing-tui (monorepo)
+# whooing-tui (monorepo)
 
 후잉 가계부([whooing.com](https://whooing.com)) 의 사용자 도구를 모아 둔 monorepo.
 두 개의 독립 설치 가능 Python 패키지로 구성됩니다:

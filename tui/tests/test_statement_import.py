@@ -1,4 +1,4 @@
-﻿"""statement_import.py — pure helper 단위 테스트.
+"""statement_import.py — pure helper 단위 테스트.
 
 Pilot driven 화면 시나리오는 별도 (Playwright + 실 후잉 호출 필요해 e2e 분류).
 """

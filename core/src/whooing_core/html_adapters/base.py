@@ -1,4 +1,4 @@
-﻿"""HTML adapter 공통 — Playwright 헤드리스 복호화 + DOM 추출 helper."""
+"""HTML adapter 공통 — Playwright 헤드리스 복호화 + DOM 추출 helper."""
 
 from __future__ import annotations
 

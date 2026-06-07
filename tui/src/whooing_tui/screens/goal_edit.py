@@ -1,4 +1,4 @@
-﻿"""GoalEditScreen — 장기목표 + 월별 자본 목표값 편집.
+"""GoalEditScreen — 장기목표 + 월별 자본 목표값 편집.
 
 CL #51154+. 후잉의 두 종류 goal:
   - **장기목표** (`/budget_goal.json`): 단일 amount + target_date.

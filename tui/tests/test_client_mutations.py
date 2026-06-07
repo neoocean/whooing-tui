@@ -143,35 +143,96 @@ async def test_delete_entry_delegates_to_official_mcp():
 
 
 @respx.mock
-async def test_delete_entry_falls_back_to_rest_when_mcp_fails():
-    """MCP 가 JSON-RPC error 반환 → 본 메서드는 REST DELETE fallback 시도."""
-    # MCP 첫 호출 — JSON-RPC error 반환.
+async def test_delete_entry_verifies_deletion_on_mcp_error():
+    """CL #53110+: 공식 MCP 가 isError 를 반환해도 entry_date 로 재조회해
+    실제 삭제됐으면 성공(idempotent) 처리.
+
+    배경 (사용자 보고 2026-05-30): 65건 일괄 삭제 중 23건이 서버 부하로
+    *삭제는 적용됐는데* isError("delete failed") 를 반환 → 과거엔 REST
+    fallback 이 'section_id required' 로 가려 오삭제 실패 + 캐시 desync.
+    """
+    # MCP delete — isError 반환 (삭제는 됐다고 가정).
     respx.post("https://whooing.com/mcp").mock(
         return_value=Response(
             200,
             json={
                 "jsonrpc": "2.0",
                 "id": 1,
-                "error": {"code": -32601, "message": "Method not found"},
+                "result": {
+                    "isError": True,
+                    "content": [{"type": "text", "text": "delete failed"}],
+                },
             },
         )
     )
-    # REST DELETE fallback — 정상 응답.
-    delete_route = respx.delete(
-        "https://whooing.com/api/entries/e1.json",
-    ).mock(
-        return_value=Response(200, json={"code": 200, "results": {}})
+    # 검증용 재조회 — 해당 일자에 e1 없음 (= 실제 삭제됨).
+    list_route = respx.get("https://whooing.com/api/entries.json").mock(
+        return_value=Response(
+            200,
+            json={"code": 200, "results": {"reports": [], "rows": [
+                {"entry_id": "other", "entry_date": "20260101.0000", "money": 1},
+            ]}},
+        )
     )
     c = _client()
-    out = await c.delete_entry(section_id="s1", entry_id="e1")
-    assert isinstance(out, dict)
-    # REST DELETE 도 호출됨 (fallback path).
-    assert delete_route.call_count == 1
-    req = delete_route.calls[0].request
-    assert req.method == "DELETE"
-    assert b"section_id=s1" in req.url.query
-    # form-body 도 함께.
-    assert b"section_id=s1" in req.content
+    out = await c.delete_entry(
+        section_id="s1", entry_id="e1", entry_date="20260101",
+    )
+    assert out.get("verified_deleted") is True
+    assert list_route.call_count >= 1
+
+
+@respx.mock
+async def test_delete_entry_raises_when_still_present():
+    """MCP 오류 + 재조회 시 entry 가 여전히 존재 → DELETE_FAILED raise
+    (실제 미삭제를 성공으로 오판하지 않음)."""
+    respx.post("https://whooing.com/mcp").mock(
+        return_value=Response(
+            200,
+            json={
+                "jsonrpc": "2.0",
+                "id": 1,
+                "result": {
+                    "isError": True,
+                    "content": [{"type": "text", "text": "delete failed"}],
+                },
+            },
+        )
+    )
+    respx.get("https://whooing.com/api/entries.json").mock(
+        return_value=Response(
+            200,
+            json={"code": 200, "results": {"reports": [], "rows": [
+                {"entry_id": "e1", "entry_date": "20260101.0000", "money": 1},
+            ]}},
+        )
+    )
+    c = _client()
+    with pytest.raises(ToolError) as ei:
+        await c.delete_entry(
+            section_id="s1", entry_id="e1", entry_date="20260101",
+        )
+    assert ei.value.kind == "DELETE_FAILED"
+
+
+@respx.mock
+async def test_delete_entry_mcp_error_without_date_raises():
+    """entry_date 미제공 + MCP 오류 → 검증 불가 → DELETE_FAILED (REST
+    fallback 으로 'section_id required' 마스킹하지 않음)."""
+    respx.post("https://whooing.com/mcp").mock(
+        return_value=Response(
+            200,
+            json={
+                "jsonrpc": "2.0",
+                "id": 1,
+                "error": {"code": -32601, "message": "boom"},
+            },
+        )
+    )
+    c = _client()
+    with pytest.raises(ToolError) as ei:
+        await c.delete_entry(section_id="s1", entry_id="e1")
+    assert ei.value.kind == "DELETE_FAILED"
 
 
 @respx.mock

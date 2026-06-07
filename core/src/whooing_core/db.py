@@ -1,4 +1,4 @@
-﻿"""SQLite schema + 연결 helper — annotations / hashtags / entry_attachments /
+"""SQLite schema + 연결 helper — annotations / hashtags / entry_attachments /
 statement_import_log.
 
 소유 정책 (DESIGN §4):

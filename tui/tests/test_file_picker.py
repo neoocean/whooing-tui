@@ -1,4 +1,4 @@
-﻿"""FilePickerScreen — 디렉터리 navigation + 파일 선택 modal.
+"""FilePickerScreen — 디렉터리 navigation + 파일 선택 modal.
 
 CL #51139+ (A7).
 """

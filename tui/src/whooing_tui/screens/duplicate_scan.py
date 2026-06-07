@@ -722,12 +722,23 @@ class DuplicateScanScreen(ModalScreen[bool]):
     async def _delete_via_client(
         self, entry_ids: list[str],
     ) -> tuple[int, list[str]]:
+        # CL #53110+: entry_date 를 함께 넘겨 delete_entry 가 오류 시 실제
+        # 삭제 여부를 검증(idempotent)하게 한다 — 공식 MCP 가 삭제를 적용한
+        # 뒤에도 isError 를 반환하는 사례에서 '오삭제 실패' 오보고 방지.
+        date_by_id: dict[str, str] = {}
+        cluster = self._clusters[self._idx] if self._clusters else None
+        for e in getattr(cluster, "entries", ()) or ():
+            eid = str(e.get("entry_id") or "")
+            if eid:
+                date_by_id[eid] = str(e.get("entry_date") or "")
         deleted = 0
         failed: list[str] = []
         for eid in entry_ids:
             try:
                 await self._client.delete_entry(
-                    section_id=self._session.section_id, entry_id=eid,
+                    section_id=self._session.section_id,
+                    entry_id=eid,
+                    entry_date=date_by_id.get(eid) or None,
                 )
                 deleted += 1
             except ToolError as e:

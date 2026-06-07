@@ -1,4 +1,4 @@
-﻿"""BudgetEditScreen — 예산 입력/관리 (지출 / 수입 항목별 amount).
+"""BudgetEditScreen — 예산 입력/관리 (지출 / 수입 항목별 amount).
 
 CL #51153+. 후잉 budget endpoint 의 *조회* 는 알려져 있고 (`/budget/<account>.json`
 GET), *setter* 는 같은 path POST 로 추정. 라이브 검증 시 실패하면 status

@@ -1,4 +1,4 @@
-﻿"""풀다운 메뉴바 — Header 아래 항상 노출 + F10 진입.
+"""풀다운 메뉴바 — Header 아래 항상 노출 + F10 진입.
 
 CL #51126+. 사용자 요청:
 > 기존 보고서 등 여러 기능이 추가될 예정이기 때문에 tui 앱의 전통을 따라
@@ -153,10 +153,19 @@ class MenuPopup(ModalScreen[tuple[int, str] | str | None]):
     """단일 메뉴의 항목 popup. dismiss 값:
 
     - `("nav", "left")` / `("nav", "right")` — 사용자가 ←/→ 로 다른 메뉴 요청.
+    - `("switch", index)` — 사용자가 메뉴바의 *다른* 메뉴를 클릭 → 그 메뉴로
+      전환 요청 (CL: 풀다운 외부 클릭 동작).
     - `str` — 선택된 `action_id`.
-    - `None` — Esc 로 취소.
+    - `None` — Esc / 메뉴 바깥 영역 클릭으로 취소.
 
     화면 (caller) 은 dismiss 값을 보고 다음 popup 을 push 하거나 액션 dispatch.
+
+    마우스 동작 (CL): ModalScreen 이 모든 마우스 이벤트를 가로채므로 본
+    popup 의 `on_click` 이 직접 분기한다 —
+      * 드롭다운 박스 *안* 클릭 → 무시 (OptionList 가 항목 선택 처리).
+      * 메뉴바 행의 *다른* 메뉴 이름 클릭 → `("switch", idx)` 로 dismiss
+        (같은 메뉴면 닫기 토글).
+      * 그 외 *바깥* 영역 클릭 → `None` 으로 dismiss (닫기).
     """
 
     BINDINGS = [
@@ -205,10 +214,19 @@ class MenuPopup(ModalScreen[tuple[int, str] | str | None]):
         spec: MenuSpec,
         *,
         margin_left: int = 2,
+        menus: "tuple[MenuSpec, ...] | None" = None,
+        menu_index: int = 0,
+        bar_region: "Region | None" = None,
     ) -> None:
         super().__init__()
         self.spec = spec
         self._margin_left = margin_left
+        # CL: 메뉴바 다른 메뉴 클릭 → 전환을 위해 caller 가 전체 menus 와
+        # 현재 index, MenuBar 위젯의 절대 region 을 넘긴다 (없으면 전환 비활성,
+        # 바깥 클릭 닫기만 동작).
+        self._menus = menus
+        self._menu_index = menu_index
+        self._bar_region = bar_region
 
     def compose(self) -> ComposeResult:
         with Container(id="menupopup_box"):
@@ -254,6 +272,40 @@ class MenuPopup(ModalScreen[tuple[int, str] | str | None]):
 
     def action_nav_right(self) -> None:
         self.dismiss(("nav", "right"))
+
+    def on_click(self, event: events.Click) -> None:
+        """CL: 풀다운 바깥 영역 클릭 → 닫기 / 메뉴바 다른 메뉴 클릭 → 전환.
+
+        ModalScreen 이 모든 클릭을 가로채므로 여기서 직접 분기한다. 좌표는
+        절대(screen) 기준 — `event.screen_x/screen_y`.
+        """
+        try:
+            box = self.query_one("#menupopup_box")
+        except Exception:  # pragma: no cover — compose 직후 등
+            return
+        sx, sy = event.screen_x, event.screen_y
+
+        # 1) 박스 안 클릭 → 관여 안 함. OptionList 가 항목 선택을 처리하고,
+        #    제목/테두리/여백 클릭은 메뉴를 닫지 않는다.
+        if box.region.contains(sx, sy):
+            return
+
+        # 2) 메뉴바 행의 다른 메뉴 이름 클릭 → 그 메뉴로 전환 (같은 메뉴면 닫기).
+        if self._menus and self._bar_region is not None:
+            r = self._bar_region
+            if r.y <= sy < r.y + r.height and r.x <= sx < r.x + r.width:
+                idx = menubar_index_at_offset(sx - r.x, self._menus)
+                if idx is not None:
+                    event.stop()
+                    if idx == self._menu_index:
+                        self.dismiss(None)
+                    else:
+                        self.dismiss(("switch", idx))
+                    return
+
+        # 3) 그 외 바깥 영역 클릭 → 닫기.
+        event.stop()
+        self.dismiss(None)
 
 
 def _menu_display_width(name: str) -> int:
@@ -442,7 +494,13 @@ class MenuBarMixin:
                 bar.set_active(idx)
             offset = menubar_left_offset_for(idx, menus)
             result = await self.app.push_screen_wait(  # type: ignore[attr-defined]
-                MenuPopup(menus[idx], margin_left=offset),
+                MenuPopup(
+                    menus[idx],
+                    margin_left=offset,
+                    menus=menus,
+                    menu_index=idx,
+                    bar_region=(bar.region if bar is not None else None),
+                ),
             )
             if result is None:
                 return
@@ -452,6 +510,10 @@ class MenuBarMixin:
                     idx = (idx - 1) % len(menus)
                 elif direction == "right":
                     idx = (idx + 1) % len(menus)
+                continue
+            # CL: 메뉴바의 다른 메뉴 클릭 → 그 메뉴로 전환.
+            if isinstance(result, tuple) and result[:1] == ("switch",):
+                idx = int(result[1]) % len(menus)
                 continue
             if isinstance(result, str):
                 self._dispatch_menu_action(result)

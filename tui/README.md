@@ -4,10 +4,13 @@
 다루기 위한 Textual TUI. 본 패키지는 monorepo 의 `tui/` 서브디렉토리이며,
 같은 monorepo 의 [`core/`](../core) (whooing-core 라이브러리) 를 import 한다.
 
-> **자매 도구 정리 (2026-05-10)** — 본래 같은 후잉 REST API 를 공유하던
-> [`whooing-mcp-server-wrapper`](../mcp) 는 archived. 코드는 monorepo 의
-> [`mcp/`](../mcp) 에 보존되며, TUI 의 `mcp_bridge.py` 가 그 `OfficialMcpClient`
-> 를 한정적으로 호출 (deprecated, 후속 정리 예정).
+> **자매 도구 정리** — 본래 같은 후잉 REST API 를 공유하던
+> `whooing-mcp-server-wrapper` 는 2026-05-10 archived 됐고, **CL #52846
+> (0.71.0) 에서 `mcp/` 패키지 자체가 monorepo 에서 제거**됐다. 함께 있던
+> `mcp_bridge.py` 도 제거됨 — 현재 코드베이스는 `core/` + `tui/` 두 패키지
+> 뿐. 보고서/통계의 공식 후잉 MCP 위임은 wrapper 와 무관하게 `tui/` 자체
+> 컴포넌트 [`official_mcp.py`](src/whooing_tui/official_mcp.py) (minimal
+> JSON-RPC client) 가 전담한다.
 
 **현재 0.63.0 (CL #52784, 2026-05-18)** — Phase 1~7 + 다음 누적 변경.
 

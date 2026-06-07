@@ -5,6 +5,47 @@
 > **0.17.x 이전** (CL #51119 ~ #1) 항목은 분량 정리 차원에서
 > [`CHANGELOG-archive-0.17.md`](./CHANGELOG-archive-0.17.md) 로 분리 보존.
 
+## CL #56830 — 0.80.0 — 매월입력 등록 modal AccountPicker 통합 + worker race 수정 (2026-06-06)
+
+백로그 항목 **C13** (`docs/MAINTAINABILITY-REVIEW.md` / 코드 내 TODO) 적용.
+
+### 1. AccountPicker 통합 (`screens/monthly_entries.py`)
+
+기존 `_MonthlyEditModal` (매월입력 신규 등록 modal) 은 차변/대변 계정을
+사용자가 `x20` / `expenses` 같은 raw `account_id` + type 문자열을 4개의
+`Input` 에 *직접 타이핑* 하게 했다 — account_id 를 외워야 하고 오타 시
+조용히 실패. EntryEditDialog 의 거래 입력 폼은 이미 `AccountPickerScreen`
+(카테고리 트리 선택) 을 쓰는데 매월입력만 뒤처져 있었다.
+
+- raw 입력 4개 (`me-l-id` / `me-l-type` / `me-r-id` / `me-r-type`) +
+  안내 TODO 라벨 제거.
+- EntryEditDialog 와 동일한 `_AccountButton` (edit_entry.py 재사용) 2개
+  (`me-left` / `me-right`) 로 교체. Enter / 클릭 → `AccountPickerScreen`
+  push → 선택 결과로 버튼 라벨 + account_id/type 갱신. `_open_account_picker`
+  는 EntryEditDialog 와 같은 콜백 패턴.
+- `action_save` 는 버튼의 `account_id` / `type_key` 를 읽어 draft 구성.
+  계정 미선택 시 저장 거부.
+
+### 2. worker exclusive group race 수정 (CLAUDE.md 함정 #3)
+
+종전엔 `_refresh_worker` / `_new_worker` / `_delete_worker` 가 모두
+`group="monthly"` (exclusive). 그래서 `on_mount` 의 refresh 가 in-flight
+인 동안 사용자가 `n` 을 눌러 modal 을 열면, 이후 늦게 시작된 refresh 가
+`push_screen_wait` 로 modal 을 await 중이던 `_new_worker` 를 *cancel* —
+modal 은 정상 dismiss 되지만 worker 가 죽어 **사용자의 저장(create)이
+조용히 유실**됐다. (delete 도 동일 위험.)
+
+- group 을 `monthly-refresh` / `monthly-new` / `monthly-delete` 로 분리.
+  같은 group 내 중복 호출 (rapid r / rapid n) 만 자동 cancel 하고,
+  refresh 가 사용자 다이얼로그 worker 를 죽이지 못하게 한다.
+
+### 테스트
+
+`tui/tests/test_monthly_entries.py` — picker 통한 신규 등록 성공 경로 +
+계정 미선택 시 저장 거부 회귀 2건 추가. `_pump_until` (pilot.pause 기반)
+helper 로 worker push_screen_wait 전이를 안정적으로 대기 (이 race 가
+재현되는 정확한 타이밍). 전체 1132 통과 (0 regression).
+
 ## CL #53093 — 0.79.0 — P4 자동 submit 정책 — 매 mutation → 세션 종료 묶음 (2026-05-19)
 
 배경 (사용자 요청, 2026-05-19): "지금은 매 수정마다 데이터베이스를 서브밋

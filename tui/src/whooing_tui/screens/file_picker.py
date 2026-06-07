@@ -1,4 +1,4 @@
-﻿"""FilePickerScreen — 디렉터리 navigation + 파일 선택 modal.
+"""FilePickerScreen — 디렉터리 navigation + 파일 선택 modal.
 
 CL #51139+ (A7). 종전엔 첨부 / 명세서 import 의 파일 경로 입력이 절대 경로
 텍스트만 — 사용자가 매번 path 외워야 했음. 본 picker 가:

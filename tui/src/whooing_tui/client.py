@@ -505,22 +505,32 @@ class WhooingClient:
         )
         return _coerce_dict(results)
 
-    async def delete_entry(self, *, section_id: str, entry_id: str) -> dict[str, Any]:
+    async def delete_entry(
+        self,
+        *,
+        section_id: str,
+        entry_id: str,
+        entry_date: str | None = None,
+    ) -> dict[str, Any]:
         """거래 영구 삭제. 후잉은 soft-delete 가 아니므로 복구 불가.
 
-        구현 정책 (CL #53015+ — 사용자 보고 2026-05-19 *2회 재발*):
-        후잉 REST `DELETE /entries/{id}.json` 가 section_id 를 어떤 방식
-        (query / form body / 양쪽) 으로 보내도 "`section_id` parameter is
-        required." 로 거절. CL #52979 의 form-body 추가 시도도 실서버에서
-        실패 (httpx 가 정확히 body 를 보내는 건 unit-test 로 검증됐으나
-        server 가 DELETE body 를 안 읽는 듯).
+        구현 정책 (CL #53015+): 후잉 REST `DELETE /entries/{id}.json` 가
+        section_id 를 어떤 방식 (query / form body / 양쪽) 으로 보내도
+        "`section_id` parameter is required." 로 거절하므로, 공식 후잉 MCP
+        server (`tools/call` → `entries-delete`) 로 위임한다.
 
-        **→ 본 메서드는 공식 후잉 MCP server (`tools/call` →
-        `entries-delete`) 로 위임.** 보고서 / 통계 endpoint (CL #52755+)
-        와 동일 정책. MCP server 는 같은 동작을 안정적으로 처리한다.
+        CL #53110+ (사용자 보고 2026-05-30, 65건 일괄 삭제 중 23건 재현):
+        공식 MCP 가 서버 부하 시 *삭제를 실제로 적용하고도* `isError`
+        ("delete failed") 를 반환하는 사례 관측. 과거의 REST DELETE fallback
+        은 실서버가 DELETE body 의 section_id 를 안 읽어 *항상* 실패했고 →
+        (a) 원 오류를 "section_id required" 로 가려 진단을 방해하고,
+        (b) *이미 삭제된* 거래를 '실패' 로 오보고해 호출자(중복 정리 등)의
+        캐시와 desync 시켰다.
 
-        MCP 호출이 실패하면 (네트워크 일시 장애 / 토큰 만료 등) REST
-        DELETE 를 fallback 으로 시도 — 정상 동작 환경 확보 + 단일 보호.
+        → REST fallback 제거. 대신 `entry_date` 가 주어지면 그 일자를
+        재조회해 실제 삭제 여부를 확인하고, 사라졌으면 idempotent 하게 성공
+        처리한다. 확인 불가 (날짜 미제공 / 조회 실패 / 여전히 존재) 면
+        `ToolError("DELETE_FAILED", ...)` 로 raise (원 MCP 오류 메시지 포함).
         """
         from whooing_tui.official_mcp import OfficialMcpError
         try:
@@ -530,18 +540,42 @@ class WhooingClient:
             )
             return _coerce_dict(results)
         except OfficialMcpError as e:
-            log.warning(
-                "delete_entry via official MCP failed (%s) — REST fallback",
-                e,
-            )
-            # Fallback — 적어도 한 번 더 시도. 본 서버가 form-body 를 안 읽으면
-            # 여전히 같은 에러 — 사용자에게 MCP 오류 진단 정보로 활용.
-            results = await self._delete(
-                self._entry_path(entry_id),
-                params={"section_id": section_id},
-                form_data={"section_id": section_id},
-            )
-            return _coerce_dict(results)
+            if entry_date is not None and await self._entry_absent(
+                section_id, entry_id, entry_date,
+            ):
+                log.warning(
+                    "delete_entry: 공식 MCP 가 오류(%s) 반환했으나 entry %s "
+                    "는 서버에서 실제 삭제 확인됨 — 성공 처리 (idempotent).",
+                    e, entry_id,
+                )
+                return {
+                    "status": "ok",
+                    "entry_id": entry_id,
+                    "verified_deleted": True,
+                }
+            raise ToolError(
+                "DELETE_FAILED",
+                f"거래 삭제 실패 (entry_id={entry_id}): {e}",
+            ) from e
+
+    async def _entry_absent(
+        self, section_id: str, entry_id: str, entry_date: str,
+    ) -> bool:
+        """`entry_id` 가 `entry_date` 일자 ledger 에 더 이상 없는지 — 삭제 검증.
+
+        공식 MCP delete 가 오류를 반환해도 실제로는 삭제됐을 수 있어 (서버
+        부하 시 관측) 해당 날짜를 재조회해 idempotent 판정. 조회 실패 시
+        '없음' 을 단정할 수 없으므로 False (삭제 미확인) 반환.
+        """
+        day = str(entry_date)[:8]
+        try:
+            rows = await self.list_entries(section_id, day, day)
+        except Exception:  # noqa: BLE001 — 검증 실패는 '미확인' 으로 둔다.
+            log.debug("delete 검증용 list_entries 실패", exc_info=True)
+            return False
+        return not any(
+            str(r.get("entry_id")) == str(entry_id) for r in rows
+        )
 
     # ---- accounts CRUD ---------------------------------------------------
     #

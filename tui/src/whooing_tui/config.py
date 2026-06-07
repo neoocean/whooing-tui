@@ -24,6 +24,8 @@ import tomllib
 from dataclasses import dataclass
 from pathlib import Path
 
+from whooing_tui import constants as C
+
 log = logging.getLogger(__name__)
 
 
@@ -31,7 +33,8 @@ log = logging.getLogger(__name__)
 class Config:
     theme: str = "textual-dark"
     entries_page_size: int = 50
-    default_window_days: int = 30
+    # 단일 출처: constants.DEFAULT_WINDOW_DAYS. config 가 override 안 하면 본 값.
+    default_window_days: int = C.DEFAULT_WINDOW_DAYS
     # 캐시 옵션 — `[cache]` 섹션. 기본 ON, TTL 은 cache.py 기본값.
     cache_enabled: bool = True
     cache_accounts_ttl_sec: int = 3600
@@ -45,7 +48,8 @@ class Config:
         return cls(
             theme=str(ui.get("theme") or "textual-dark"),
             entries_page_size=int(ui.get("entries_page_size") or 50),
-            default_window_days=int(en.get("default_window_days") or 30),
+            default_window_days=int(
+                en.get("default_window_days") or C.DEFAULT_WINDOW_DAYS),
             cache_enabled=bool(ca.get("enabled", True)),
             cache_accounts_ttl_sec=int(ca.get("accounts_ttl_sec") or 3600),
             cache_entries_ttl_sec=int(ca.get("entries_ttl_sec") or 300),

@@ -1,4 +1,4 @@
-﻿"""TagManagementScreen — 해시태그 일괄 관리 (rename / merge / delete).
+"""TagManagementScreen — 해시태그 일괄 관리 (rename / merge / delete).
 
 CL #51135+ (H5). 누적 사용 시 가장 큰 마찰 — 오타 수정 한 건마다 entry 를
 하나씩 edit dialog 로 열어야 했음. 본 화면이 일괄 도구.

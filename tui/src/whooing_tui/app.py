@@ -365,6 +365,11 @@ class WhooingTuiApp(App):
     TITLE = "whooing-tui"
     SUB_TITLE = f"Whooing 가계부 — v{__version__}"
 
+    # Textual 기본 명령 팔레트 (Ctrl+P) 비활성화 — Footer 우측 "^p palette"
+    # 항목 제거. 본 앱은 F10 메뉴 / 자체 단축키로 모든 기능을 제공하므로
+    # 팔레트가 불필요하고, 모바일 SSH 에서 화면 폭만 차지한다 (사용자 요청).
+    ENABLE_COMMAND_PALETTE = False
+
     # CL #52720+: 단축키는 IME (한글 두벌식) 켜진 상태에서도 동작해야 한다.
     # `bind_ko` 가 영문 + 한글 자모 (`q`/`ㅂ`, `t`/`ㅅ`) 양쪽 binding 을 생성.
     # CL #52761+: q / ㅂ 의 action 을 `quit` 에서 `graceful_quit` 으로 —
