@@ -268,9 +268,10 @@ async def test_update_persists_memo_and_tags_to_local_sqlite():
 
 
 @pytest.mark.asyncio
-async def test_delete_purges_local_annotation_and_tags():
-    """CL #51076+: 거래 삭제 시 로컬 annotation/해시태그도 함께 정리.
-    CL #51132+ (A1): 첨부 row + 디스크 파일도 함께 정리 — orphan 방지.
+async def test_soft_delete_preserves_local_and_records_trash():
+    """시나리오 11(안 B): 삭제는 소프트삭제 — 후잉에선 실제 삭제하되 로컬
+    annotation/해시태그/첨부는 *보존*(복원 대비)하고 휴지통(entry_revisions)
+    에 op=delete 로 기록한다. (종전 CL #51076/#51132 의 즉시 purge 동작을 대체.)
     """
     from whooing_core import attachments as core_attach
     from whooing_core import db as core_db
@@ -316,13 +317,17 @@ async def test_delete_purges_local_annotation_and_tags():
             lambda: app.screen.query_one("#entries-table", DataTable).row_count == 0,
             timeout=2.0,
         )
-        # annotation + tag + 첨부 row + 디스크 파일 모두 정리.
+        # 소프트삭제: annotation + tag + 첨부 row + 디스크 파일 모두 *보존*.
         with tui_data.open_ro() as conn:
             info = core_db.get_annotations_for(conn, ["e1"])
             attach = core_attach.list_attachments_for(conn, ["e1"])
-        assert info == {}
-        assert attach == {}
-        assert not copied.exists()
+        assert info["e1"]["note"] == "기존메모"
+        assert info["e1"]["hashtags"] == ["삭제전"]
+        assert attach.get("e1")
+        assert copied.exists()
+        # 휴지통(entry_revisions)에 op=delete 로 기록되어 복원 가능.
+        deleted = es._rev_repo.list_deleted("s1")
+        assert [d["logical_id"] for d in deleted] == ["e1"]
 
 
 @pytest.mark.asyncio

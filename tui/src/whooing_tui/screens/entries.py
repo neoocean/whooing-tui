@@ -194,6 +194,8 @@ class EntriesScreen(MenuBarMixin, Screen):
         # CL #52763+: 'm' / 'ㅡ' — 선택 거래의 context menu (수정/삭제/첨부).
         # 사용자 요청: m 으로 메뉴 열어서 삭제 가능하게.
         *bind_ko("m", "show_context_menu", "Menu", show=True, priority=True),
+        # 시나리오 11: 'H' — 선택 거래의 수정 이력 + 되돌리기. (Shift 라 IME 무관)
+        Binding("H", "show_history", "History", show=True, priority=True),
         *bind_ko("r", "refresh", "Refresh", show=True, priority=True),
         *bind_ko("c", "clear_filter", "Clear", show=True, priority=True),
         Binding("left", "prev_column", "←", show=False, priority=True),
@@ -287,6 +289,7 @@ class EntriesScreen(MenuBarMixin, Screen):
                     MenuItem("보고서 / 통계 (t)", "open_reports"),
                     MenuItem("선택 거래 첨부 (f)", "open_attachments"),
                     MenuItem("해시태그 관리…", "open_tag_management"),
+                    MenuItem("휴지통 (삭제 거래 복원)…", "open_trash"),
                     MenuItem("예산 편집…", "open_budget_edit"),
                     MenuItem("목표 편집…", "open_goal_edit"),
                 ),
@@ -881,6 +884,57 @@ class EntriesScreen(MenuBarMixin, Screen):
 
         self.app.push_screen(
             ReportsScreen(client=self._client, session=session),
+        )
+
+    def action_open_trash(self) -> None:
+        """화면 메뉴 → 휴지통 (시나리오 11). 소프트삭제 거래 복원/영구삭제."""
+        from whooing_tui.screens.trash import TrashScreen
+        session = self.app.session  # type: ignore[attr-defined]
+        deleted = self._rev_repo.list_deleted(session.section_id)
+        if not deleted:
+            self.set_status("휴지통이 비어 있습니다.")
+            return
+
+        def _on_close(result: Any) -> None:
+            if not result or isinstance(result, str):
+                return
+            action, lid = result
+            if action == "restore":
+                self._restore_logical(lid)
+            elif action == "purge":
+                self._confirm_purge_logical(lid)
+
+        self.app.push_screen(TrashScreen(deleted), _on_close)
+
+    def action_show_history(self) -> None:
+        """선택 거래의 수정 이력 + 되돌리기 (H / context menu — 시나리오 11)."""
+        from whooing_tui.screens.revision_history import RevisionHistoryScreen
+        target = self._selected_entry()
+        if target is None:
+            self.set_status("선택된 거래가 없습니다.", error=True)
+            return
+        eid = str(target.get("entry_id") or "")
+        if not eid:
+            self.set_status("이 거래에는 entry_id 가 없습니다.", error=True)
+            return
+        lid = self._rev_repo.logical_for_entry(eid)
+        revs = self._rev_repo.revisions_for(lid) if lid else []
+        if not lid or not revs:
+            self.set_status(
+                "이 거래의 수정 이력이 없습니다 (이후 수정/삭제부터 기록됩니다).",
+                warn=True,
+            )
+            return
+
+        def _on_close(result: Any) -> None:
+            if not result or isinstance(result, str):
+                return
+            action, rev_no = result
+            if action == "revert":
+                self._revert_to(lid, int(rev_no))
+
+        self.app.push_screen(
+            RevisionHistoryScreen(revs, logical_id=lid), _on_close,
         )
 
     # ---- CL #51145+ (H6) multi-select + batch tagging ------------------
@@ -2511,6 +2565,7 @@ class EntriesScreen(MenuBarMixin, Screen):
         items: list[MenuItem] = [
             MenuItem(label="수정 (e)", action_id="edit_entry"),
             MenuItem(label="삭제 (d)", action_id="delete_entry"),
+            MenuItem(label="수정 이력 (H)", action_id="show_history"),
             MenuItem(label="첨부 (f)", action_id="open_attachments"),
             MenuItem(label="새 거래 (n)", action_id="new_entry"),
         ]
@@ -2703,6 +2758,161 @@ class EntriesScreen(MenuBarMixin, Screen):
         # annotation/태그/첨부는 purge 하지 않는다 — 복원 대비 보존.
         self._rev_repo.record_delete(entry=target, section_id=session.section_id)
         self.set_status(f"거래 {eid} 삭제됨 — 휴지통에서 복원 가능. 재로드 중…")
+        self.refresh_entries()
+
+    # ---- 시나리오 11: 복원 / 되돌리기 / 영구삭제 워커 -----------------
+
+    def _types_from_snapshot(self, snap: dict[str, Any]) -> tuple[str, str]:
+        """스냅샷의 l_account/r_account(계정 type 문자열). 비어 있으면 session
+        accounts 로 보정."""
+        l_type = snap.get("l_account") or self._account_type(
+            snap.get("l_account_id") or ""
+        )
+        r_type = snap.get("r_account") or self._account_type(
+            snap.get("r_account_id") or ""
+        )
+        return l_type, r_type
+
+    @staticmethod
+    def _last_whooing_id(revs: list[dict[str, Any]]) -> str | None:
+        for r in reversed(revs):
+            if r.get("whooing_entry_id"):
+                return str(r["whooing_entry_id"])
+        return None
+
+    @work(exclusive=True, group="mutate", name="restore_entry")
+    async def _restore_logical(self, logical_id: str) -> None:
+        session = self.app.session  # type: ignore[attr-defined]
+        revs = self._rev_repo.revisions_for(logical_id)
+        if not revs:
+            self.set_status("복원할 이력을 찾지 못했습니다.", error=True)
+            return
+        snap = revs[-1]  # 마지막(삭제 시점) 스냅샷.
+        old_id = self._last_whooing_id(revs)
+        l_type, r_type = self._types_from_snapshot(snap)
+        try:
+            response = await self._client.create_entry(
+                section_id=session.section_id,
+                l_account=l_type, l_account_id=snap.get("l_account_id"),
+                r_account=r_type, r_account_id=snap.get("r_account_id"),
+                money=snap.get("money"), item=snap.get("item"),
+                memo=snap.get("memo"), entry_date=snap.get("entry_date"),
+            )
+        except Exception as e:  # noqa: BLE001
+            self.set_status(f"복원 실패: {e}", error=True)
+            return
+        new_eid = self._extract_entry_id(response)
+        if not new_eid:
+            self.set_status("복원됨(새 id 회수 실패) — 재로드.", warn=True)
+            self.refresh_entries()
+            return
+        self._rev_repo.record_restore(
+            logical_id=logical_id,
+            new_entry={**snap, "entry_id": new_eid},
+            section_id=session.section_id,
+            reverted_from=snap.get("revision_no"),
+        )
+        if old_id:
+            self._repo.migrate_local(
+                old_entry_id=old_id, new_entry_id=new_eid,
+                section_id=session.section_id,
+            )
+        self.set_status(f"복원 완료 — 새 거래 {new_eid}. 재로드 중…")
+        self.refresh_entries()
+
+    @work(exclusive=True, group="mutate", name="revert_entry")
+    async def _revert_to(self, logical_id: str, revision_no: int) -> None:
+        session = self.app.session  # type: ignore[attr-defined]
+        head = self._rev_repo.head(logical_id)
+        revs = self._rev_repo.revisions_for(logical_id)
+        target_rev = next(
+            (r for r in revs if r.get("revision_no") == revision_no), None
+        )
+        if not head or target_rev is None:
+            self.set_status("되돌릴 버전을 찾지 못했습니다.", error=True)
+            return
+        l_type, r_type = self._types_from_snapshot(target_rev)
+        cur_id = head.get("current_entry_id")
+        if head.get("is_deleted") or not cur_id:
+            # 현재 삭제 상태 → 그 버전 값으로 재생성.
+            try:
+                response = await self._client.create_entry(
+                    section_id=session.section_id,
+                    l_account=l_type, l_account_id=target_rev.get("l_account_id"),
+                    r_account=r_type, r_account_id=target_rev.get("r_account_id"),
+                    money=target_rev.get("money"), item=target_rev.get("item"),
+                    memo=target_rev.get("memo"),
+                    entry_date=target_rev.get("entry_date"),
+                )
+            except Exception as e:  # noqa: BLE001
+                self.set_status(f"되돌리기(재생성) 실패: {e}", error=True)
+                return
+            new_eid = self._extract_entry_id(response)
+            if not new_eid:
+                self.set_status("되돌림(새 id 회수 실패) — 재로드.", warn=True)
+                self.refresh_entries()
+                return
+            self._rev_repo.record_restore(
+                logical_id=logical_id,
+                new_entry={**target_rev, "entry_id": new_eid},
+                section_id=session.section_id, reverted_from=revision_no,
+            )
+            old_id = self._last_whooing_id(revs)
+            if old_id:
+                self._repo.migrate_local(
+                    old_entry_id=old_id, new_entry_id=new_eid,
+                    section_id=session.section_id,
+                )
+            self.set_status(
+                f"v{revision_no} 으로 되돌림(재생성 {new_eid}). 재로드 중…"
+            )
+        else:
+            # 살아있음 → 제자리 갱신.
+            try:
+                await self._client.update_entry(
+                    section_id=session.section_id, entry_id=str(cur_id),
+                    l_account=l_type, l_account_id=target_rev.get("l_account_id"),
+                    r_account=r_type, r_account_id=target_rev.get("r_account_id"),
+                    money=target_rev.get("money"), item=target_rev.get("item"),
+                    memo=target_rev.get("memo"),
+                    entry_date=target_rev.get("entry_date"),
+                )
+            except Exception as e:  # noqa: BLE001
+                self.set_status(f"되돌리기 실패: {e}", error=True)
+                return
+            self._rev_repo.record_revert(
+                logical_id=logical_id,
+                new_entry={**target_rev, "entry_id": str(cur_id)},
+                section_id=session.section_id, reverted_from=revision_no,
+            )
+            self.set_status(f"v{revision_no} 으로 되돌림. 재로드 중…")
+        self.refresh_entries()
+
+    def _confirm_purge_logical(self, logical_id: str) -> None:
+        revs = self._rev_repo.revisions_for(logical_id)
+        snap = revs[-1] if revs else {}
+        msg = (
+            "이 거래를 영구 삭제할까요?\n\n"
+            f"  item  : {snap.get('item') or ''}\n"
+            f"  money : {_fmt_money(snap.get('money'))}\n\n"
+            "수정 이력과 첨부까지 완전히 사라지며 되돌릴 수 없습니다."
+        )
+
+        def _on_close(yes: bool | None) -> None:
+            if not yes:
+                self.set_status("영구삭제 취소됨.")
+                return
+            self._purge_logical(logical_id)
+
+        self.app.push_screen(ConfirmModal(msg, title="영구 삭제 확인"), _on_close)
+
+    def _purge_logical(self, logical_id: str) -> None:
+        revs = self._rev_repo.revisions_for(logical_id)
+        old_id = self._last_whooing_id(revs)
+        self._rev_repo.purge(logical_id)
+        if old_id:
+            self._purge_local(old_id)
+        self.set_status("영구 삭제 완료. 재로드 중…")
         self.refresh_entries()
 
     def _account_type(self, account_id: str) -> str:

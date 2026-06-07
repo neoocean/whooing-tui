@@ -169,6 +169,40 @@ class EntryRepository:
             ),
         )
 
+    def migrate_local(
+        self, *, old_entry_id: str, new_entry_id: str,
+        section_id: str | None = None,
+    ) -> None:
+        """복원(시나리오 11 안 B)으로 후잉 entry_id 가 바뀔 때, 로컬 메모/
+        해시태그/첨부를 old → new entry_id 로 재키잉. 첨부 디스크 파일은 그대로
+        (db 의 entry_id 만 갱신). write 후 P4 자동 submit.
+        """
+        if not old_entry_id or not new_entry_id or old_entry_id == new_entry_id:
+            return
+        try:
+            with tui_data.open_rw() as conn:
+                conn.execute(
+                    "UPDATE OR IGNORE entry_annotations SET entry_id = ? "
+                    "WHERE entry_id = ?", (new_entry_id, old_entry_id),
+                )
+                conn.execute(
+                    "UPDATE OR IGNORE entry_hashtags SET entry_id = ? "
+                    "WHERE entry_id = ?", (new_entry_id, old_entry_id),
+                )
+                conn.execute(
+                    "UPDATE entry_attachments SET entry_id = ? "
+                    "WHERE entry_id = ?", (new_entry_id, old_entry_id),
+                )
+        except Exception:  # pragma: no cover
+            log.exception("EntryRepository.migrate_local failed")
+            return
+        from whooing_tui import p4_sync
+        p4_sync.submit_db_to_p4(
+            tui_data.db_path(),
+            f"[whooing-tui] entry {old_entry_id}→{new_entry_id} 로컬 메타 "
+            f"재키잉 (복원)",
+        )
+
     def purge(self, entry_id: str) -> None:
         """삭제된 거래의 annotation / 해시태그 / 첨부 모두 정리.
 
