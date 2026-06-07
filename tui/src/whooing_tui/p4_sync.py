@@ -688,6 +688,30 @@ def describe_annotation(
     return f"[whooing-tui] entry {entry_id} " + "; ".join(parts)
 
 
+def describe_revision(
+    *, op: str, logical_id: str, entry_id: str | None,
+    revision_no: int | None = None, summary: str | None = None,
+) -> str:
+    """거래 수정 이력(시나리오 11) 기록의 P4 description — LLM 미관여.
+
+    예:
+      describe_revision(op="edit", logical_id="1001", entry_id="1001",
+                        revision_no=2, summary="money 30,000→27,000")
+        → "[whooing-tui] revision edit logical=1001 entry=1001 rev=2 (money 30,000→27,000)"
+      describe_revision(op="delete", logical_id="1001", entry_id=None, revision_no=3)
+        → "[whooing-tui] revision delete logical=1001 rev=3"
+    """
+    parts = [f"[whooing-tui] revision {op} logical={logical_id}"]
+    if entry_id:
+        parts.append(f"entry={entry_id}")
+    if revision_no is not None:
+        parts.append(f"rev={revision_no}")
+    line = " ".join(parts)
+    if summary:
+        line += f" ({summary})"
+    return line
+
+
 def describe_attachment_add(
     *,
     entry_id: str,

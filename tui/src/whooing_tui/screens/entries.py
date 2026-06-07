@@ -353,6 +353,9 @@ class EntriesScreen(MenuBarMixin, Screen):
         # repo 로 위임. 본 화면의 _fetch_*/_persist_local/_purge_local 은
         # 후방 호환 wrapper.
         self._repo = EntryRepository()
+        # 시나리오 11: 거래 수정 이력 + 소프트삭제(안 B) 기록.
+        from whooing_tui.revision_repo import EntryRevisionRepository
+        self._rev_repo = EntryRevisionRepository()
         cfg = load_config()
         self._window_days: int = max(1, cfg.default_window_days)
         # status 평문 보관 (테스트 친화 — HomeScreen 과 동일 컨벤션)
@@ -2462,11 +2465,13 @@ class EntriesScreen(MenuBarMixin, Screen):
             self.set_status("이 거래에는 entry_id 가 없습니다 — 수정 불가.", error=True)
             return
 
+        prev_snapshot = dict(target)  # 시나리오 11: 수정 전 상태 보존용.
+
         def _on_close(draft: EntryDraft | None) -> None:
             if draft is None:
                 self.set_status("수정 취소됨.")
                 return
-            self._submit_update(draft)
+            self._submit_update(draft, prev_snapshot)
 
         # 로컬 sqlite 의 해시태그를 prefill 해서 dialog 에 넘긴다 — annotation
         # 자체는 후잉 memo 와 동일하므로 별도 fetch 불필요. CL #51080+ 부터는
@@ -2551,13 +2556,13 @@ class EntriesScreen(MenuBarMixin, Screen):
         l_name = session.title_of(target.get("l_account_id") or "")
         r_name = session.title_of(target.get("r_account_id") or "")
         msg = (
-            f"이 거래를 영구 삭제할까요?\n\n"
+            f"이 거래를 삭제할까요?\n\n"
             f"  date  : {target.get('entry_date') or ''}\n"
             f"  money : {_fmt_money(target.get('money'))}\n"
             f"  left  : {l_name}\n"
             f"  right : {r_name}\n"
             f"  item  : {target.get('item') or ''}\n\n"
-            f"되돌릴 수 없습니다."
+            f"휴지통에 보관되어 나중에 복원할 수 있습니다."
         )
 
         def _on_close(yes: bool | None) -> None:
@@ -2610,11 +2615,25 @@ class EntriesScreen(MenuBarMixin, Screen):
                 memo=draft.memo,
                 tags=draft.tags,
             )
+        # 시나리오 11: 수정 이력 baseline (op=create) 기록.
+        if new_eid:
+            self._rev_repo.record_create(
+                entry={
+                    "entry_id": new_eid,
+                    "entry_date": draft.entry_date,
+                    "l_account": l_type, "l_account_id": draft.l_account_id,
+                    "r_account": r_type, "r_account_id": draft.r_account_id,
+                    "money": draft.money, "item": draft.item, "memo": draft.memo,
+                },
+                section_id=session.section_id,
+            )
         self.set_status("거래 생성 완료. 재로드 중…")
         self.refresh_entries()
 
     @work(exclusive=True, group="mutate", name="update_entry")
-    async def _submit_update(self, draft: EntryDraft) -> None:
+    async def _submit_update(
+        self, draft: EntryDraft, prev: dict[str, Any] | None = None,
+    ) -> None:
         session = self.app.session  # type: ignore[attr-defined]
         if not draft.entry_id:
             self.set_status("entry_id 가 없습니다 — 수정 불가.", error=True)
@@ -2647,6 +2666,19 @@ class EntriesScreen(MenuBarMixin, Screen):
             memo=draft.memo,
             tags=draft.tags,
         )
+        # 시나리오 11: 직전 상태 보존 + op=edit 버전 기록.
+        new_entry = {
+            "entry_id": str(draft.entry_id),
+            "entry_date": draft.entry_date,
+            "l_account": l_type, "l_account_id": draft.l_account_id,
+            "r_account": r_type, "r_account_id": draft.r_account_id,
+            "money": draft.money, "item": draft.item, "memo": draft.memo,
+        }
+        self._rev_repo.record_edit(
+            prev=prev or {"entry_id": str(draft.entry_id)},
+            new=new_entry,
+            section_id=session.section_id,
+        )
         self.set_status("거래 수정 완료. 재로드 중…")
         self.refresh_entries()
 
@@ -2667,10 +2699,10 @@ class EntriesScreen(MenuBarMixin, Screen):
             log.exception("delete_entry failed")
             self.set_status(f"거래 삭제 실패 (INTERNAL): {e}", error=True)
             return
-        # 로컬 db 의 annotation/해시태그도 함께 정리 — 후잉에서 사라진 거래
-        # 의 메모만 남아있을 이유가 없다.
-        self._purge_local(str(eid))
-        self.set_status(f"거래 {eid} 삭제 완료. 재로드 중…")
+        # 시나리오 11(안 B): 후잉 실삭제 *후* op=delete 버전 기록(휴지통).
+        # annotation/태그/첨부는 purge 하지 않는다 — 복원 대비 보존.
+        self._rev_repo.record_delete(entry=target, section_id=session.section_id)
+        self.set_status(f"거래 {eid} 삭제됨 — 휴지통에서 복원 가능. 재로드 중…")
         self.refresh_entries()
 
     def _account_type(self, account_id: str) -> str:
