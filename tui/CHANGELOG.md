@@ -5,6 +5,17 @@
 > **0.17.x 이전** (CL #51119 ~ #1) 항목은 분량 정리 차원에서
 > [`CHANGELOG-archive-0.17.md`](./CHANGELOG-archive-0.17.md) 로 분리 보존.
 
+## 0.82.1 — 거래 입력/수정 팝업 작은 화면 대응 (2026-06-08)
+
+- `EntryEditDialog` 가 작은 터미널에서 화면 밖으로 나가던 문제 수정. 프레임을
+  `Vertical` → `VerticalScroll` 로 바꾸고 `max-height: 95%` 부여 — 폼이 길면
+  화면 밖으로 잘리는 대신 프레임 안에서 스크롤되고, 필드 포커스 이동 시 해당
+  필드가 자동으로 보이게 스크롤된다. `form-grid` 세로 여백 축소. 짧은 폼은
+  그대로 컴팩트(height auto).
+- 통합 테스트 추가(50×18·40×14·98×30 에서 프레임이 화면 안에 들어가고 모든
+  필드+Save/Cancel 접근 가능). 스크린샷 생성기에 장면별 캔버스 크기 지원 +
+  03-edit-dialog 갱신(전체 폼 표시).
+
 ## CL #57530~ — 0.82.0 — 외부 변경 감지 + 매뉴얼/스크린샷 + 실 db v10 (2026-06-07)
 
 시나리오 11 후속. 설계: [`docs/scenarios/11-edit-history-and-soft-delete.md`](../docs/scenarios/11-edit-history-and-soft-delete.md).

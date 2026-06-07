@@ -32,7 +32,7 @@ from typing import Any
 from textual import on
 from textual.app import ComposeResult
 from textual.binding import Binding
-from textual.containers import Grid, Horizontal, Vertical
+from textual.containers import Grid, Horizontal, VerticalScroll
 from textual.screen import ModalScreen
 from textual.widgets import Button, Input, Label, Static
 
@@ -301,10 +301,16 @@ class EntryEditDialog(ModalScreen[EntryDraft | None]):
         width: 95%;
         max-width: 76;
         min-width: 30;
+        /* 작은 화면 대응: 내용이 길면 화면 밖으로 나가는 대신 프레임 자체가
+           스크롤된다 (VerticalScroll). height auto 라 짧은 폼은 그대로 컴팩트,
+           세로 95% 를 넘으면 max-height 에서 스크롤. 포커스 이동 시 해당
+           필드가 자동으로 보이게 스크롤된다. */
         height: auto;
+        max-height: 95%;
         padding: 1 2;
         border: thick $accent;
         background: $surface;
+        scrollbar-size-vertical: 1;
     }
     #dialog-title {
         height: 1;
@@ -316,7 +322,7 @@ class EntryEditDialog(ModalScreen[EntryDraft | None]):
         grid-columns: 9 1fr;
         grid-rows: 3 3 3 3 3 3 3 3;
         height: auto;
-        padding: 1 0;
+        padding: 0 0;
     }
     #form-grid Label {
         padding: 1 1 0 0;
@@ -392,7 +398,7 @@ class EntryEditDialog(ModalScreen[EntryDraft | None]):
         tags_init = " ".join(
             f"#{t}" for t in (self._existing.get("_local_tags") or [])
         )
-        with Vertical(id="dialog-frame"):
+        with VerticalScroll(id="dialog-frame"):
             yield Static(f"[bold]{title}[/bold]", id="dialog-title")
             with Grid(id="form-grid"):
                 yield Label("date")

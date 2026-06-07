@@ -206,20 +206,22 @@ async def scene_revision_history(app, pilot):
     await pilot.pause(0.3)
 
 
+# (name, desc, drive[, size]) — size 생략 시 기본 SIZE.
 SCENES = [
     ("01-entries", "거래 목록 (메인 화면)", scene_entries),
     ("02-context-menu", "거래 컨텍스트 메뉴 (m)", scene_context_menu),
-    ("03-edit-dialog", "거래 수정 폼 (e)", scene_edit_dialog),
+    # 편집 폼은 세로가 길어 전체가 보이도록 더 큰 캔버스로 렌더.
+    ("03-edit-dialog", "거래 수정 폼 (e)", scene_edit_dialog, (98, 40)),
     ("04-screen-menu", "화면 메뉴 — 휴지통 진입", scene_screen_menu),
     ("05-revision-history", "수정 이력 + 되돌리기 (H)", scene_revision_history),
     ("06-trash", "휴지통 — 삭제 거래 복원", scene_trash),
 ]
 
 
-async def _shoot(name, desc, drive):
+async def _shoot(name, desc, drive, size=SIZE):
     fake = FakeClient()
     app = WhooingTuiApp(client=fake)  # type: ignore[arg-type]
-    async with app.run_test(size=SIZE) as pilot:
+    async with app.run_test(size=size) as pilot:
         await drive(app, pilot)
         app.refresh()
         await pilot.pause(0.3)
@@ -238,9 +240,11 @@ async def _main(filt=None):
               + ", ".join(s[0] for s in SCENES))
         return 1
     print(f"스크린샷 생성 → {OUT_DIR}")
-    for name, desc, drive in todo:
+    for scene in todo:
+        name, desc, drive = scene[0], scene[1], scene[2]
+        size = scene[3] if len(scene) > 3 else SIZE
         try:
-            await _shoot(name, desc, drive)
+            await _shoot(name, desc, drive, size)
         except Exception as e:  # noqa: BLE001
             print(f"  ✗ {name}: {type(e).__name__}: {e}")
     return 0
