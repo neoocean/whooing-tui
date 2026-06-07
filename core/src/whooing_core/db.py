@@ -12,9 +12,13 @@ Schema version (CL #51155+ — review C1):
   v5 (CL #51133): + entry_hashtags.section_id 컬럼 + idx_hashtags_section.
   v6 (CL #51147): + attachment_audit_log 테이블.
   v7 (CL #51151): + tag_meta 테이블.
+  v8 (CL #52758): + entries_cache 테이블 (후잉 거래 영구 캐시).
+  v9 (CL #52989): + dupe_scan_clusters 테이블 (중복 스캔 영구화).
+  v10 (시나리오 11): + entry_revisions / entry_head — 거래 수정 이력 +
+       소프트삭제(안 B: 후잉 실삭제 + logical_id 동일성 추적) + 복원/되돌리기.
 
 `_apply_lightweight_migrations` 가 try/except 로 멱등 — 어떤 이전 버전에서
-init 해도 v7 까지 자동 적용. wrapper / 다른 도구가 `current_version()` 으로
+init 해도 최신까지 자동 적용. wrapper / 다른 도구가 `current_version()` 으로
 mismatch 감지하도록 SCHEMA_VERSION 도 동기 bump.
 """
 
@@ -29,7 +33,7 @@ from typing import Any, Iterator
 from whooing_core.dates import KST
 from datetime import datetime
 
-SCHEMA_VERSION = 9
+SCHEMA_VERSION = 10
 
 
 # ---- 연결 + schema -----------------------------------------------------
@@ -194,6 +198,76 @@ def _apply_lightweight_migrations(conn: sqlite3.Connection) -> None:
             "CREATE INDEX IF NOT EXISTS idx_dupe_scan_range "
             "ON dupe_scan_clusters(section_id, scan_range_start, "
             "scan_range_end, status)"
+        )
+    except sqlite3.OperationalError:  # pragma: no cover
+        pass
+
+    # 시나리오 11 (schema v10): 거래 수정 이력 + 소프트삭제(안 B) + 복원/되돌리기.
+    # 후잉이 버전을 모르므로 로컬 sqlite 가 이력의 system of record.
+    #
+    # entry_revisions = append-only 버전 로그. 절대 UPDATE/DELETE 안 함
+    # (영구삭제 시에만 한 logical_id 의 전체 행 purge). 한 row = 한 시점의
+    # 거래 전체 스냅샷 + op + 시각.
+    #   - logical_id: 불변 anchor. create 시점의 후잉 entry_id (삭제→복원으로
+    #     후잉 entry_id 가 바뀌어도 동일성 유지). docs/scenarios/11 참고.
+    #   - op: create|edit|delete|restore|revert|external.
+    #   - whooing_entry_id: 그 버전의 후잉 id. op=delete (안 B 실삭제) 면 NULL.
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS entry_revisions (
+            id               INTEGER PRIMARY KEY AUTOINCREMENT,
+            logical_id       TEXT    NOT NULL,
+            revision_no      INTEGER NOT NULL,
+            whooing_entry_id TEXT,
+            section_id       TEXT,
+            op               TEXT    NOT NULL,
+            entry_date       TEXT,
+            l_account        TEXT,
+            l_account_id     TEXT,
+            r_account        TEXT,
+            r_account_id     TEXT,
+            money            INTEGER,
+            item             TEXT,
+            memo             TEXT,
+            is_deleted       INTEGER NOT NULL DEFAULT 0,
+            created_at       TEXT    NOT NULL,
+            source           TEXT,
+            reverted_from    INTEGER,
+            note             TEXT,
+            UNIQUE(logical_id, revision_no)
+        )
+        """
+    )
+    # entry_head = 파생 캐시 (logical_id 당 1행) — 목록/휴지통이 O(1) 조회.
+    # entry_revisions 의 head(최대 revision_no) 상태를 비정규화 보관.
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS entry_head (
+            logical_id        TEXT PRIMARY KEY,
+            section_id        TEXT,
+            current_entry_id  TEXT,            -- 현재 후잉 id (삭제 상태면 NULL)
+            head_revision_no  INTEGER NOT NULL,
+            is_deleted        INTEGER NOT NULL DEFAULT 0,
+            updated_at        TEXT NOT NULL
+        )
+        """
+    )
+    try:
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_rev_logical "
+            "ON entry_revisions(logical_id, revision_no DESC)"
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_rev_whooing "
+            "ON entry_revisions(whooing_entry_id)"
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_head_current "
+            "ON entry_head(current_entry_id)"
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_head_deleted "
+            "ON entry_head(is_deleted, section_id)"
         )
     except sqlite3.OperationalError:  # pragma: no cover
         pass
