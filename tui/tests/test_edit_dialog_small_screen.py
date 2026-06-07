@@ -73,3 +73,15 @@ async def test_edit_dialog_fits_within_small_screen(size):
         assert frame.region.height <= app.size.height
         assert frame.region.bottom <= app.size.height
         assert frame.region.y >= 0
+
+        # 버튼이 가로로 프레임을 넘지 않는다(좁은 폭에서 Cancel 잘림 회귀 방지).
+        # 버튼이 스크롤로 가려져 있을 수 있어 먼저 보이게 한 뒤 검사.
+        save = dlg.query_one("#btn-save")
+        cancel = dlg.query_one("#btn-cancel")
+        save.scroll_visible(animate=False)
+        await pilot.pause()
+        for btn in (save, cancel):
+            assert btn.region.width > 0
+            assert btn.region.x >= frame.region.x
+            assert btn.region.right <= frame.region.right
+            assert btn.region.right <= app.size.width

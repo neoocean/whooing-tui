@@ -307,7 +307,7 @@ class EntryEditDialog(ModalScreen[EntryDraft | None]):
            필드가 자동으로 보이게 스크롤된다. */
         height: auto;
         max-height: 95%;
-        padding: 1 2;
+        padding: 1 1;
         border: thick $accent;
         background: $surface;
         scrollbar-size-vertical: 1;
@@ -329,13 +329,18 @@ class EntryEditDialog(ModalScreen[EntryDraft | None]):
         content-align: right middle;
     }
     #button-row {
-        height: 3;
+        height: auto;
         align: center middle;
         padding-top: 1;
     }
     #button-row Button {
+        /* 좁은 폭에서 두 버튼이 가용 폭을 반씩 나눠 갖게 — 종전 min-width 18
+           고정이라 좁은 화면에서 'Cancel' 이 가로로 잘렸다. 1fr 로 나누고
+           넓은 화면에선 max-width 로 cap. */
+        width: 1fr;
+        min-width: 0;
+        max-width: 24;
         margin: 0 1;
-        min-width: 18;
     }
     #form-error {
         height: auto;

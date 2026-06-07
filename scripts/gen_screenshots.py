@@ -122,8 +122,16 @@ def _fix_cjk_textlength(svg: str) -> str:
     return _TEXT_RE.sub(repl, svg)
 
 
-def _redact_svg(svg: str) -> str:
-    return _fix_cjk_textlength(_EMAIL_RE.sub("user@example.com", svg))
+def _redact_svg(svg: str, stable_id: str | None = None) -> str:
+    svg = _fix_cjk_textlength(_EMAIL_RE.sub("user@example.com", svg))
+    # Textual export 는 매번 랜덤 `terminal-<번호>` id 를 박아 재생성마다 전체
+    # 파일이 churn 된다. 장면별 고정 id 로 치환 → 실제 시각 변경만 diff.
+    if stable_id:
+        svg = _re.sub(r"terminal-\d+", f"terminal-{stable_id}", svg)
+    # 헤더 시계(HH:MM:SS) 도 매 렌더 달라져 churn → 고정값으로 정규화.
+    # (수정 이력의 타임스탬프는 HH:MM 형식이라 영향 없음.)
+    svg = _re.sub(r"\b\d{2}:\d{2}:\d{2}\b", "00:00:00", svg)
+    return svg
 
 
 # ---- 장면 운전 함수 ----------------------------------------------------
@@ -229,7 +237,7 @@ async def _shoot(name, desc, drive, size=SIZE):
     os.makedirs(OUT_DIR, exist_ok=True)
     path = os.path.join(OUT_DIR, name + ".svg")
     with open(path, "w", encoding="utf-8") as f:
-        f.write(_redact_svg(svg))
+        f.write(_redact_svg(svg, stable_id=name))
     print(f"  ✓ {name}.svg — {desc}")
 
 
