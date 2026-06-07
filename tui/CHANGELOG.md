@@ -5,6 +5,33 @@
 > **0.17.x 이전** (CL #51119 ~ #1) 항목은 분량 정리 차원에서
 > [`CHANGELOG-archive-0.17.md`](./CHANGELOG-archive-0.17.md) 로 분리 보존.
 
+## CL #57530~ — 0.82.0 — 외부 변경 감지 + 매뉴얼/스크린샷 + 실 db v10 (2026-06-07)
+
+시나리오 11 후속. 설계: [`docs/scenarios/11-edit-history-and-soft-delete.md`](../docs/scenarios/11-edit-history-and-soft-delete.md).
+
+### 1. 외부 변경 감지 (`op=external`)
+
+- `core/revisions.py · reconcile_external`: 추적 중(entry_head·살아있음)인
+  거래가 **불러온 윈도우 안에 존재하면서 값이 달라진** 경우(=TUI 밖에서 수정)
+  현재 후잉 값으로 `op=external` 버전 1건 흡수. entry_date `.NNNN` 접미·money
+  타입·None/'' 정규화로 오탐 방지. 부재는 '외부 삭제' 로 단정하지 않음(윈도우
+  한정 fetch 라 오탐 위험).
+- `EntryRevisionRepository.reconcile_external` + EntriesScreen refresh 의 첫
+  fetch 때 **화면당 1회** 호출(핫패스 반복 방지).
+
+### 2. 실 db v9→v10 마이그레이션 적용 (CL #57530)
+
+- production db 에 entry_revisions/entry_head 추가(17,629건 무손상 확인).
+
+### 3. 매뉴얼 + 스크린샷 (별도 CL)
+
+- `docs/MANUAL.md` + `scripts/gen_screenshots.py`(Textual export_screenshot SVG,
+  한글 자간 보정 + PII 마스킹) + `docs/image/*.svg` 6장. `make gen-images`.
+
+### 4. 버전/문서
+
+- 0.81.0→0.82.0. 시나리오 11 문서의 외부 감지 항목을 '구현됨' 으로 갱신.
+
 ## CL #57522, #57524, #57526 (+문서) — 0.81.0 — 거래 수정 이력 · 소프트 삭제 · 복원/되돌리기 (2026-06-07)
 
 시나리오 11 구현. 설계: [`docs/scenarios/11-edit-history-and-soft-delete.md`](../docs/scenarios/11-edit-history-and-soft-delete.md).

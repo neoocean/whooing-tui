@@ -359,6 +359,8 @@ class EntriesScreen(MenuBarMixin, Screen):
         # 시나리오 11: 거래 수정 이력 + 소프트삭제(안 B) 기록.
         from whooing_tui.revision_repo import EntryRevisionRepository
         self._rev_repo = EntryRevisionRepository()
+        # 시나리오 11: 외부(웹/공식앱/MCP) 변경 감지를 화면당 1회만 수행.
+        self._external_reconciled = False
         cfg = load_config()
         self._window_days: int = max(1, cfg.default_window_days)
         # status 평문 보관 (테스트 친화 — HomeScreen 과 동일 컨벤션)
@@ -3154,6 +3156,18 @@ class EntriesScreen(MenuBarMixin, Screen):
                 core_cache.upsert_entries(conn, section_id, entries_sorted)
         except Exception:  # pragma: no cover
             log.exception("entries_cache upsert failed (refresh)")
+        # 시나리오 11: 화면 진입 첫 fetch 때 TUI 밖 수정을 op=external 로 흡수
+        # (1회만 — 핫패스 반복 방지). 윈도우 내 존재+값변경만 감지(오탐 방지).
+        if not self._external_reconciled:
+            self._external_reconciled = True
+            try:
+                affected = self._rev_repo.reconcile_external(
+                    section_id=section_id, current_entries=entries_sorted,
+                )
+                if affected:
+                    log.info("외부 변경 %d건 이력에 흡수", len(affected))
+            except Exception:  # pragma: no cover
+                log.exception("reconcile_external (refresh) failed")
         # CL #51102+: 로컬 sqlite 의 해시태그를 batch fetch 해 entry_id →
         # tag list 사전 보관. _format_cell 의 item 컬럼에 인라인 표시 + 태그
         # 단위 column 네비 + tag 필터 의 단일 source.

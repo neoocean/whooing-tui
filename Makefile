@@ -23,7 +23,7 @@ PIP := $(VENV)/bin/pip
 PYTEST := $(VENV)/bin/pytest
 
 .PHONY: help install install-dev test test-core test-tui test-fast \
-	coverage smoke-cli run sections clean
+	coverage smoke-cli run sections gen-images clean
 
 help:
 	@echo "make install     core + tui 모두 editable install + dev deps"
@@ -34,6 +34,7 @@ help:
 	@echo "make smoke-cli   whooing-tui 콘솔 스크립트 + python -m 둘 다 동작 확인"
 	@echo "make run         Textual TUI 실행"
 	@echo "make sections    sections-list 헤드리스 호출"
+	@echo "make gen-images  docs/MANUAL.md 스크린샷(SVG) 재생성"
 	@echo "make clean       cache 디렉터리 제거"
 
 install:
@@ -92,6 +93,10 @@ run:
 
 sections:
 	$(PY) -m whooing_tui sections list
+
+# docs/MANUAL.md 의 실제 화면 SVG 스크린샷 재생성 (헤드리스, 결정적·PII 없음).
+gen-images:
+	$(PY) scripts/gen_screenshots.py
 
 # CL #51132+ (A2): 후잉에 없는 entry_id 의 첨부 row + 디스크 파일 정리.
 # 안전을 위해 default 는 dry-run — 실 삭제는 `make gc-attachments-go`.

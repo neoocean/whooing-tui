@@ -313,6 +313,71 @@ def list_deleted(
     return out
 
 
+def _norm_for_compare(snap: dict[str, Any]) -> tuple:
+    """외부 변경 비교용 정규화 — entry_date 는 앞 8자(.NNNN 접미 무시),
+    money 는 int, 나머지는 None/'' 동일 취급."""
+    return (
+        str(snap.get("entry_date") or "")[:8],
+        snap.get("l_account") or "",
+        snap.get("l_account_id") or "",
+        snap.get("r_account") or "",
+        snap.get("r_account_id") or "",
+        _coerce_int(snap.get("money")),
+        snap.get("item") or "",
+        snap.get("memo") or "",
+    )
+
+
+def reconcile_external(
+    conn: sqlite3.Connection,
+    *,
+    section_id: str,
+    current_entries: Iterable[dict[str, Any]],
+    created_at: str | None = None,
+) -> list[str]:
+    """TUI 밖(웹/공식앱/MCP) 에서 수정된 거래를 `op=external` 버전으로 흡수.
+
+    추적 중(entry_head 존재·살아있음)인 거래의 head 스냅샷과 *현재 후잉 값*
+    (current_entries 에 같은 entry_id 로 존재할 때) 을 비교해, 다르면 현재
+    값으로 external 버전을 1건 추가한다. 반환 = 영향받은 logical_id 리스트.
+
+    **안전 범위**: current_entries 는 보통 날짜 윈도우 한정 fetch 라, 부재를
+    '외부 삭제' 로 단정하지 않는다(윈도우 밖일 수 있음 → 오탐 방지). 즉
+    *존재하면서 값이 달라진* 외부 수정만 감지한다. 외부 삭제 자동 감지는
+    범위 밖(docs/scenarios/11 한계).
+    """
+    cur_by_id = {
+        str(e.get("entry_id")): e
+        for e in current_entries if e.get("entry_id")
+    }
+    rows = conn.execute(
+        "SELECT logical_id, current_entry_id FROM entry_head "
+        "WHERE is_deleted = 0 AND section_id = ? "
+        "AND current_entry_id IS NOT NULL",
+        (section_id,),
+    ).fetchall()
+    affected: list[str] = []
+    for r in rows:
+        lid = r[0]
+        cur_id = str(r[1])
+        cur = cur_by_id.get(cur_id)
+        if cur is None:
+            continue  # 윈도우 밖일 수 있음 — 판단 보류.
+        head = latest_revision(conn, lid)
+        if head is None:
+            continue
+        if _norm_for_compare(cur) == _norm_for_compare(head):
+            continue  # 변경 없음.
+        record_revision(
+            conn, logical_id=lid, whooing_entry_id=cur_id,
+            section_id=section_id, op=OP_EXTERNAL,
+            snapshot=snapshot_fields(cur), is_deleted=False,
+            created_at=created_at, note="외부 변경 감지",
+        )
+        affected.append(lid)
+    return affected
+
+
 def purge_logical(conn: sqlite3.Connection, logical_id: str) -> int:
     """영구삭제 — 한 logical entry 의 모든 버전 + head 제거. 반환 = 삭제 행수.
 
@@ -351,5 +416,5 @@ __all__ = [
     "snapshot_fields", "diff", "summarize_diff",
     "record_revision", "ensure_baseline", "head_for", "logical_id_for_entry",
     "list_revisions", "latest_revision", "list_deleted",
-    "purge_logical", "deleted_entry_ids",
+    "reconcile_external", "purge_logical", "deleted_entry_ids",
 ]

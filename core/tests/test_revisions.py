@@ -143,6 +143,35 @@ def test_purge_logical_removes_all(conn):
     assert rev.head_for(conn, lid) is None
 
 
+def test_reconcile_external_detects_outside_edit(conn):
+    """추적 중인 거래가 TUI 밖에서 바뀌면 op=external 1건 흡수."""
+    lid = rev.ensure_baseline(conn, entry=_entry("1001", money=30000), section_id="s1")
+    # 후잉에서 외부로 금액이 27000 으로 바뀐 상태(같은 entry_id).
+    current = [_entry("1001", money=27000)]
+    affected = rev.reconcile_external(conn, section_id="s1", current_entries=current)
+    assert affected == [lid]
+    revs = rev.list_revisions(conn, lid)
+    assert [r["op"] for r in revs] == ["create", "external"]
+    assert rev.head_for(conn, lid)["head_revision_no"] == 2
+    assert rev.latest_revision(conn, lid)["money"] == 27000
+    # 멱등: 같은 값 재조회 시 추가 버전 없음.
+    assert rev.reconcile_external(conn, section_id="s1", current_entries=current) == []
+    assert len(rev.list_revisions(conn, lid)) == 2
+
+
+def test_reconcile_external_ignores_absent_and_date_suffix(conn):
+    """윈도우 밖(부재)은 삭제로 단정 안 함. entry_date .NNNN 접미는 무시."""
+    lid = rev.ensure_baseline(
+        conn, entry=_entry("1001", date="20260601"), section_id="s1",
+    )
+    # 부재 → 외부삭제로 단정하지 않음(버전 추가 없음).
+    assert rev.reconcile_external(conn, section_id="s1", current_entries=[]) == []
+    # entry_date 가 .0000 접미만 다르면 변경으로 보지 않음.
+    same = [_entry("1001", date="20260601.0000")]
+    assert rev.reconcile_external(conn, section_id="s1", current_entries=same) == []
+    assert len(rev.list_revisions(conn, lid)) == 1
+
+
 def test_record_revision_rejects_unknown_op(conn):
     with pytest.raises(ValueError):
         rev.record_revision(

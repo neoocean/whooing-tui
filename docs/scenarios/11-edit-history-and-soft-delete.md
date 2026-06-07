@@ -272,12 +272,15 @@ CREATE INDEX idx_head_deleted ON entry_head(is_deleted);
 
 ## 결정 완료 / 미해결
 
-**결정 완료**
+**결정 완료 / 구현됨**
 1. 소프트삭제 정책 → **안 B** (즉시 기본 동작, 2026-06-07).
 2. 이력 화면 진입 키 → **`H`** + context 메뉴 '수정 이력'; 휴지통 → **화면 메뉴**.
+3. **외부 변경 감지(`op=external`)** → v0.82.0 구현. EntriesScreen 진입 첫
+   fetch 때 1회, 추적 중인 거래가 **불러온 윈도우 안에 존재하면서 값이 달라진**
+   경우 현재 후잉 값으로 external 버전 흡수(`core.revisions.reconcile_external`).
 
 **미해결 (향후)**
 1. 다중 환경 `revision_no` 충돌 머지 규칙 — 현재는 P4 last-writer.
-2. 외부(웹/공식앱/MCP) 변경 자동 감지(`op=external`) — 미구현. 현재는 TUI
-   경유 변경만 이력에 남는다. 다음 단계 후보.
+2. **외부 삭제** 자동 감지 — 윈도우 한정 fetch 라 부재를 삭제로 단정 불가(오탐
+   방지) → 미감지. 전체 ledger 스캔/대상 재조회가 필요해 범위 밖.
 3. 이력 보존 기한 / 영구삭제 자동 정리 정책(있을지).

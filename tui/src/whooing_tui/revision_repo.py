@@ -155,6 +155,27 @@ class EntryRevisionRepository:
         self._submit("revert", logical_id, eid, rev_no, None)
         return rev_no
 
+    def reconcile_external(
+        self, *, section_id: str | None, current_entries: list[dict[str, Any]],
+    ) -> list[str]:
+        """추적 중인 거래의 TUI 밖 수정을 op=external 로 흡수. 반환=영향 logical."""
+        if not section_id or not current_entries:
+            return []
+        try:
+            with tui_data.open_rw() as conn:
+                affected = core_rev.reconcile_external(
+                    conn, section_id=section_id, current_entries=current_entries,
+                )
+        except Exception:  # pragma: no cover
+            log.exception("reconcile_external failed")
+            return []
+        if affected:
+            self._submit(
+                "external", affected[0],
+                None, None, f"{len(affected)}건 외부 변경 흡수",
+            )
+        return affected
+
     def purge(self, logical_id: str) -> None:
         """영구삭제 — 한 logical 의 모든 버전 + head 제거 (파괴적)."""
         if not logical_id:
