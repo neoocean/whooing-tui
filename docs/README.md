@@ -25,6 +25,7 @@
 | 09 | [시작·종료 시 P4 동기화](scenarios/09-startup-shutdown.md) | (자동) / `q` | `app.py` (`_StartupCheckScreen`/`_ShutdownModal`), `p4_sync.py` |
 | 10 | [저장소: SQLite vs plaintext 검토](scenarios/10-storage-sqlite-vs-plaintext.md) | (설계 문서) | `core/db.py` |
 | 11 | [거래 수정 이력·소프트 삭제·복원](scenarios/11-edit-history-and-soft-delete.md) | `e`/`d`/`H` + 휴지통 | `revision_repo.py`, `core/revisions.py`, `screens/trash.py`, `screens/revision_history.py` |
+| 12 | [Perforce 없는 환경·외부 SCM 없이 다중 기계 동기화](scenarios/12-no-perforce-and-multi-machine-sync.md) | (설계 문서) env `WHOOING_DATA_DIR` | `p4_sync.py`, `data.py`, `config.py` |
 
 ## 부속 문서
 
