@@ -5,6 +5,32 @@
 > **0.17.x 이전** (CL #51119 ~ #1) 항목은 분량 정리 차원에서
 > [`CHANGELOG-archive-0.17.md`](./CHANGELOG-archive-0.17.md) 로 분리 보존.
 
+## 0.83.0 — 반복 거래 누락 탐지 + 중복 탐지 고도화 (2026-06-11)
+
+휴리스틱 기반(비-LLM) 거래 정합성 도구 두 축을 보강·신설.
+
+- **반복 거래 누락 탐지(신규)** — `입력` 메뉴 → `반복 거래 누락 검사…`.
+  정기 구독·월세·급여처럼 규칙적으로 반복되는 거래의 *빠진 회차* 를 찾는다.
+  중복 탐지가 '과잉 입력'을 잡는다면 이쪽은 '누락'을 잡는 대칭 기능.
+  - `core/recurring.py`(신규, pure): (계정·item) 그룹핑 → 근접 회차 병합 →
+    간격 중앙값으로 주기(매주/격주/매월/분기/매년) 분류 → 규칙성 0.6 이상만
+    인정 → 달력 연산으로 기대 날짜 투영 → 누락(gap=사이/overdue=연체) 산출.
+    연체 3주기 초과는 '구독 종료'로 보고 미보고(해지 구독 오탐 차단). (CL 58091)
+  - `recurring_scan_series` 테이블(schema v10→v11) + `RecurringScanRepository` —
+    중복 스캔과 같은 sqlite 캐싱·status(pending/handled/dismissed) 정책. (CL 58096)
+  - `RecurringScanRangeModal` / `RecurringScanProgressModal` /
+    `RecurringOmissionScreen` + EntriesScreen wiring. 시리즈별 빠진 회차 상세,
+    `h` 처리함 / `d` 무시 / `F5` 새로고침. (CL 58098)
+  - 시나리오 문서 13 추가.
+- **중복 탐지 고도화** (CL 58094/58095) — `core/dupes.py`:
+  - 금액 근사 매칭(possible): 카드 승인 vs 정산 차이/팁/환율 반올림처럼 금액이
+    절대 100원·상대 2% 이내로 *거의* 같고 가맹점 유사 + 계정 일치면 약한 중복
+    후보. 강한 게이트로 오탐 억제. bulk 스캔은 성능상 정확 bucket 유지.
+  - 할부 회차 구분: `installment_marker` 로 '할부 N/M' 인식 → 회차가 다르면
+    금액·날짜가 겹쳐도 별개 거래로 차단(흔한 오탐 제거).
+- 테스트: core test_recurring 13 + test_dupes +7, tui test_recurring_scan_repo 8
+  + test_recurring_scan 4. `make test`(core 310 + tui 876) 전부 통과.
+
 ## 0.82.2 — 거래 팝업 버튼 가로 잘림 수정 + 스크린샷 결정적 재생성 (2026-06-08)
 
 - `EntryEditDialog` 버튼 행이 **좁은 폭에서 가로로 넘쳐** 'Cancel' 이 잘리던
