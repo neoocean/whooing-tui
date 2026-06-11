@@ -444,3 +444,74 @@ def test_keep_preference_score_no_memo_neutral():
     b = {"item": "스타벅스"}
     # 둘 다 같은 score (둘 다 auto 아님 + 짧은 item).
     assert keep_preference_score(a) == keep_preference_score(b)
+
+
+# ----------------------------------------------------------------------
+# 고도화 (CL #58091+): 금액 근사 + 할부 회차 구분.
+# ----------------------------------------------------------------------
+
+
+def test_near_amount_merchant_similar_is_possible():
+    # 승인 vs 정산 차이 — 100원 이내 + 가맹점 유사 + 같은 날/계정 → possible.
+    rep = evaluate_duplicates([
+        _e(entry_id="e1", money=10000, item="스타벅스"),
+        _e(entry_id="e2", money=10080, item="스타벅스 강남점"),
+    ])
+    assert rep.verdict == "possible"
+    assert any("금액 근사" in r for r in rep.reasons)
+
+
+def test_near_amount_relative_tolerance_is_possible():
+    # 절대 100원 초과지만 상대 2% 이내.
+    rep = evaluate_duplicates([
+        _e(entry_id="e1", money=100000, item="메리어트"),
+        _e(entry_id="e2", money=101500, item="메리어트 호텔"),
+    ])
+    assert rep.verdict == "possible"
+
+
+def test_far_amount_is_different():
+    # 금액 차이가 허용오차를 크게 넘으면 가맹점 유사해도 별개.
+    rep = evaluate_duplicates([
+        _e(entry_id="e1", money=10000, item="스타벅스"),
+        _e(entry_id="e2", money=20000, item="스타벅스 강남점"),
+    ])
+    assert rep.verdict == "different"
+
+
+def test_near_amount_requires_merchant_similarity():
+    # 금액은 근사하지만 가맹점이 전혀 다르면 우연 → different.
+    rep = evaluate_duplicates([
+        _e(entry_id="e1", money=10000, item="스타벅스"),
+        _e(entry_id="e2", money=10050, item="버스요금"),
+    ])
+    assert rep.verdict == "different"
+
+
+def test_installment_different_sequence_is_different():
+    # 같은 금액·날짜·계정이라도 할부 회차가 다르면 별개 거래.
+    rep = evaluate_duplicates([
+        _e(entry_id="e1", money=50000, item="노트북 할부 2/6"),
+        _e(entry_id="e2", money=50000, item="노트북 할부 3/6"),
+    ])
+    assert rep.verdict == "different"
+    # "different" 의 사유는 top-level reasons 가 아니라 pairs 에 기록된다.
+    assert any("할부 회차" in r for _, _, _, rs in rep.pairs for r in rs)
+
+
+def test_installment_same_sequence_still_dupe():
+    # 같은 회차의 동일 입력은 여전히 동일 중복.
+    rep = evaluate_duplicates([
+        _e(entry_id="e1", money=50000, item="노트북 할부 2/6"),
+        _e(entry_id="e2", money=50000, item="노트북 할부 2/6"),
+    ])
+    assert rep.verdict == "identical"
+
+
+def test_installment_marker_helpers():
+    from whooing_core.dupes import installment_marker, looks_like_installment
+    assert installment_marker({"item": "노트북 할부 2/6"}) == "2/6"
+    assert installment_marker({"item": "냉장고 할부", "memo": ""}) == "할부"
+    assert installment_marker({"item": "스타벅스"}) is None
+    assert looks_like_installment({"item": "TV 할부 1/12"}) is True
+    assert looks_like_installment({"item": "커피"}) is False
