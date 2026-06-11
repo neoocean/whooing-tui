@@ -91,6 +91,9 @@ LLM 이 맵을 신뢰해 잘못된 경로를 찾는다.
     직접 호출(bulk-tag·cache-upsert 경로).
   - **처방:** dupe-scan worker 를 `dupe_scan_repo`/worker 모듈로 이동;
     bulk-tag·cache-upsert sqlite 를 `EntryRepository` 로 라우팅.
+  - **🟡 부분 해소 (0.84.2):** 중복+반복 스캔 worker 클러스터(~480줄)를
+    `screens/entries_scan.ScanMixin` 으로 분리(entries.py 3865→3386). bulk-tag·
+    cache-upsert sqlite 의 `EntryRepository` 라우팅은 후속.
 
 ### 1-D. [P3] 신규 화면들의 패턴 분기 (저~중)
 

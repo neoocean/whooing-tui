@@ -27,6 +27,11 @@
   비우지 않고 *그 entry_date 를 포함하는 윈도우만* 무효화(`start_date<=D<=
   end_date`). bulk 생성/카드 import 시 cold refetch 폭주 완화. update/delete
   는 날짜가 바뀌거나 미상이라 안전하게 섹션 전체 무효화 유지(보수적).
+- **god 모듈 축소** (감사 1-C, LLM 친화) — `entries.py` 의 중복/반복 스캔
+  worker 클러스터(~480줄: `action_scan_duplicates`·`_scan_duplicates_worker`·
+  `_fetch_and_save_dupe_clusters`·`action_scan_recurring`·`_scan_recurring_worker`·
+  `_fetch_and_save_recurring`)를 `screens/entries_scan.ScanMixin` 으로 분리.
+  EntriesScreen 이 상속 — 동작 변경 없이 3865→3386줄.
 
 ## 0.84.1 — 코드 감사 후속 적용 (2026-06-11)
 
