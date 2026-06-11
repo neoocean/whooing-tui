@@ -23,6 +23,10 @@
   add_row 루프를 `widgets/list_crud.py` 한 곳으로. 서브클래스는 `TABLE_ID` +
   `_row_id`/`_row_cells` 만 지정. compose/CSS/worker 골격은 화면별 특수성으로
   유지(전체 베이스 추출은 4번째 유사 화면 전까지 보류 — 감사 문서).
+- **선택적 entries 캐시 무효화** (감사 2-E) — 신규 거래 생성 시 캐시 전체를
+  비우지 않고 *그 entry_date 를 포함하는 윈도우만* 무효화(`start_date<=D<=
+  end_date`). bulk 생성/카드 import 시 cold refetch 폭주 완화. update/delete
+  는 날짜가 바뀌거나 미상이라 안전하게 섹션 전체 무효화 유지(보수적).
 
 ## 0.84.1 — 코드 감사 후속 적용 (2026-06-11)
 

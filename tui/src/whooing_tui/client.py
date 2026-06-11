@@ -1383,10 +1383,18 @@ class CachedWhooingClient:
 
     async def create_entry(self, **kwargs) -> dict[str, Any]:
         out = await self._inner.create_entry(**kwargs)
-        self._store.invalidate_entries(kwargs.get("section_id"))
+        # 감사 2026-06 §2-E: 신규 거래는 entry_date(미지정 시 today)를 담는
+        # 윈도우만 선택 무효화 — bulk 생성/카드 import 시 캐시 전체 폭파 방지.
+        from whooing_tui.dates import today_yyyymmdd
+        self._store.invalidate_entries(
+            kwargs.get("section_id"),
+            entry_date=(kwargs.get("entry_date") or today_yyyymmdd()),
+        )
         return out
 
     async def update_entry(self, **kwargs) -> dict[str, Any]:
+        # update 는 entry_date 가 *바뀔* 수 있고(이전 윈도우도 stale) 호출자가
+        # 옛 날짜를 모를 수 있어 안전하게 섹션 전체 무효화 유지.
         out = await self._inner.update_entry(**kwargs)
         self._store.invalidate_entries(kwargs.get("section_id"))
         return out

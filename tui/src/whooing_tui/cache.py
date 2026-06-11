@@ -160,10 +160,31 @@ class CacheStore:
             ),
         )
 
-    def invalidate_entries(self, section_id: str | None = None) -> None:
-        """mutation 발생 시 호출 — 해당 섹션의 모든 (start, end) 윈도우 캐시 제거."""
+    def invalidate_entries(
+        self,
+        section_id: str | None = None,
+        *,
+        entry_date: str | None = None,
+    ) -> None:
+        """mutation 발생 시 호출 — 해당 섹션의 윈도우 캐시 제거.
+
+        감사 2026-06 §2-E: `entry_date` 가 주어지면 *그 날짜를 포함하는*
+        윈도우만 선택 무효화한다(`start_date <= D <= end_date`). 그 외 윈도우
+        는 해당 거래를 담지 않으므로 유효 — bulk 생성/카드 import 시 캐시
+        전체를 날리지 않아 cold refetch 폭주를 줄인다. `entry_date` 가 None
+        이면 종전대로 섹션 전체(또는 전부) 무효화 (날짜를 모르거나 바뀔 수
+        있는 update/delete 의 안전한 기본값).
+        """
         if section_id is None:
             self._conn.execute("DELETE FROM entries_cache")
+            return
+        if entry_date:
+            d = entry_date[:8]
+            self._conn.execute(
+                "DELETE FROM entries_cache WHERE section_id = ? "
+                "AND start_date <= ? AND end_date >= ?",
+                (section_id, d, d),
+            )
         else:
             self._conn.execute(
                 "DELETE FROM entries_cache WHERE section_id = ?", (section_id,),

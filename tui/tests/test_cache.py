@@ -71,6 +71,27 @@ def test_entries_invalidate_drops_all_windows_for_section():
     assert store.get_entries("s2", "20260501", "20260510") == [{"e": 3}]
 
 
+def test_entries_invalidate_targeted_by_entry_date():
+    """감사 2-E: entry_date 가 주어지면 그 날짜를 *포함하는* 윈도우만 제거."""
+    store = CacheStore(":memory:")
+    store.put_entries("s1", "20260501", "20260531", [{"e": "may"}])    # 포함
+    store.put_entries("s1", "20260601", "20260630", [{"e": "jun"}])    # 미포함
+    store.put_entries("s2", "20260501", "20260531", [{"e": "other"}])  # 타 섹션
+    # 5/15 거래 생성 → 5월 윈도우만 무효화.
+    store.invalidate_entries("s1", entry_date="20260515")
+    assert store.get_entries("s1", "20260501", "20260531") is None     # 제거됨
+    assert store.get_entries("s1", "20260601", "20260630") == [{"e": "jun"}]  # 유지
+    assert store.get_entries("s2", "20260501", "20260531") == [{"e": "other"}]
+
+
+def test_entries_invalidate_targeted_handles_subindex_date():
+    store = CacheStore(":memory:")
+    store.put_entries("s1", "20260601", "20260630", [{"e": "jun"}])
+    # entry_date 에 sub-index(.NNNN)가 붙어도 8자리 prefix 로 비교.
+    store.invalidate_entries("s1", entry_date="20260615.0003")
+    assert store.get_entries("s1", "20260601", "20260630") is None
+
+
 def test_stats():
     store = CacheStore(":memory:")
     assert store.stats() == {"account_rows": 0, "entries_rows": 0}
@@ -151,13 +172,37 @@ async def test_create_entry_invalidates_entries_cache():
     cc, store = _make_cached()
     await cc.list_entries("s1", "20260501", "20260510")
     assert store.stats()["entries_rows"] == 1
+    # 감사 2-E: entry_date 가 캐시 윈도우 [0501,0510] 안이면 그 윈도우 무효화.
     await cc.create_entry(
         section_id="s1",
         l_account="expenses", l_account_id="x20",
         r_account="assets", r_account_id="x11",
         money=1000,
+        entry_date="20260505",
     )
     assert store.stats()["entries_rows"] == 0
+
+
+@respx.mock
+async def test_create_entry_outside_window_keeps_cache():
+    """감사 2-E: 윈도우 밖 날짜로 생성하면 그 윈도우는 유지 (선택 무효화)."""
+    respx.get("https://whooing.com/api/entries.json").mock(
+        return_value=Response(200, json={"code": 200, "results": {"rows": []}})
+    )
+    respx.post("https://whooing.com/api/entries.json").mock(
+        return_value=Response(200, json={"code": 200, "results": {"entry_id": "new"}})
+    )
+    cc, store = _make_cached()
+    await cc.list_entries("s1", "20260501", "20260510")  # 5월 초 윈도우.
+    assert store.stats()["entries_rows"] == 1
+    await cc.create_entry(
+        section_id="s1",
+        l_account="expenses", l_account_id="x20",
+        r_account="assets", r_account_id="x11",
+        money=1000,
+        entry_date="20260801",   # 윈도우 밖(8월).
+    )
+    assert store.stats()["entries_rows"] == 1   # 유지.
 
 
 @respx.mock
