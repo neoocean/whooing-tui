@@ -190,6 +190,11 @@ class AccountFlowScreen(ModalScreen[None]):
             yield Static("", id="af_status")
 
     def on_mount(self) -> None:
+        # DOM 이 안정된 뒤 setup — 깊게 중첩된 OptionList 가 on_mount 시점에
+        # 아직 mount 안 됐을 수 있는 race 회피 (call_after_refresh).
+        self.call_after_refresh(self._setup)
+
+    def _setup(self) -> None:
         menu = self.query_one("#af_menu", OptionList)
         for rtype, label in _ANALYSES:
             menu.add_option(Option(label, id=rtype))

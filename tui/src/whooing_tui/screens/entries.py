@@ -108,6 +108,51 @@ def _fmt_money(v: Any) -> str:
     return f"{n:,}"
 
 
+def _extract_item_strings(payload: Any) -> list[str]:
+    """entries_latest_items 응답에서 item 문자열 list 추출 (shape 관대).
+
+    응답이 list[str] / list[{item|title:...}] / {rows|items|results: [...]}
+    어느 형태든 흡수. 중복 제거 + 순서 보존 + 빈 문자열 제거.
+    """
+    def _from(seq: Any) -> list[str]:
+        out: list[str] = []
+        if isinstance(seq, list):
+            for it in seq:
+                if isinstance(it, str):
+                    out.append(it)
+                elif isinstance(it, dict):
+                    v = it.get("item") or it.get("title") or it.get("name")
+                    if v:
+                        out.append(str(v))
+        return out
+
+    items: list[str] = []
+    if isinstance(payload, dict):
+        for key in ("rows", "items", "results", "latest_items"):
+            if isinstance(payload.get(key), list):
+                items = _from(payload[key])
+                if items:
+                    break
+        if not items:
+            # dict 자체가 {item: ...} 형태일 수도 — values 평탄화 시도.
+            flat: list[Any] = []
+            for v in payload.values():
+                if isinstance(v, list):
+                    flat.extend(v)
+            items = _from(flat)
+    else:
+        items = _from(payload)
+
+    seen: set[str] = set()
+    uniq: list[str] = []
+    for s in items:
+        s = s.strip()
+        if s and s not in seen:
+            seen.add(s)
+            uniq.append(s)
+    return uniq
+
+
 def _fmt_date(v: Any) -> str:
     """후잉 entry_date (YYYYMMDD 8자리) 를 YYYY-MM-DD 표시용으로 정규화.
 
@@ -431,6 +476,9 @@ class EntriesScreen(MenuBarMixin, Screen):
         # 반복거래누락 검사의 마지막 선택 일수 — 첫 진입은 None → range modal
         # 이 클래스 기본값(1년) 사용.
         self._last_recurring_scan_days: int | None = None
+        # 0.84.0 (로드맵 P1-A): 거래 입력 자동완성 후보 (서버 최근 아이템).
+        # 진입 시 1회 prefetch 해 캐시 — EntryEditDialog 에 주입.
+        self._item_suggestions: list[str] = []
         # 태그 단위 column 네비 — `_active_col == _COL_INDEX["item"]` +
         # `_column_active=True` 인 상태에서 → 한 번 더 누르면 0 부터 그 row
         # 의 태그 개수 - 1 까지 sliding. None = 태그 모드 아님 (item 셀 자체
@@ -1658,6 +1706,7 @@ class EntriesScreen(MenuBarMixin, Screen):
 
         existing = dict(prefill)
         existing["_all_tags_db"] = self._fetch_all_tags_db()
+        existing["_item_suggestions"] = self._item_suggestions_payload()
         self.app.push_screen(
             EntryEditDialog(session, existing=existing), _on_close,
         )
@@ -2779,7 +2828,10 @@ class EntriesScreen(MenuBarMixin, Screen):
             self._submit_create(draft)
 
         # CL #51080+: TagsPickerScreen 의 추천/자주 쓰는 태그 출처.
-        existing = {"_all_tags_db": self._fetch_all_tags_db()}
+        existing = {
+            "_all_tags_db": self._fetch_all_tags_db(),
+            "_item_suggestions": self._item_suggestions_payload(),
+        }
         self.app.push_screen(
             EntryEditDialog(session, existing=existing), _on_close,
         )
@@ -2809,6 +2861,7 @@ class EntriesScreen(MenuBarMixin, Screen):
         existing = dict(target)
         existing["_local_tags"] = local_tags
         existing["_all_tags_db"] = self._fetch_all_tags_db()
+        existing["_item_suggestions"] = self._item_suggestions_payload()
         self.app.push_screen(EntryEditDialog(session, existing=existing), _on_close)
 
     def action_show_context_menu(self) -> None:
@@ -3262,6 +3315,29 @@ class EntriesScreen(MenuBarMixin, Screen):
         """CL #52834+: EntryRepository.all_tags() 로 위임."""
         return self._repo.all_tags()
 
+    @work(exclusive=True, group="item-suggest", name="item_suggest")
+    async def _refresh_item_suggestions(self) -> None:
+        """0.84.0 (로드맵 P1-A): 서버 최근 아이템(60일, 중복제거)을 1회
+        prefetch 해 `self._item_suggestions` 캐시. 실패는 조용히 무시 —
+        자동완성은 보조 기능이라 입력 흐름을 막지 않는다.
+        """
+        session = self.app.session  # type: ignore[attr-defined]
+        if not session.section_id:
+            return
+        try:
+            res = await self._client.call_official_tool("report-get", {
+                "type": "entries_latest_items",
+                "section_id": session.section_id,
+            })
+        except Exception:
+            log.debug("item suggestions prefetch failed (무시)", exc_info=True)
+            return
+        self._item_suggestions = _extract_item_strings(res)
+
+    def _item_suggestions_payload(self) -> list[str]:
+        """EntryEditDialog 주입용 — 캐시 + 로컬에서 본 적 있는 item 보강."""
+        return list(self._item_suggestions)
+
     def _persist_local(
         self,
         *,
@@ -3392,6 +3468,10 @@ class EntriesScreen(MenuBarMixin, Screen):
                 return
             flat = WhooingClient.flatten_accounts(raw)
             session.set_accounts(raw, flat)
+
+        # 0.84.0: 섹션이 확정된 시점에 입력 자동완성 후보 1회 prefetch.
+        if not self._item_suggestions and session.section_id:
+            self._refresh_item_suggestions()
 
         # 3. entries-list (기존 로직).
         section_id = session.section_id

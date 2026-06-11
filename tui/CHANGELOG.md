@@ -38,6 +38,13 @@
   공식 MCP `report-get` 의 `entries_items_of_account_id`/`entries_clients_of_
   account_id`/`entries_changes_of_account_id`/`entries_flow_of_account_id`
   위임 + shape 관대 렌더러(`_render_flow`). (`screens/account_flow.py` 신규)
+- **거래 입력 자동완성** (로드맵 P1-A) — 종전 입력 폼은 로컬 캐시만 참조.
+  이제 서버 최근 아이템(`report-get type=entries_latest_items`, 60일·중복
+  제거)을 EntriesScreen 진입 시 1회 prefetch 해 `EntryEditDialog` 의 item
+  Input 에 inline 자동완성(Textual `SuggestFromList`, →/Tab 수락)으로 주입.
+  shape 관대 추출(`_extract_item_strings`). 신규/타 기기 입력도 제안에 뜬다.
+  부수: `AccountFlowScreen.on_mount` 를 `call_after_refresh` 로 — prefetch
+  worker 가 노출한 깊은 OptionList mount race 방어.
 
 ## 0.83.0 — 반복 거래 누락 탐지 + 중복 탐지 고도화 (2026-06-11)
 

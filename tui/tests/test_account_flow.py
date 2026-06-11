@@ -106,8 +106,14 @@ async def test_screen_fetches_items_of_account_id_first():
             fake, app.session, account="expenses",
             account_id="x20", title="식비",
         ))
-        await _pump_until(pilot, lambda: len(fake.calls) >= 1)
-        first = fake.calls[0]
+        # EntriesScreen 의 자동완성 prefetch(entries_latest_items)가 섞일 수
+        # 있으므로 항목(account_id) 분석 호출만 골라서 검증.
+        ok = await _pump_until(
+            pilot,
+            lambda: any(c.get("account_id") == "x20" for c in fake.calls),
+        )
+        assert ok
+        first = next(c for c in fake.calls if c.get("account_id") == "x20")
         assert first["type"] == "entries_items_of_account_id"
         assert first["account"] == "expenses"
         assert first["account_id"] == "x20"
@@ -134,7 +140,11 @@ async def test_switching_analysis_refetches_with_new_type():
             account_id="x20", title="식비",
         )
         app.push_screen(screen)
-        await _pump_until(pilot, lambda: len(fake.calls) >= 1)
+        # 화면 자체 setup(첫 fetch = account_id 호출) 완료까지 대기 —
+        # prefetch(entries_latest_items)로 일찍 빠지지 않도록.
+        await _pump_until(
+            pilot, lambda: any(c.get("account_id") == "x20" for c in fake.calls),
+        )
         from textual.widgets import OptionList
         # 두 번째 분석(거래처별)로 이동.
         screen.query_one("#af_menu", OptionList).highlighted = 1

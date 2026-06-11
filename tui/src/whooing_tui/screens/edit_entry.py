@@ -34,6 +34,7 @@ from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Grid, Horizontal, VerticalScroll
 from textual.screen import ModalScreen
+from textual.suggester import SuggestFromList
 from textual.widgets import Button, Input, Label, Static
 
 from whooing_tui.dates import parse_yyyymmdd, today_yyyymmdd
@@ -381,6 +382,12 @@ class EntryEditDialog(ModalScreen[EntryDraft | None]):
         self._all_tags_db: dict[str, int] = (
             dict(raw_db) if isinstance(raw_db, dict) else {}
         )
+        # 0.84.0 (로드맵 P1-A): 서버 최근 아이템 자동완성 후보. 호출자가
+        # `existing["_item_suggestions"]` 로 주입 (entries_latest_items 등).
+        raw_sug = self._existing.get("_item_suggestions") or []
+        self._item_suggestions: list[str] = [
+            str(s) for s in raw_sug if str(s).strip()
+        ] if isinstance(raw_sug, (list, tuple)) else []
 
     def _lookup_account(self, aid: str | None) -> tuple[str, str, str]:
         """account_id → (id, title, type). 못 찾으면 (id, "", "")."""
@@ -433,9 +440,15 @@ class EntryEditDialog(ModalScreen[EntryDraft | None]):
                 yield Label("item")
                 # CL #52859+: 후잉 응답이 item/memo 를 int 등 비-str 로
                 # 돌려주는 경우 방어 — Textual Input.value 는 str 만 허용.
+                # 0.84.0: 서버 최근 아이템이 있으면 inline 자동완성(→/Tab 수락).
                 yield Input(
                     value=str(self._existing.get("item") or ""),
                     placeholder="적요 (예: 스타벅스)", id="f-item",
+                    suggester=(
+                        SuggestFromList(
+                            self._item_suggestions, case_sensitive=False,
+                        ) if self._item_suggestions else None
+                    ),
                 )
                 yield Label("memo")
                 yield Input(
