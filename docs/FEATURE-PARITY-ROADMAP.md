@@ -25,12 +25,12 @@
 | 후잉 기능 영역 | 후잉 API | TUI 현황 | 판정 |
 |---|---|---|---|
 | **거래 입력/수정/삭제** (entries CRUD + 일괄) | ✅ | `screens/entries.py` · `edit_entry.py` | ✅ |
-| 최근거래 latest / latest_items(60일 suggest) | ✅ | `get_entries_latest` (latest_items 미활용) | ⚠️ |
-| 입력 자동완성 — items/clients/account_ids_of | ✅ | 로컬 캐시만, 서버 suggest 미사용 | ❌ |
-| 계정 흐름 flow_of_account(_id) | ✅ | 없음 | ❌ |
-| 일일 변동 changes_of_account_id/client/item | ✅ | 없음 | ❌ |
+| 최근거래 latest / latest_items(60일 suggest) | ✅ | `get_entries_latest` + 입력 자동완성 prefetch (0.84.0) | ✅ |
+| 입력 자동완성 — items/latest_items | ✅ | 서버 최근 아이템 inline suggest (0.84.0) | ✅ |
+| 계정 흐름 flow_of_account(_id) | ✅ | `screens/account_flow.py` (0.84.0) | ✅ |
+| 일일 변동 changes_of_account_id/client/item | ✅ | `account_flow.py` (0.84.0) | ✅ |
 | 외부데이터 입력 entries/outside (서버측 SMS 파싱) | ✅ | 없음 (자체 어댑터로 대체) | ➖ |
-| **자주입력 거래** (frequent_items) | ✅ CRUD+sort | 없음 | ❌ |
+| **자주입력 거래** (frequent_items) | ✅ CRUD+sort | `screens/frequent_entries.py` (0.84.0) | ✅ |
 | **매월입력 거래** (monthly_items) | ✅ | `screens/monthly_entries.py` | ✅ |
 | **예산** (budget get/set/basic_total) | ✅ | `screens/budget_edit.py` (`set_budget`) | ✅ |
 | **장기 예산목표** (budget_goal) | ✅ | `screens/goal_edit.py` (`set_budget_goal`) | ✅ |
@@ -38,12 +38,12 @@
 | **자산/부채/비용/수익 보고서** (report/summary) | ✅ | `screens/reports.py` | ✅ |
 | 자금증감 (in_out) | ✅ | `reports.py` 메뉴 | ✅ |
 | 캘린더 (calendar) | ✅ | `reports.py` 메뉴 | ✅ |
-| 신용카드 청구 (bill) | ✅ | `get_bill` 메서드만, **보고서 메뉴 미노출** | ⚠️ |
-| 체크카드 (checkcard) | ✅ | `get_checkcard` 메서드만, **메뉴 미노출** | ⚠️ |
-| 사용자정의 보고서 행 (report_customs) | ✅ CRUD | **읽기만** (list/get), create/delete 없음 | ⚠️ |
+| 신용카드 청구 (bill) | ✅ | `reports.py` 메뉴 노출 (0.84.0) | ✅ |
+| 체크카드 (checkcard) | ✅ | `reports.py` 메뉴 노출 (0.84.0) | ✅ |
+| 사용자정의 보고서 행 (report_customs) | ✅ CRUD | `screens/report_customs.py` 생성·삭제 (0.84.0) | ✅ |
 | **섹션 목록/선택** (sections list/default) | ✅ | `screens/sections.py` (읽기/선택) | ✅ |
-| 섹션 CRUD/정렬 (create/update/delete/sort) | ✅ | 없음 | ❌ |
-| **계정과목 CRUD** (accounts) | ✅ CRUD+sort | `screens/accounts.py` (CRUD), 정렬 없음 | ⚠️ |
+| 섹션 CRUD/정렬 (create/update/delete/sort) | ✅ | `sections.py` CRUD+sort (0.84.0) | ✅ |
+| **계정과목 CRUD** (accounts) + 정렬 | ✅ CRUD+sort | CRUD ✅ · 정렬은 `sort_accounts` 메서드만 (Tree UI 후속) | ⚠️ |
 | **포스트잇** (post_it) | ✅ CRUD | 없음 | ❌ |
 | 알림 (notifications) | ✅ | 없음 | ❌ |
 | 사용자 프로필 (user get/update) | ✅ | 없음 | ❌ |
@@ -54,13 +54,20 @@
 
 ### 요약 수치
 
-- ✅ 완비: 거래 CRUD · 매월입력 · 예산 · 장기/월별 목표 · 핵심 보고서
-  (report/in_out/calendar) · 섹션 선택 · 계정 CRUD.
-- ⚠️ 부분(빠른 보완 가능): latest_items suggest · bill/checkcard UI ·
-  report_customs 쓰기 · accounts 정렬.
-- ❌ 없음(신규 구현): 입력 자동완성 · 자주입력 · 계정 흐름/변동 조회 ·
-  포스트잇 · 알림 · 섹션 CRUD · 사용자 프로필.
+- ✅ 완비: 거래 CRUD · 매월입력 · **자주입력**(0.84.0) · 예산 · 장기/월별
+  목표 · 핵심 보고서(report/in_out/calendar) · **카드 청구/체크카드**(0.84.0)
+  · **사용자정의 보고서 행**(0.84.0) · **항목 흐름/변동**(0.84.0) · **입력
+  자동완성**(0.84.0) · 섹션 선택+**CRUD/정렬**(0.84.0) · 계정 CRUD.
+- ⚠️ 부분: accounts 정렬(메서드만, Tree UI 후속).
+- ❌ 남은 신규 구현: 포스트잇 · 알림 · 사용자 프로필.
 - ➖ 의도적 비채택: 클라우드 첨부(로컬 대체) · 쪽지 · 게시판 · outside 파싱.
+
+### 구현 현황 — 0.84.0 (2026-06)
+
+로드맵 항목 6종 구현·서브밋 완료 (각 CL 단위, `tui/CHANGELOG.md` 0.84.0):
+**P1-A** 입력 자동완성 · **P1-B** 자주입력 · **P2-A** 카드 청구/체크카드 ·
+**P2-B** 항목 흐름/변동 · **P2-C** 사용자정의 보고서 행 쓰기 · **P3-C** 섹션
+CRUD/정렬. 남은 권장: 포스트잇(P3-A) · 알림(P3-B) · 계정 정렬 Tree UI.
 
 ---
 
