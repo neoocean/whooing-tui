@@ -54,8 +54,8 @@ def test_entries_cache_table_exists(conn):
 
 
 def test_schema_version_is_current():
-    """SCHEMA_VERSION 10 — entry_revisions/entry_head (시나리오 11) 추가."""
-    assert core_db.SCHEMA_VERSION == 10
+    """SCHEMA_VERSION 11 — recurring_scan_series (반복거래누락탐지) 추가."""
+    assert core_db.SCHEMA_VERSION == 11
 
 
 # ---- upsert_entries ---------------------------------------------------

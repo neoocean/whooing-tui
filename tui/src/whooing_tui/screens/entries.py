@@ -279,6 +279,7 @@ class EntriesScreen(MenuBarMixin, Screen):
                     MenuItem("PDF 영수증/인보이스 첨부…", "attach_receipt"),
                     MenuItem("매월입력 거래 관리…", "open_monthly"),
                     MenuItem("중복 거래 검사…", "scan_duplicates"),
+                    MenuItem("반복 거래 누락 검사…", "scan_recurring"),
                 ),
             ),
             MenuSpec(
@@ -424,6 +425,9 @@ class EntriesScreen(MenuBarMixin, Screen):
         # 항목 highlight. 첫 진입은 None → range modal 이 클래스 기본값
         # (3년) 사용.
         self._last_dupe_scan_days: int | None = None
+        # 반복거래누락 검사의 마지막 선택 일수 — 첫 진입은 None → range modal
+        # 이 클래스 기본값(1년) 사용.
+        self._last_recurring_scan_days: int | None = None
         # 태그 단위 column 네비 — `_active_col == _COL_INDEX["item"]` +
         # `_column_active=True` 인 상태에서 → 한 번 더 누르면 0 부터 그 row
         # 의 태그 개수 - 1 까지 sliding. None = 태그 모드 아님 (item 셀 자체
@@ -1370,6 +1374,198 @@ class EntriesScreen(MenuBarMixin, Screen):
             )
             self.set_status(
                 f"🔍 중복 cluster {len(stored)} 개 발견 — 검토 시작.",
+            )
+            return stored
+        finally:
+            try:
+                progress.dismiss()
+            except Exception:  # pragma: no cover
+                pass
+
+    def action_scan_recurring(self) -> None:
+        """반복거래누락 검사 (입력 메뉴) — 동기 진입점에서 즉시 status 갱신."""
+        log.info("action_scan_recurring invoked")
+        self.set_status("⏳ 반복 거래 누락 검사 시작 — 거래 fetch 중…")
+        self._scan_recurring_worker()
+
+    @work(exclusive=True, group="recurring_scan", name="scan_recurring")
+    async def _scan_recurring_worker(self) -> None:
+        """범위 선택 → 거래 fetch → 누락 시리즈 추출 → sqlite 영구화 → overview.
+
+        중복 검사(`_scan_duplicates_worker`) 와 대칭 — 같은 sqlite 캐싱 정책.
+        거래를 생성/삭제하지 않으므로 delete_callback 은 없고, 상태 변경
+        (handled/dismissed) 은 overview 가 repo 에 직접 기록한다.
+        """
+        from whooing_tui.recurring_scan_repo import RecurringScanRepository
+        from whooing_tui.screens.recurring_scan import (
+            RecurringOmissionScreen,
+            RecurringScanRangeModal,
+        )
+
+        session = self.app.session  # type: ignore[attr-defined]
+        if not session.section_id:
+            self.set_status(
+                "활성 섹션이 없습니다 — `s` 로 먼저 선택하세요.", error=True,
+            )
+            return
+
+        days = await self.app.push_screen_wait(  # type: ignore[attr-defined]
+            RecurringScanRangeModal(default_days=self._last_recurring_scan_days),
+        )
+        if days is None:
+            self.set_status("반복 거래 누락 검사 취소.")
+            return
+        self._last_recurring_scan_days = int(days)
+
+        repo = RecurringScanRepository()
+        end_date = today_yyyymmdd()
+        start_date = days_ago_yyyymmdd(int(days))
+
+        cached_series = repo.load_all_series(
+            section_id=session.section_id,
+            range_start=start_date, range_end=end_date,
+        )
+        has_pending = any(s.status == "pending" for s in cached_series)
+
+        async def _refresh() -> list:
+            return await self._fetch_and_save_recurring(
+                repo=repo, session=session,
+                range_start=start_date, range_end=end_date,
+            )
+
+        if has_pending:
+            n_pending = sum(1 for s in cached_series if s.status == "pending")
+            self.set_status(
+                f"💾 sqlite 캐시 hit — 남은 누락 {n_pending} 건 "
+                f"({start_date} ~ {end_date}). F5 로 새로고침.",
+            )
+            series_for_overview = cached_series
+            cached_flag = True
+        else:
+            series_for_overview = await self._fetch_and_save_recurring(
+                repo=repo, session=session,
+                range_start=start_date, range_end=end_date,
+            )
+            cached_flag = False
+            if not series_for_overview:
+                return
+
+        result = await self.app.push_screen_wait(  # type: ignore[attr-defined]
+            RecurringOmissionScreen(
+                series_for_overview,
+                repo=repo,
+                section_id=session.section_id,
+                range_start=start_date, range_end=end_date,
+                session=session,
+                refresh_callback=_refresh,
+                cached=cached_flag,
+            ),
+        )
+        if result:
+            self.set_status("반복 거래 누락 검사 완료.")
+        else:
+            self.set_status("반복 거래 누락 검사 종료.")
+
+    async def _fetch_and_save_recurring(
+        self,
+        *,
+        repo,
+        session,
+        range_start: str,
+        range_end: str,
+    ) -> list:
+        """후잉 entries 조회 → detect_recurring_omissions → repo.save_scan.
+
+        worker 와 refresh_callback 모두에서 사용. 진행 안내는
+        RecurringScanProgressModal. 실패 시 set_status + 빈 list.
+        """
+        import asyncio
+        from whooing_core.recurring import detect_recurring_omissions
+        from whooing_tui.screens.recurring_scan import (
+            RecurringScanProgressModal,
+        )
+
+        try:
+            repo.clear_scan(
+                section_id=session.section_id,
+                range_start=range_start, range_end=range_end,
+            )
+        except Exception:  # pragma: no cover
+            log.exception("recurring clear_scan failed (계속 진행)")
+
+        progress = RecurringScanProgressModal(initial="📊 거래 fetch 시작…")
+        self.app.push_screen(progress)  # type: ignore[attr-defined]
+        await asyncio.sleep(0)
+
+        running_total = [0]
+        chunk_count = [0]
+
+        def _on_fetch_progress(kind: str, start: str, end: str, **extra: Any) -> None:
+            try:
+                if kind == "fetch":
+                    chunk_count[0] += 1
+                    progress.set_activity(
+                        f"📡 후잉 요청 #{chunk_count[0]} → /entries.json\n"
+                        f"{start} ~ {end}\n"
+                        f"받은 거래 누적 {running_total[0]:,} 건",
+                    )
+                elif kind == "received":
+                    running_total[0] += int(extra.get("count") or 0)
+                    progress.set_activity(
+                        f"📥 받음 {extra.get('count') or 0} 건\n{start} ~ {end}\n"
+                        f"받은 거래 누적 {running_total[0]:,} 건",
+                    )
+                elif kind == "done":
+                    progress.set_activity(
+                        f"✅ fetch 완료 — 총 {extra.get('total') or 0:,} 건 수신",
+                    )
+            except Exception:  # pragma: no cover
+                log.exception("recurring fetch progress callback failed")
+
+        try:
+            self.set_status(
+                f"⏳ 반복 누락 검사 — 거래 fetch 중… ({range_start} ~ {range_end})",
+            )
+            await asyncio.sleep(0)
+            try:
+                entries = await self._client.list_entries(
+                    section_id=session.section_id,
+                    start_date=range_start, end_date=range_end,
+                    on_progress=_on_fetch_progress,
+                )
+            except ToolError as e:
+                self.set_status(
+                    f"거래 조회 실패 [{e.kind}] {e.message}", error=True,
+                )
+                return []
+            except Exception as e:
+                log.exception("scan_recurring fetch failed")
+                self.set_status(f"거래 조회 실패 (INTERNAL): {e}", error=True)
+                return []
+            progress.set_activity(
+                f"🔁 반복 시리즈 분석 중…\n"
+                f"거래 {len(entries):,} 건 — 주기 추정 + 누락 투영\n"
+                f"(계정·item 그룹 → 간격 중앙값 → 기대 날짜 매칭)",
+            )
+            await asyncio.sleep(0)
+            series = detect_recurring_omissions(entries, as_of=range_end)
+            if not series:
+                self.set_status(
+                    f"✅ 거래 {len(entries):,} 건 검사 완료 — 누락 의심 없음.",
+                )
+                return []
+            progress.set_activity(
+                f"💾 결과 저장 중…\n{len(series)} 개 시리즈 sqlite 영구화\n"
+                f"(테이블: recurring_scan_series · status=pending)",
+            )
+            await asyncio.sleep(0)
+            stored = repo.save_scan(
+                section_id=session.section_id,
+                range_start=range_start, range_end=range_end,
+                series=series,
+            )
+            self.set_status(
+                f"🔁 누락 의심 반복 시리즈 {len(stored)} 개 발견 — 검토 시작.",
             )
             return stored
         finally:
