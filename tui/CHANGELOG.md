@@ -22,6 +22,13 @@
   (보고서 markup 변형은 `reports._fmt_money` 로 분리 유지)(감사 1-B).
   `_set_status` 보일러플레이트를 `widgets.StatusBarMixin` 으로 승격, 신규
   3화면 + `monthly_entries` 에 적용(감사 1-A).
+- **구조/캐시**: `CachedWhooingClient.__getattr__` 폴백 — 무캐시 신규
+  endpoint 가 이중 표면 편집 없이 자동 위임(감사 1-D). `entries_cache`
+  날짜 조회의 `substr()` 래핑 제거 → bare 컬럼 + sentinel 상한으로 인덱스
+  사용(감사 2-D). `account_flow` 조회 기간(당월) status 노출(1-E).
+  CLAUDE.md 디자인패턴에 StatusBarMixin / notify-vs-set_status / fmt_money
+  명문화(1-F). (대규모 CRUD-list 베이스 추출 1-C·선택적 캐시 무효화 2-E 는
+  회귀 위험으로 후속 — internal 감사 문서 참조.)
 
 ## 0.84.0 — 후잉 기능 패리티 확장 (2026-06-11)
 

@@ -139,8 +139,9 @@ def test_list_cached_date_range_filter(conn):
 
 
 def test_list_cached_handles_subindex_dates(conn):
-    """후잉의 entry_date 가 '20260518.0001' 같은 sub-index 포함 — substr
-    비교라 정상 동작."""
+    """후잉의 entry_date 가 '20260518.0001' 같은 sub-index 포함 — bare 컬럼
+    lexical 비교 + sentinel 상한(감사 2026-06 §2-D)이라도 같은 날 .NNNN 모두
+    포함."""
     upsert_entries(conn, "s1", [
         _sample("e1", date="20260518.0001"),
         _sample("e2", date="20260518.0042"),

@@ -265,3 +265,41 @@ async def test_cached_check_deletable_does_not_touch_cache():
     assert out.get("entries_count") == 0
     # 캐시 그대로
     assert store.stats()["account_rows"] == 1
+
+
+# ---- 감사 2026-06 §1-D: __getattr__ 폴백 ------------------------------
+
+
+def test_cached_client_delegates_unknown_method_to_inner():
+    """명시 정의 안 된 (public) 메서드는 inner 로 자동 위임 — 신규 endpoint
+    가 CachedWhooingClient 에 pass-through 를 안 적어도 작동."""
+    from whooing_tui.cache import CacheStore
+    from whooing_tui.client import CachedWhooingClient, WhooingClient
+    from whooing_tui.auth import WhooingAuth
+
+    inner = WhooingClient(
+        auth=WhooingAuth(token="__eyJhfaketokenfortests1234"),
+        base_url="https://whooing.com/api",
+    )
+    # inner 에 가짜 신규 메서드 부착 (명시 wrapper 없음).
+    async def _brand_new(self, **kw):
+        return {"ok": kw}
+    import types
+    inner.brand_new = types.MethodType(_brand_new, inner)  # type: ignore[attr-defined]
+    cc = CachedWhooingClient(inner, CacheStore(":memory:"))
+    assert hasattr(cc, "brand_new")          # __getattr__ 폴백.
+    assert cc.brand_new is inner.brand_new   # 같은 bound method.
+
+
+def test_cached_client_private_attr_still_raises():
+    from whooing_tui.cache import CacheStore
+    from whooing_tui.client import CachedWhooingClient, WhooingClient
+    from whooing_tui.auth import WhooingAuth
+    cc = CachedWhooingClient(
+        WhooingClient(auth=WhooingAuth(token="__eyJhfaketokenfortests1234"),
+                      base_url="https://whooing.com/api"),
+        CacheStore(":memory:"),
+    )
+    import pytest
+    with pytest.raises(AttributeError):
+        _ = cc._nonexistent_private

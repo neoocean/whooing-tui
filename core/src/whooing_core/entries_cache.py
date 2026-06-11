@@ -140,12 +140,19 @@ def list_cached(
     conn.row_factory = sqlite3.Row
     where = ["section_id = ?"]
     args: list[Any] = [section_id]
+    # 감사 2026-06 §2-D: 종전 `substr(entry_date,1,8)` 래핑은 non-sargable
+    # 라 `idx_entries_cache_date(section_id, entry_date)` 를 못 써 전 행 스캔
+    # 했다. entry_date 는 `YYYYMMDD[.NNNN]` (8자리 날짜가 prefix) 이므로 bare
+    # 컬럼 lexical 비교로 동일 결과 + 인덱스 사용.
     if start_date:
-        where.append("substr(entry_date, 1, 8) >= ?")
+        # "20260601" / "20260601.0003" 모두 start prefix 이상이면 >= 성립.
+        where.append("entry_date >= ?")
         args.append(start_date)
     if end_date:
-        where.append("substr(entry_date, 1, 8) <= ?")
-        args.append(end_date)
+        # 같은 날의 sub-index(.NNNN)까지 포함하도록 sentinel ':' (0x3A > '9'/'.')
+        # → "<end>.9999" < "<end>:" < "<다음날>". 따라서 < 로 상한 포함.
+        where.append("entry_date < ?")
+        args.append(end_date + ":")
     sql = (
         "SELECT * FROM entries_cache "
         f"WHERE {' AND '.join(where)} "

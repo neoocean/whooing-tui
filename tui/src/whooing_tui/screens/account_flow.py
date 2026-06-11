@@ -254,7 +254,9 @@ class AccountFlowScreen(StatusBarMixin, ModalScreen[None]):
         if self._current_type != rtype:
             return  # 그사이 다른 분석으로 이동 — 결과 폐기.
         self._show(_render_flow(res))
-        self._set_status("↑/↓ 분석 전환 · r 새로고침 · q 뒤로")
+        # 감사 1-E: 조회 기간(당월)을 명시 — 한 달치임을 사용자가 알도록.
+        period = f"{start[:4]}-{start[4:6]}-01 ~ {today[:4]}-{today[4:6]}-{today[6:8]}"
+        self._set_status(f"기간 {period} · ↑/↓ 분석 전환 · r 새로고침 · q 뒤로")
 
     # ---- helpers ---------------------------------------------------------
 

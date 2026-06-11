@@ -1308,6 +1308,23 @@ class CachedWhooingClient:
         self._accounts_ttl_sec = accounts_ttl_sec
         self._entries_ttl_sec = entries_ttl_sec
 
+    def __getattr__(self, name: str):  # type: ignore[no-untyped-def]
+        """명시 정의 안 된 (public) 메서드는 inner 로 자동 위임.
+
+        감사 2026-06 §1-D: 종전엔 무캐시 read-only endpoint 마다 `**kwargs`
+        pass-through 를 *두 클래스에 모두* 추가해야 했고, 누락 시 런타임
+        AttributeError 회귀가 반복됐다. 캐시 무효화가 필요한 mutation 만
+        명시 override 로 남기고, 나머지(신규 조회 endpoint 등)는 본 폴백이
+        자동 노출한다. `__getattr__` 은 정상 lookup 실패 시에만 호출되므로
+        명시 메서드/`_inner`/`_store` 접근에는 영향 없음.
+        """
+        if name.startswith("_"):
+            raise AttributeError(name)
+        inner = self.__dict__.get("_inner")
+        if inner is None:
+            raise AttributeError(name)
+        return getattr(inner, name)
+
     # 공통 패스스루 — auth 등 raw 속성을 그대로 노출 (테스트 / 디버깅)
     @property
     def auth(self):  # type: ignore[no-untyped-def]
