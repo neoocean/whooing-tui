@@ -5,6 +5,16 @@
 > **0.17.x 이전** (CL #51119 ~ #1) 항목은 분량 정리 차원에서
 > [`CHANGELOG-archive-0.17.md`](./CHANGELOG-archive-0.17.md) 로 분리 보존.
 
+## 0.84.0 — 후잉 기능 패리티 확장 (2026-06-11)
+
+[`docs/FEATURE-PARITY-ROADMAP.md`](../docs/FEATURE-PARITY-ROADMAP.md) 로드맵
+항목들을 순차 구현. 후잉가계부와 동급 기능을 향해.
+
+- **신용카드 청구 / 체크카드 사용내역 보고서** (로드맵 P2-A) — `get_bill`/
+  `get_checkcard` 메서드는 있었으나 보고서 메뉴에 노출 안 돼 닿지 못하던
+  것을 `보고서/통계` 메뉴에 추가. `report-get` 의 `type=bill`/`checkcard`
+  위임 + 카드 항목별 청구/사용 합계 표(`_render_card`). (`screens/reports.py`)
+
 ## 0.83.0 — 반복 거래 누락 탐지 + 중복 탐지 고도화 (2026-06-11)
 
 휴리스틱 기반(비-LLM) 거래 정합성 도구 두 축을 보강·신설.

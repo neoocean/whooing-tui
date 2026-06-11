@@ -88,6 +88,68 @@ def test_format_report_payload_entries_latest_renders_money_with_commas():
     assert "5,000" in out
 
 
+# ---- bill / checkcard (메뉴 노출 + 카드 렌더러) ------------------------
+
+
+def test_build_menu_includes_bill_and_checkcard():
+    ids = [iid for iid, _, _ in _build_menu()]
+    assert "bill" in ids
+    assert "checkcard" in ids
+
+
+def test_bill_and_checkcard_use_report_get_with_type():
+    """bill/checkcard fetch 가 report-get 위임 + 올바른 type 전달."""
+    import inspect
+    items = {iid: fn for iid, _label, fn in _build_menu()}
+    for iid in ("bill", "checkcard"):
+        src = inspect.getsource(items[iid])
+        assert "call_official_tool" in src
+        assert '"report-get"' in src
+        assert f'"type": "{iid}"' in src
+
+
+def test_render_card_bill_shows_accounts_and_total():
+    payload = {
+        "aggregate": {
+            "total": 5336000,
+            "accounts": [
+                {"account_id": "x10", "money": 2938000,
+                 "start_use_date": 20110420, "end_use_date": 20110519,
+                 "pay_date": 25, "pay_account_id": "X5"},
+            ],
+        },
+        "rows_type": "month",
+        "rows": {},
+    }
+    out = format_report_payload("bill", payload)
+    assert "x10" in out
+    assert "2,938,000" in out          # 카드별 금액 콤마.
+    assert "5,336,000" in out          # 총 합계 콤마.
+    assert "25일" in out               # 결제일.
+    assert "```" not in out            # raw JSON fallback 아님.
+
+
+def test_render_card_checkcard_without_period_fields():
+    payload = {
+        "aggregate": {
+            "total": 126000,
+            "accounts": [{"account_id": "x10", "money": 126000,
+                          "pay_account_id": "X5"}],
+        },
+        "rows": {},
+    }
+    out = format_report_payload("checkcard", payload)
+    assert "x10" in out
+    assert "126,000" in out
+
+
+def test_render_card_empty_explains():
+    payload = {"aggregate": {"total": 0, "accounts": []}, "rows": {}}
+    out = format_report_payload("bill", payload)
+    assert "내역 없음" in out
+    assert "```" not in out
+
+
 # ---- 통합: 't' 단축키 → ReportsMenuScreen → ReportResultScreen ---------
 
 
@@ -623,9 +685,9 @@ async def test_reports_screen_has_menu_and_content_panes():
         es.action_open_reports()
         await pilot.pause()
         assert isinstance(app.screen, ReportsScreen)
-        # 좌측 OptionList 가 11개 항목.
+        # 좌측 OptionList 가 13개 항목 (bill/checkcard 추가).
         opt = app.screen.query_one("#reports-menu-list", OptionList)
-        assert opt.option_count == 11
+        assert opt.option_count == 13
         # 우측 panel widgets 존재.
         app.screen.query_one("#reports-status", Static)
         app.screen.query_one("#reports-content", Static)

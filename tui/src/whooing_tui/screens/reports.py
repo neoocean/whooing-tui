@@ -144,6 +144,20 @@ def _build_menu() -> list[MenuItem]:
             "start_date": s, "end_date": e,
         })
 
+    async def fetch_bill(client, session):
+        # 신용카드 월별 청구내역. 기간 생략 시 후잉이 한 달 전~오늘 기본.
+        return await client.call_official_tool("report-get", {
+            "type": "bill",
+            "section_id": session.section_id,
+        })
+
+    async def fetch_checkcard(client, session):
+        # 체크카드 월별 사용내역. 기간 생략 시 후잉 기본.
+        return await client.call_official_tool("report-get", {
+            "type": "checkcard",
+            "section_id": session.section_id,
+        })
+
     async def fetch_entries_latest(client, session):
         return await client.call_official_tool("report-get", {
             "type": "entries_latest",
@@ -190,6 +204,8 @@ def _build_menu() -> list[MenuItem]:
         ("monthly_trend", "월별 추이 (YTD)", fetch_monthly_trend),
         ("in_out", "항목별 증감 (이번 달)", fetch_in_out),
         ("calendar", "캘린더 (이번 달)", fetch_calendar),
+        ("bill", "신용카드 청구내역", fetch_bill),
+        ("checkcard", "체크카드 사용내역", fetch_checkcard),
         ("entries_latest", "최근 거래 20건", fetch_entries_latest),
         ("custom_bs", "사용자 정의 BS", fetch_custom_bs),
         ("custom_pl", "사용자 정의 PL", fetch_custom_pl),
@@ -1049,12 +1065,52 @@ def _render_report_customs(payload: Any) -> str | None:
     return _table(["행 제목", "금액 (KRW)"], out_rows, right_align={1})
 
 
+def _render_card(payload: Any) -> str | None:
+    """bill / checkcard — `{aggregate: {total, accounts: [...]}, rows: {...}}`.
+
+    카드 항목별 청구/사용 합계 표 + 총계. 신용카드(bill)는 사용기간·결제일
+    필드가 더 있고 체크카드(checkcard)는 없어 빈 칸으로 둔다.
+    """
+    if not isinstance(payload, dict):
+        return None
+    agg = payload.get("aggregate")
+    if not isinstance(agg, dict):
+        return None
+    accounts = agg.get("accounts")
+    if not isinstance(accounts, list):
+        accounts = []
+    out_rows: list[list[str]] = []
+    for a in accounts:
+        if not isinstance(a, dict):
+            continue
+        acc = str(a.get("account_id") or "")
+        money = _fmt_money(a.get("money", 0))
+        s, e = a.get("start_use_date"), a.get("end_use_date")
+        period = f"{s}~{e}" if s and e else ""
+        pay = a.get("pay_date")
+        pay_s = f"{pay}일" if pay else ""
+        out_rows.append([acc, money, period, pay_s])
+    if not out_rows:
+        return (
+            "[yellow](청구/사용 내역 없음)[/yellow]\n\n"
+            "[dim]이 기간에 신용/체크카드 항목이 없습니다.[/dim]"
+        )
+    table = _table(
+        ["카드 항목", "금액 (KRW)", "사용기간", "결제일"], out_rows,
+        right_align={1},
+    )
+    total = _fmt_money(agg.get("total", 0))
+    return f"{table}\n\n[bold]총 합계:[/bold] {total} KRW"
+
+
 _RENDERERS: dict[str, Any] = {
     "balance_sheet": _render_balance_or_pl,
     "pl_summary": _render_balance_or_pl,
     "monthly_trend": _render_monthly_trend,
     "in_out": _render_in_out,
     "calendar": _render_calendar,
+    "bill": _render_card,
+    "checkcard": _render_card,
     "entries_latest": _render_entries_latest,
     "custom_bs": _render_report_customs,
     "custom_pl": _render_report_customs,
