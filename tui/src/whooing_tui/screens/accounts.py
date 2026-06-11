@@ -340,6 +340,11 @@ class AccountsScreen(MenuBarMixin, ModalScreen[None]):
         *bind_ko("n", "new_account", "New", show=True, priority=True),
         Binding("enter", "edit_account", "Edit", show=True, priority=True),
         *bind_ko("d", "delete_account", "Delete", show=True, priority=True),
+        # 0.84.2 (감사 잔여): 같은 타입 그룹 안에서 항목 표시 순서 변경.
+        Binding("left_square_bracket", "move_up", "↑순서", show=True,
+                priority=True, key_display="["),
+        Binding("right_square_bracket", "move_down", "↓순서", show=True,
+                priority=True, key_display="]"),
         Binding("question_mark", "help", "Help", show=True, priority=True, key_display="?"),
         # CL #51131+ F10 메뉴바.
         *menubar_bindings(),
@@ -349,6 +354,8 @@ class AccountsScreen(MenuBarMixin, ModalScreen[None]):
         super().__init__()
         self._client = client
         self.last_status: str = ""
+        # 항목 순서 저장 디바운스 타이머 (연속 이동 시 마지막 1회만 네트워크).
+        self._acc_sort_timer: Any = None
         # Tree node 의 data 로 사용할 dict — leaf (account) 또는 None (그룹).
         # type_key 도 함께 보관해 update_account 의 account 파라미터로 사용.
         # 형태: {"account_id": "x20", "type_key": "expenses",
@@ -440,6 +447,73 @@ class AccountsScreen(MenuBarMixin, ModalScreen[None]):
             return
         # 사전 검사 후 confirm.
         self._submit_check_then_delete(target)
+
+    # ---- 항목 순서 변경 (0.84.2, 감사 잔여) ----------------------------
+    #
+    # 정렬은 *표시 순서* 만 바꾼다(거래 내역엔 영향 없음). 같은 타입 그룹
+    # 안에서 leaf 를 위/아래로 이동하고, 그 타입의 전체 account_id 를 새
+    # 순서로 sort_accounts 에 전달. list_accounts 가 반환한 항목 집합을
+    # 그대로 쓰므로(비활성 포함 여부는 서버 응답에 따름) display-only 한도
+    # 에서 안전.
+
+    def action_move_up(self) -> None:
+        self._reorder_account(-1)
+
+    def action_move_down(self) -> None:
+        self._reorder_account(+1)
+
+    def _reorder_account(self, delta: int) -> None:
+        leaf = self._cursor_account()
+        if leaf is None:
+            self.set_status("순서를 바꿀 일반 항목을 선택하세요.", error=True)
+            return
+        session = self.app.session  # type: ignore[attr-defined]
+        tkey = leaf["type_key"]
+        items = (session.accounts_raw or {}).get(tkey)
+        if not isinstance(items, list) or len(items) < 2:
+            return
+        aid = leaf["account_id"]
+
+        def _aid(a: dict) -> str:
+            return str(a.get("account_id") or a.get("id") or "")
+
+        idx = next((i for i, a in enumerate(items) if _aid(a) == aid), None)
+        if idx is None:
+            return
+        j = idx + delta
+        if j < 0 or j >= len(items):
+            return
+        items[idx], items[j] = items[j], items[idx]
+        # 즉시 로컬 재렌더 + cursor 복원 (서버 왕복 없이 반응적).
+        self._render_tree()
+        self._focus_account(aid)
+        self._persist_account_sort(tkey, [_aid(a) for a in items])
+
+    def _focus_account(self, aid: str) -> None:
+        tree = self.query_one("#accounts-tree", Tree)
+        for type_node in tree.root.children:
+            for leaf in type_node.children:
+                data = leaf.data
+                if isinstance(data, dict) and data.get("account_id") == aid:
+                    tree.move_cursor(leaf)
+                    return
+
+    def _persist_account_sort(self, account: str, ids: list[str]) -> None:
+        """디바운스 — 연속 [/] 이동 시 마지막 1회만 sort_accounts."""
+        if self._acc_sort_timer is not None:
+            self._acc_sort_timer.stop()
+        self._acc_sort_timer = self.set_timer(
+            0.4, lambda: self._do_sort_accounts(account, ids),
+        )
+
+    @work(exclusive=True, group="acc-mutate", name="sort_accounts")
+    @safe_action("항목 순서 저장")
+    async def _do_sort_accounts(self, account: str, ids: list[str]) -> None:
+        session = self.app.session  # type: ignore[attr-defined]
+        await self._client.sort_accounts(
+            section_id=session.section_id, account=account, account_ids=ids,
+        )
+        self.set_status("항목 순서 저장됨.")
 
     # ---- worker chain -------------------------------------------------
 

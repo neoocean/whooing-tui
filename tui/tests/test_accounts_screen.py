@@ -109,6 +109,16 @@ class FakeClient:
         self.check_calls.append(kwargs)
         return dict(self.check_result)
 
+    async def sort_accounts(self, **kwargs):
+        self.sort_calls = getattr(self, "sort_calls", [])
+        self.sort_calls.append(kwargs)
+        # 서버가 새 순서를 반영하도록 self.accounts[account] 재정렬.
+        acc = kwargs["account"]
+        order = list(kwargs["account_ids"])
+        by_id = {a["account_id"]: a for a in self.accounts.get(acc, [])}
+        self.accounts[acc] = [by_id[i] for i in order if i in by_id]
+        return list(order)
+
 
 async def _wait_for(predicate, *, timeout: float = 3.0, interval: float = 0.02):
     deadline = asyncio.get_running_loop().time() + timeout
@@ -487,3 +497,53 @@ def test_account_edit_dialog_composes_with_int_open_date():
             assert open_input.value == "20161216"
 
     asyncio.run(_main())
+
+
+# ---- 0.84.2: 항목 순서 변경 ([/]) -------------------------------------
+
+
+async def _pump_until(pilot, pred, *, steps=200):
+    for _ in range(steps):
+        if pred():
+            return True
+        await pilot.pause()
+    return pred()
+
+
+@pytest.mark.asyncio
+async def test_account_reorder_persists_sort():
+    """식비(x20)를 아래로 → expenses 순서 [x21, x20] + sort_accounts 호출."""
+    fake = FakeClient()
+    app = WhooingTuiApp(client=fake)  # type: ignore[arg-type]
+    async with app.run_test() as pilot:
+        screen = await _open_accounts(app, pilot)
+        await _pump_until(pilot, lambda: bool(app.session.accounts_raw))
+        # cursor 를 x20 leaf 로 이동 후 아래로.
+        screen._focus_account("x20")
+        screen.action_move_down()
+        ok = await _pump_until(
+            pilot, lambda: getattr(fake, "sort_calls", []) != [],
+        )
+        assert ok
+        call = fake.sort_calls[0]
+        assert call["account"] == "expenses"
+        assert call["account_ids"] == ["x21", "x20"]
+        # 로컬 raw 순서도 즉시 반영.
+        ids = [a["account_id"] for a in app.session.accounts_raw["expenses"]]
+        assert ids == ["x21", "x20"]
+
+
+@pytest.mark.asyncio
+async def test_account_reorder_noop_on_group_node():
+    """타입 그룹 노드에서 이동 시도 → sort 호출 없음 (안내만)."""
+    fake = FakeClient()
+    app = WhooingTuiApp(client=fake)  # type: ignore[arg-type]
+    async with app.run_test() as pilot:
+        screen = await _open_accounts(app, pilot)
+        await _pump_until(pilot, lambda: bool(app.session.accounts_raw))
+        from textual.widgets import Tree
+        tree = screen.query_one("#accounts-tree", Tree)
+        tree.move_cursor(tree.root.children[0])  # 타입 그룹 노드.
+        screen.action_move_down()
+        await pilot.pause()
+        assert getattr(fake, "sort_calls", []) == []

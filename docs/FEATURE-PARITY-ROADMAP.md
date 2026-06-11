@@ -43,7 +43,7 @@
 | 사용자정의 보고서 행 (report_customs) | ✅ CRUD | `screens/report_customs.py` 생성·삭제 (0.84.0) | ✅ |
 | **섹션 목록/선택** (sections list/default) | ✅ | `screens/sections.py` (읽기/선택) | ✅ |
 | 섹션 CRUD/정렬 (create/update/delete/sort) | ✅ | `sections.py` CRUD+sort (0.84.0) | ✅ |
-| **계정과목 CRUD** (accounts) + 정렬 | ✅ CRUD+sort | CRUD ✅ · 정렬은 `sort_accounts` 메서드만 (Tree UI 후속) | ⚠️ |
+| **계정과목 CRUD** (accounts) + 정렬 | ✅ CRUD+sort | CRUD ✅ · 정렬 `[`/`]` Tree UI (0.84.2) | ✅ |
 | **포스트잇** (post_it) | ✅ CRUD | 미채택 (사용자 결정 2026-06) | ➖ |
 | 알림 (notifications) | ✅ | 미채택 (사용자 결정 2026-06) | ➖ |
 | 사용자 프로필 (user get/update) | ✅ | 없음 | ❌ |
@@ -58,7 +58,6 @@
   목표 · 핵심 보고서(report/in_out/calendar) · **카드 청구/체크카드**(0.84.0)
   · **사용자정의 보고서 행**(0.84.0) · **항목 흐름/변동**(0.84.0) · **입력
   자동완성**(0.84.0) · 섹션 선택+**CRUD/정렬**(0.84.0) · 계정 CRUD.
-- ⚠️ 부분: accounts 정렬(메서드만, Tree UI 후속).
 - ❌ 남은 신규 구현: 사용자 프로필.
 - ➖ 의도적 비채택: 클라우드 첨부(로컬 대체) · 쪽지 · 게시판 · outside 파싱 ·
   **포스트잇 · 알림**(사용자 결정 2026-06).
@@ -68,7 +67,8 @@
 로드맵 항목 6종 구현·서브밋 완료 (각 CL 단위, `tui/CHANGELOG.md` 0.84.0):
 **P1-A** 입력 자동완성 · **P1-B** 자주입력 · **P2-A** 카드 청구/체크카드 ·
 **P2-B** 항목 흐름/변동 · **P2-C** 사용자정의 보고서 행 쓰기 · **P3-C** 섹션
-CRUD/정렬. 남은 권장: 계정 정렬 Tree UI. (포스트잇·알림은 비채택 — §4.)
+CRUD/정렬. **계정 정렬 Tree UI 는 0.84.2 에서 완성.** 남은 신규 구현은
+사용자 프로필(P4, 저가치)뿐. (포스트잇·알림은 비채택 — §4.)
 
 ---
 
