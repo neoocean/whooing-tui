@@ -34,6 +34,8 @@
   SVG 스크린샷). 스크린샷 생성기: [`../scripts/gen_screenshots.py`](../scripts/gen_screenshots.py).
 - [`MAINTAINABILITY-REVIEW.md`](MAINTAINABILITY-REVIEW.md) — 코드 감사
   결과 + LLM 친화도 향상 제안 (실행 비순서 백로그).
+- [`FEATURE-PARITY-ROADMAP.md`](FEATURE-PARITY-ROADMAP.md) — 후잉가계부
+  전 기능 대비 갭 분석 + 우선순위 로드맵 (살아있는 백로그).
 
 ## 새 시나리오를 추가할 때
 
