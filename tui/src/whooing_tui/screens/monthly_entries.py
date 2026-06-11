@@ -38,19 +38,14 @@ from whooing_tui.screens.account_picker import AccountPickerScreen
 from whooing_tui.screens.edit_entry import _AccountButton
 from whooing_tui.state import SessionState
 from whooing_tui.widgets import (
+    StatusBarMixin,
     MenuBar, MenuBarMixin, MenuItem, MenuSpec, menubar_bindings,
 )
 
 log = logging.getLogger(__name__)
 
 
-def _fmt_money(v: Any) -> str:
-    if v is None or v == "":
-        return ""
-    try:
-        return f"{int(v):,}"
-    except (TypeError, ValueError):
-        return str(v)
+from whooing_tui.text_utils import fmt_money as _fmt_money
 
 
 # ---- 보조 modal — 신규 등록 -----------------------------------------------
@@ -177,13 +172,14 @@ from whooing_tui.widgets import ConfirmModal as _ConfirmModal  # 호환 alias.
 # ---- Main screen --------------------------------------------------------
 
 
-class MonthlyEntriesScreen(MenuBarMixin, ModalScreen[None]):
+class MonthlyEntriesScreen(StatusBarMixin, MenuBarMixin, ModalScreen[None]):
     """매월 입력 거래 list + 추가/삭제.
 
     CL #52896+: 사용자 요청 — 전체 화면 Screen → ModalScreen 으로 변경.
     뒷 화면 (EntriesScreen) 이 살짝 보이는 popup 형태.
     """
 
+    STATUS_ID = "#m_status"
     BINDINGS = [
         *menubar_bindings(),
         *bind_ko("q", "back", "Back", show=True),
@@ -396,15 +392,3 @@ class MonthlyEntriesScreen(MenuBarMixin, ModalScreen[None]):
 
     # ---- helpers ---------------------------------------------------------
 
-    def _set_status(
-        self, text: str, *, error: bool = False, warn: bool = False,
-    ) -> None:
-        self.last_status = text
-        bar = self.query_one("#m_status", Static)
-        bar.update(text)
-        bar.remove_class("error")
-        bar.remove_class("warn")
-        if error:
-            bar.add_class("error")
-        elif warn:
-            bar.add_class("warn")

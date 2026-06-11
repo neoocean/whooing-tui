@@ -36,6 +36,7 @@ from whooing_tui.ime import bind_ko
 from whooing_tui.models import ToolError
 from whooing_tui.screens.reports import _fmt_money, _kr, _table
 from whooing_tui.state import SessionState
+from whooing_tui.widgets import StatusBarMixin
 
 log = logging.getLogger(__name__)
 
@@ -127,9 +128,10 @@ def _render_list(items: list[Any]) -> str:
     return _table([_kr(k) for k in cols], rows, right_align=right)
 
 
-class AccountFlowScreen(ModalScreen[None]):
+class AccountFlowScreen(StatusBarMixin, ModalScreen[None]):
     """항목 흐름/변동 분석 — 좌측 분석 메뉴 + 우측 결과."""
 
+    STATUS_ID = "#af_status"
     BINDINGS = [
         *bind_ko("q", "back", "Back", show=True),
         Binding("escape", "back", "", show=False),
@@ -259,10 +261,3 @@ class AccountFlowScreen(ModalScreen[None]):
     def _show(self, markup: str) -> None:
         self.query_one("#af_result_body", Static).update(markup)
 
-    def _set_status(self, text: str, *, error: bool = False) -> None:
-        self.last_status = text
-        bar = self.query_one("#af_status", Static)
-        bar.update(text)
-        bar.remove_class("error")
-        if error:
-            bar.add_class("error")

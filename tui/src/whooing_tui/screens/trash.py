@@ -21,11 +21,7 @@ from textual.widgets import OptionList, Static
 from textual.widgets.option_list import Option
 
 
-def _fmt_money(v: Any) -> str:
-    try:
-        return f"{int(v):,}"
-    except (TypeError, ValueError):
-        return str(v if v is not None else "")
+from whooing_tui.text_utils import fmt_money as _fmt_money
 
 
 class TrashScreen(ModalScreen["tuple[str, str] | None"]):

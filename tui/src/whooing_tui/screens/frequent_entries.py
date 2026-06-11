@@ -36,6 +36,7 @@ from whooing_tui.screens.account_picker import AccountPickerScreen
 from whooing_tui.screens.edit_entry import _AccountButton
 from whooing_tui.state import SessionState
 from whooing_tui.widgets import (
+    StatusBarMixin,
     ConfirmModal as _ConfirmModal,
     MenuBar, MenuBarMixin, MenuItem, MenuSpec, menubar_bindings,
 )
@@ -46,13 +47,7 @@ log = logging.getLogger(__name__)
 _SLOTS = ("slot1", "slot2", "slot3")
 
 
-def _fmt_money(v: Any) -> str:
-    if v is None or v == "":
-        return ""
-    try:
-        return f"{int(v):,}"
-    except (TypeError, ValueError):
-        return str(v)
+from whooing_tui.text_utils import fmt_money as _fmt_money
 
 
 # ---- 보조 modal — 신규 등록 -----------------------------------------------
@@ -171,9 +166,10 @@ class _FrequentEditModal(ModalScreen[dict | None]):
 # ---- Main screen --------------------------------------------------------
 
 
-class FrequentItemsScreen(MenuBarMixin, ModalScreen[dict | None]):
+class FrequentItemsScreen(StatusBarMixin, MenuBarMixin, ModalScreen[dict | None]):
     """자주입력 거래 list + 추가/삭제 + Enter 로 새 거래 사용."""
 
+    STATUS_ID = "#f_status"
     BINDINGS = [
         *menubar_bindings(),
         *bind_ko("q", "back", "Back", show=True),
@@ -381,15 +377,3 @@ class FrequentItemsScreen(MenuBarMixin, ModalScreen[dict | None]):
 
     # ---- helpers ---------------------------------------------------------
 
-    def _set_status(
-        self, text: str, *, error: bool = False, warn: bool = False,
-    ) -> None:
-        self.last_status = text
-        bar = self.query_one("#f_status", Static)
-        bar.update(text)
-        bar.remove_class("error")
-        bar.remove_class("warn")
-        if error:
-            bar.add_class("error")
-        elif warn:
-            bar.add_class("warn")

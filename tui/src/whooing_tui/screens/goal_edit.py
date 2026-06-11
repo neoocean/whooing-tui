@@ -38,13 +38,7 @@ from whooing_tui.widgets import (
 log = logging.getLogger(__name__)
 
 
-def _fmt_money(v: Any) -> str:
-    if v is None or v == "":
-        return ""
-    try:
-        return f"{int(v):,}"
-    except (TypeError, ValueError):
-        return str(v)
+from whooing_tui.text_utils import fmt_money as _fmt_money
 
 
 # ---- 보조 modal — 목표 편집 (amount + 옵션 date/month) -------------------

@@ -14,6 +14,7 @@ from whooing_tui.widgets.menubar import (
     MenuSpec,
     menubar_bindings,
 )
+from whooing_tui.widgets.status_bar import StatusBarMixin
 
 __all__ = [
     # MenuBar 계열 — CL #51126+.
@@ -21,4 +22,6 @@ __all__ = [
     "menubar_bindings",
     # 통합 modal — CL #51156+.
     "InputModal", "TextAreaModal", "ConfirmModal",
+    # status bar — 감사 2026-06 §1-A.
+    "StatusBarMixin",
 ]

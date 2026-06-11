@@ -97,15 +97,7 @@ def _yesterday_of(yyyymmdd: str | None) -> str | None:
         return yyyymmdd
 
 
-def _fmt_money(v: Any) -> str:
-    """후잉 money 는 정수 (KRW). 천단위 콤마 + 음수 부호 보존."""
-    if v is None or v == "":
-        return ""
-    try:
-        n = int(v)
-    except (TypeError, ValueError):
-        return str(v)
-    return f"{n:,}"
+from whooing_tui.text_utils import fmt_money as _fmt_money
 
 
 def _extract_item_strings(payload: Any) -> list[str]:

@@ -18,6 +18,10 @@
   2-C, webhook_token 누설 차단). P4 changelist spec 라인 제어문자 scrub
   (2-B). 신뢰불가 PDF 추출 페이지 수 cap(2-D). 명세서 HTML 렌더 Chromium
   context 를 `file:` 외 요청 차단(오프라인)으로 — 입력 암호 exfiltrate 방어(2-A).
+- **유지보수**: `_fmt_money` 13벌 복제를 `text_utils.fmt_money` 로 단일화
+  (보고서 markup 변형은 `reports._fmt_money` 로 분리 유지)(감사 1-B).
+  `_set_status` 보일러플레이트를 `widgets.StatusBarMixin` 으로 승격, 신규
+  3화면 + `monthly_entries` 에 적용(감사 1-A).
 
 ## 0.84.0 — 후잉 기능 패리티 확장 (2026-06-11)
 

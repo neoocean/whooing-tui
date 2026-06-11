@@ -27,10 +27,28 @@ from whooing_tui.screens.entries_compact import (
     is_hangul,
 )
 
+from typing import Any
+
+
+def fmt_money(v: Any) -> str:
+    """후잉 money(정수 KRW) → 천단위 콤마 평문 (감사 2026-06 §1-B 단일화).
+
+    `None`/빈문자 → `""`, 비숫자 → `str(v)`. Rich markup 이 필요한 보고서
+    뷰는 `reports._fmt_money`(음수 빨강/0 dim) 를 별도로 쓴다.
+    """
+    if v is None or v == "":
+        return ""
+    try:
+        return f"{int(v):,}"
+    except (TypeError, ValueError):
+        return str(v)
+
+
 __all__ = [
     "abbreviate_account_name",
     "column_is_visible",
     "compute_compact_level",
+    "fmt_money",
     "hidden_columns_for_level",
     "is_hangul",
 ]

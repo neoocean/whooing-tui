@@ -28,6 +28,7 @@ from whooing_tui.ime import bind_ko
 from whooing_tui.models import ToolError
 from whooing_tui.state import SessionState
 from whooing_tui.widgets import (
+    StatusBarMixin,
     ConfirmModal as _ConfirmModal,
     MenuBar, MenuBarMixin, MenuItem, MenuSpec, menubar_bindings,
 )
@@ -119,9 +120,10 @@ class _ReportCustomEditModal(ModalScreen[dict | None]):
             self.action_cancel()
 
 
-class ReportCustomsScreen(MenuBarMixin, ModalScreen[None]):
+class ReportCustomsScreen(StatusBarMixin, MenuBarMixin, ModalScreen[None]):
     """사용자 정의 보고서 행 list + 추가/삭제 + BS/PL 전환."""
 
+    STATUS_ID = "#rc_status"
     BINDINGS = [
         *menubar_bindings(),
         *bind_ko("q", "back", "Back", show=True),
@@ -310,15 +312,3 @@ class ReportCustomsScreen(MenuBarMixin, ModalScreen[None]):
 
     # ---- helpers ---------------------------------------------------------
 
-    def _set_status(
-        self, text: str, *, error: bool = False, warn: bool = False,
-    ) -> None:
-        self.last_status = text
-        bar = self.query_one("#rc_status", Static)
-        bar.update(text)
-        bar.remove_class("error")
-        bar.remove_class("warn")
-        if error:
-            bar.add_class("error")
-        elif warn:
-            bar.add_class("warn")

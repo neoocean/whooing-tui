@@ -50,13 +50,7 @@ from whooing_tui.state import SessionState
 log = logging.getLogger(__name__)
 
 
-def _fmt_money(v: Any) -> str:
-    if v is None or v == "":
-        return ""
-    try:
-        return f"{int(v):,}"
-    except (TypeError, ValueError):
-        return str(v)
+from whooing_tui.text_utils import fmt_money as _fmt_money
 
 
 class DuplicateEvalScreen(ModalScreen[bool | None]):

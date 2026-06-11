@@ -30,11 +30,7 @@ _OP_LABEL = {
 }
 
 
-def _fmt_money(v: Any) -> str:
-    try:
-        return f"{int(v):,}"
-    except (TypeError, ValueError):
-        return str(v if v is not None else "")
+from whooing_tui.text_utils import fmt_money as _fmt_money
 
 
 class RevisionHistoryScreen(ModalScreen["tuple[str, int] | None"]):
