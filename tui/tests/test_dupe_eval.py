@@ -261,14 +261,19 @@ async def test_eval_screen_dedup_failure_reports_error():
         es._selected_entry_ids.add("e1")
         es._selected_entry_ids.add("e2")
         es.action_evaluate_duplicates()
-        await _wait_for(
-            lambda: isinstance(app.screen, DuplicateEvalScreen),
-            timeout=3.0,
-        )
+        # pilot.pause 로 메시지 루프를 결정적으로 펌프 — asyncio.sleep 기반
+        # 대기는 CI 부하에서 worker 진행이 느려 flaky (로컬은 통과).
+        for _ in range(200):
+            if isinstance(app.screen, DuplicateEvalScreen):
+                break
+            await pilot.pause()
         scr = app.screen
         assert isinstance(scr, DuplicateEvalScreen)
         scr._dedup_kickoff()
-        ok = await _wait_for(
-            lambda: "실패" in scr.last_status, timeout=3.0,
-        )
+        ok = False
+        for _ in range(200):
+            if "실패" in scr.last_status:
+                ok = True
+                break
+            await pilot.pause()
         assert ok

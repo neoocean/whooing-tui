@@ -490,13 +490,13 @@ async def test_startup_check_dismisses_false_when_outdated(monkeypatch, tmp_path
 
     app = _MiniApp()
     async with app.run_test() as pilot:
-        # outdated 상태 도달까지 대기.
-        deadline = _aio.get_running_loop().time() + 5.0
-        while _aio.get_running_loop().time() < deadline:
-            if isinstance(app.screen, _StartupCheckScreen):
-                if app.screen.stage == "outdated":
-                    break
-            await _aio.sleep(0.05)
+        # outdated 상태 도달까지 pilot.pause 로 결정적 펌프 — asyncio.sleep
+        # 폴링은 CI 부하에서 startup worker 진행이 느려 flaky (로컬은 통과).
+        for _ in range(300):
+            if (isinstance(app.screen, _StartupCheckScreen)
+                    and app.screen.stage == "outdated"):
+                break
+            await pilot.pause()
         assert isinstance(app.screen, _StartupCheckScreen)
         assert app.screen.stage == "outdated"
         # 닫기 버튼 클릭 시뮬 — dismiss(False) → callback 에서 exit.
