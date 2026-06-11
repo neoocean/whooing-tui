@@ -32,6 +32,12 @@
   `사용자 정의 보고서 행…`. `t` BS↔PL 전환 · `n` 신규(title+plus/minus
   항목 참조+addminus 공식) · `d` 삭제. 공식 MCP `report_customs-create`/
   `report_customs-delete` 위임. (`screens/report_customs.py` 신규)
+- **항목 흐름/변동 분석** (로드맵 P2-B) — "이 항목이 어디로 흘렀나/어떻게
+  변했나". `보기` 메뉴 → `항목 흐름 분석…` → 항목 선택 후 좌측 메뉴로 네
+  시각 전환: 아이템별 금액 · 거래처별 · 잔액 변화 추이 · 상대 계정 흐름.
+  공식 MCP `report-get` 의 `entries_items_of_account_id`/`entries_clients_of_
+  account_id`/`entries_changes_of_account_id`/`entries_flow_of_account_id`
+  위임 + shape 관대 렌더러(`_render_flow`). (`screens/account_flow.py` 신규)
 
 ## 0.83.0 — 반복 거래 누락 탐지 + 중복 탐지 고도화 (2026-06-11)
 

@@ -289,6 +289,7 @@ class EntriesScreen(MenuBarMixin, Screen):
                     MenuItem("섹션 (s)", "open_sections"),
                     MenuItem("계정과목 (a)", "open_accounts"),
                     MenuItem("보고서 / 통계 (t)", "open_reports"),
+                    MenuItem("항목 흐름 분석…", "open_account_flow"),
                     MenuItem("사용자 정의 보고서 행…", "open_report_customs"),
                     MenuItem("선택 거래 첨부 (f)", "open_attachments"),
                     MenuItem("해시태그 관리…", "open_tag_management"),
@@ -892,6 +893,28 @@ class EntriesScreen(MenuBarMixin, Screen):
 
         self.app.push_screen(
             ReportsScreen(client=self._client, session=session),
+        )
+
+    def action_open_account_flow(self) -> None:
+        """0.84.0 (로드맵 P2-B): 항목 흐름/변동 분석 — 항목을 먼저 고른다."""
+        from whooing_tui.screens.account_flow import AccountFlowScreen
+        from whooing_tui.screens.account_picker import AccountPickerScreen
+        session = self.app.session  # type: ignore[attr-defined]
+        if not session.section_id or not session.accounts_flat:
+            self.set_status("계정과목 캐시가 비어있습니다.", error=True)
+            return
+
+        def _on_pick(result: tuple[str, str, str] | None) -> None:
+            if result is None:
+                return
+            account_id, title, type_key = result
+            self.app.push_screen(AccountFlowScreen(
+                self._client, session,
+                account=type_key, account_id=account_id, title=title,
+            ))
+
+        self.app.push_screen(
+            AccountPickerScreen(session, side="left"), _on_pick,
         )
 
     def action_open_report_customs(self) -> None:
