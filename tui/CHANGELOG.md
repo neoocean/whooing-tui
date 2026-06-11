@@ -5,6 +5,16 @@
 > **0.17.x 이전** (CL #51119 ~ #1) 항목은 분량 정리 차원에서
 > [`CHANGELOG-archive-0.17.md`](./CHANGELOG-archive-0.17.md) 로 분리 보존.
 
+## 0.84.2 — 감사 잔여 항목 적용 (2026-06-12)
+
+내부/공개 감사의 잔여 백로그를 순차 적용.
+
+- **`@safe_action` / `responses.py` opt-in scaffold 실사용화** (감사 1-A) —
+  `@safe_action` 을 `accounts._submit_create/_submit_update` 에 부착(`@work`
+  와 합성, 에러 메시지·동작 동일). `responses.EntryDict` 를 `client.create_entry`
+  반환에 부착. 둘 다 0→비영. CLAUDE.md §5 / MAINTAINABILITY 문구를 opt-in
+  점진 적용으로 정확화 (종전 "적용됨" 오도 해소).
+
 ## 0.84.1 — 코드 감사 후속 적용 (2026-06-11)
 
 내부 감사 [`docs/internal/code-review-0.84.0-2026-06.md`](../docs/internal/code-review-0.84.0-2026-06.md)

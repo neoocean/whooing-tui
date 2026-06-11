@@ -28,6 +28,7 @@ from textual.widgets import (
     Button, Footer, Header, Input, Label, Select, Static, Tree,
 )
 
+from whooing_tui.actions import safe_action
 from whooing_tui.client import WhooingClient
 from whooing_tui.dates import parse_yyyymmdd, today_yyyymmdd
 from whooing_tui.ime import bind_ko
@@ -460,55 +461,44 @@ class AccountsScreen(MenuBarMixin, ModalScreen[None]):
             f"섹션 {session.section_id}: 계정과목 {len(flat)}개 로드 완료.",
         )
 
+    # 감사 2026-06 §1-A: @safe_action opt-in 적용 사례 — try/except ToolError
+    # → set_status / except Exception → log+set_status 보일러플레이트 제거.
+    # 에러 메시지·동작 동일 (label "계정과목 생성" + 실패 suffix).
     @work(exclusive=True, group="acc-mutate", name="create_account")
+    @safe_action("계정과목 생성")
     async def _submit_create(self, draft: AccountDraft) -> None:
         session = self.app.session  # type: ignore[attr-defined]
-        try:
-            await self._client.create_account(
-                section_id=session.section_id,
-                account=draft.account,
-                type=draft.type,
-                title=draft.title,
-                open_date=draft.open_date,
-                close_date=(draft.close_date if draft.close_date != _CLOSE_DATE_INDEFINITE else None),
-                category=(draft.category or None),
-                memo=(draft.memo or None),
-            )
-        except ToolError as e:
-            self.set_status(f"계정과목 생성 실패 [{e.kind}] {e.message}", error=True)
-            return
-        except Exception as e:  # pragma: no cover
-            log.exception("create_account failed")
-            self.set_status(f"계정과목 생성 실패 (INTERNAL): {e}", error=True)
-            return
+        await self._client.create_account(
+            section_id=session.section_id,
+            account=draft.account,
+            type=draft.type,
+            title=draft.title,
+            open_date=draft.open_date,
+            close_date=(draft.close_date if draft.close_date != _CLOSE_DATE_INDEFINITE else None),
+            category=(draft.category or None),
+            memo=(draft.memo or None),
+        )
         self.set_status(f"계정과목 추가 완료 ({draft.title}). 재로드 중…")
         self._refresh_accounts()
 
     @work(exclusive=True, group="acc-mutate", name="update_account")
+    @safe_action("계정과목 수정")
     async def _submit_update(self, draft: AccountDraft) -> None:
         session = self.app.session  # type: ignore[attr-defined]
         if not draft.account_id:
             self.set_status("account_id 가 없습니다 — 수정 불가.", error=True)
             return
-        try:
-            await self._client.update_account(
-                section_id=session.section_id,
-                account_id=draft.account_id,
-                account=draft.account,
-                type=draft.type,
-                title=draft.title,
-                open_date=draft.open_date,
-                close_date=draft.close_date,
-                category=(draft.category or None),
-                memo=(draft.memo or None),
-            )
-        except ToolError as e:
-            self.set_status(f"계정과목 수정 실패 [{e.kind}] {e.message}", error=True)
-            return
-        except Exception as e:  # pragma: no cover
-            log.exception("update_account failed")
-            self.set_status(f"계정과목 수정 실패 (INTERNAL): {e}", error=True)
-            return
+        await self._client.update_account(
+            section_id=session.section_id,
+            account_id=draft.account_id,
+            account=draft.account,
+            type=draft.type,
+            title=draft.title,
+            open_date=draft.open_date,
+            close_date=draft.close_date,
+            category=(draft.category or None),
+            memo=(draft.memo or None),
+        )
         self.set_status(f"계정과목 수정 완료 ({draft.title}). 재로드 중…")
         self._refresh_accounts()
 

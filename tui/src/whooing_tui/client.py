@@ -19,9 +19,11 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
-from typing import Any, Callable
+from typing import Any, Callable, cast
 
 import httpx
+
+from whooing_tui.responses import EntryDict
 
 # CL #53010+: list_entries 진행 콜백 — 사용자 UI 가 fetch 단계별 안내.
 # kind: "fetch" | "received" | "bisect" | "yearly" | "done".
@@ -426,7 +428,7 @@ class WhooingClient:
         item: str = "",
         memo: str = "",
         entry_date: str | None = None,
-    ) -> dict[str, Any]:
+    ) -> EntryDict:
         """새 거래 입력. 성공 시 후잉이 반환한 results dict (entry_id 포함).
 
         money 는 음수도 허용하지 않는다 (후잉은 차변/대변으로 음양을 표현).
@@ -461,7 +463,9 @@ class WhooingClient:
             params={"section_id": section_id},
             form_data=body,
         )
-        return _coerce_dict(results)
+        # 감사 2026-06 §1-A: responses.py TypedDict 점진 적용 첫 사례.
+        # cast 는 런타임 identity — 기존 dict 반환과 호환.
+        return cast(EntryDict, _coerce_dict(results))
 
     async def update_entry(
         self,

@@ -44,6 +44,10 @@
   의 `action_*` 에 부착, `responses.py` 타입을 `create_entry`/`list_entries`
   반환에 부착. (b) 적용이 아직이면 두 문서의 "적용/제거" 문구를 "제공되나
   현재 미사용 (opt-in scaffold)" 로 강등. **문구 수정만으로도 즉시 큰 효과.**
+- **✅ 해소 (2026-06):** (a)+문구. `@safe_action` 을 `accounts._submit_create/
+  _submit_update` 에 부착(`@work` 와 합성), `responses.EntryDict` 를
+  `client.create_entry` 반환에 부착 → 둘 다 0→비영. CLAUDE.md §5 /
+  MAINTAINABILITY-REVIEW 문구를 opt-in scaffold(점진 적용)로 정확화.
 
 ### 1-B. [P1] `CLAUDE.md` 모듈 맵이 현실과 어긋남 (신규)
 
