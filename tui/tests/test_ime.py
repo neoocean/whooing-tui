@@ -470,9 +470,14 @@ async def test_startup_check_dismisses_false_when_outdated(monkeypatch, tmp_path
     )
     fake_p4.chmod(0o755)
     monkeypatch.setenv("WHOOING_P4_BIN", str(fake_p4))
-    # DATA_DIR 은 set 하지 않음 — 실제 db_path() 가 user dir 을 가리키지만
-    # has_pending/reconcile/sync 가 fake p4 라 안전.
+    # DATA_DIR 은 set 하지 않음 (set 하면 startup check 가 통째 skip).
     monkeypatch.delenv("WHOOING_DATA_DIR", raising=False)
+    # db_path() 를 존재하는 tmp 파일로 — 기본 user dir 은 CI 등에서 부재할
+    # 수 있고, is_outdated_vs_p4 의 `p4 sync -n` 이 cwd=db.parent 로 실행되어
+    # parent 디렉토리가 없으면 subprocess 가 실패→outdated=False 로 빠진다.
+    db = tmp_path / "whooing-data.sqlite"
+    db.write_bytes(b"")
+    monkeypatch.setattr("whooing_tui.data.db_path", lambda: db)
 
     from whooing_tui.app import _StartupCheckScreen
     from textual.app import App
