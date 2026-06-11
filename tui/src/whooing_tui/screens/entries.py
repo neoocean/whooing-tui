@@ -278,6 +278,7 @@ class EntriesScreen(MenuBarMixin, Screen):
                     MenuItem("카드 명세서 import…", "import_card_statement"),
                     MenuItem("PDF 영수증/인보이스 첨부…", "attach_receipt"),
                     MenuItem("매월입력 거래 관리…", "open_monthly"),
+                    MenuItem("자주입력 거래…", "open_frequent"),
                     MenuItem("중복 거래 검사…", "scan_duplicates"),
                     MenuItem("반복 거래 누락 검사…", "scan_recurring"),
                 ),
@@ -1584,6 +1585,47 @@ class EntriesScreen(MenuBarMixin, Screen):
             )
             return
         self.app.push_screen(MonthlyEntriesScreen(self._client, session))
+
+    def action_open_frequent(self) -> None:
+        """0.84.0 (로드맵 P1-B): 자주입력 거래 관리 + 1-탭 사용.
+
+        Enter 로 선택한 자주입력은 값이 채워진 새 거래 폼으로 이어진다.
+        """
+        from whooing_tui.screens.frequent_entries import FrequentItemsScreen
+        session = self.app.session  # type: ignore[attr-defined]
+        if not session.section_id:
+            self.set_status(
+                "활성 섹션이 없습니다 — `s` 로 먼저 선택하세요.", error=True,
+            )
+            return
+
+        def _on_close(prefill: dict | None) -> None:
+            if not prefill:
+                return
+            self._open_new_entry_prefilled(prefill)
+
+        self.app.push_screen(
+            FrequentItemsScreen(self._client, session), _on_close,
+        )
+
+    def _open_new_entry_prefilled(self, prefill: dict) -> None:
+        """자주입력 dict (entry_id 없음) 로 새 거래 입력 폼을 값 채워 연다."""
+        session = self.app.session  # type: ignore[attr-defined]
+        if not session.section_id or not session.accounts_flat:
+            self.set_status("계정과목 캐시가 비어있습니다.", error=True)
+            return
+
+        def _on_close(draft: "EntryDraft | None") -> None:
+            if draft is None:
+                self.set_status("입력 취소됨.")
+                return
+            self._submit_create(draft)
+
+        existing = dict(prefill)
+        existing["_all_tags_db"] = self._fetch_all_tags_db()
+        self.app.push_screen(
+            EntryEditDialog(session, existing=existing), _on_close,
+        )
 
     def action_open_budget_edit(self) -> None:
         """CL #51153+: 예산 입력/편집 화면."""

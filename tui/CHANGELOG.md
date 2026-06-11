@@ -21,6 +21,12 @@
   `sort_sections`/`sort_accounts` REST 메서드 추가 (양 client 표면).
   계정 항목 순서(`sort_accounts`)는 메서드까지 준비 — Tree 재정렬 UI 는
   "비활성 항목 id 도 포함" 요구로 후속.
+- **자주입력 거래(Frequent Items)** (로드맵 P1-B) — 매월입력(날짜 기반)에
+  대칭인 *빈도 기반* 빠른 입력. `입력` 메뉴 → `자주입력 거래…`.
+  슬롯(slot1~3)별 목록 + `n` 신규 · `d` 삭제 · **`Enter` 로 선택을 값이
+  채워진 새 거래로 사용**(entry_id 없는 prefill → `EntryEditDialog`).
+  `client.py` 에 `list_frequent`/`create_frequent`/`delete_frequent`
+  (슬롯 평탄화 + slot/section path). (`screens/frequent_entries.py` 신규)
 
 ## 0.83.0 — 반복 거래 누락 탐지 + 중복 탐지 고도화 (2026-06-11)
 

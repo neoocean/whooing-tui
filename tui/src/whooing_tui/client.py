@@ -1109,6 +1109,71 @@ class WhooingClient:
         )
         return _coerce_dict(results)
 
+    # ---- frequent items (자주입력 거래) — 0.84.0, 로드맵 P1-B ------------
+
+    async def list_frequent(
+        self, *, section_id: str,
+    ) -> list[dict[str, Any]]:
+        """`GET /frequent_items.json` — 자주입력 거래 목록.
+
+        응답은 `{slot1: [...], slot2: [...], slot3: [...]}` (슬롯별 grouping).
+        본 메서드는 각 item dict 에 `slot` 키를 부착해 flat list 로 평탄화한다
+        (삭제 시 slot 이 필요하므로).
+        """
+        results = await self._get(
+            "/frequent_items.json", params={"section_id": section_id},
+        )
+        out: list[dict[str, Any]] = []
+        if isinstance(results, dict):
+            for slot, items in results.items():
+                if not isinstance(items, list):
+                    continue
+                for it in items:
+                    if isinstance(it, dict):
+                        out.append({**it, "slot": slot})
+        return out
+
+    async def create_frequent(
+        self,
+        *,
+        section_id: str,
+        slot: str = "slot1",
+        item: str,
+        l_account: str,
+        r_account: str,
+        l_account_id: str | None = None,
+        r_account_id: str | None = None,
+        money: int | None = None,
+    ) -> dict[str, Any]:
+        """`POST /frequent_items/<slot>.json` — 자주입력 거래 신규.
+
+        슬롯의 맨 끝에 추가된다. item / l_account / r_account 필수,
+        money / account_id 는 선택. 슬롯은 slot1~slot3.
+        """
+        body = _drop_none({
+            "section_id": section_id,
+            "item": item,
+            "l_account": l_account, "r_account": r_account,
+            "l_account_id": l_account_id, "r_account_id": r_account_id,
+            "money": (int(money) if money not in (None, "") else None),
+        })
+        return _coerce_dict(
+            await self._post(f"/frequent_items/{slot}.json", json_body=body)
+        )
+
+    async def delete_frequent(
+        self, *, section_id: str, slot: str, item_id: str,
+    ) -> dict[str, Any]:
+        """`DELETE /frequent_items/<slot>/<item_id>/<section_id>.json`.
+
+        후잉 정책상 section_id 가 path 에 포함된다 (다른 삭제와 다름).
+        """
+        return _coerce_dict(await self._delete(
+            f"/frequent_items/{slot}/{item_id}/{section_id}.json",
+            params={"section_id": section_id},
+            form_data={"section_id": section_id},
+        ))
+
     # ---- budget setter — CL #51153+ --------------------------------------
     # 후잉의 budget 은 `/budget/<account>.json` (account = expenses / income)
     # GET 으로 조회 가능. setter 는 동일 path POST 또는 PUT 추정.
@@ -1417,6 +1482,16 @@ class CachedWhooingClient:
 
     async def delete_monthly(self, **kwargs) -> dict[str, Any]:
         return await self._inner.delete_monthly(**kwargs)
+
+    # ---- frequent items (0.84.0) -----------------------------------------
+    async def list_frequent(self, **kwargs) -> list[dict[str, Any]]:
+        return await self._inner.list_frequent(**kwargs)
+
+    async def create_frequent(self, **kwargs) -> dict[str, Any]:
+        return await self._inner.create_frequent(**kwargs)
+
+    async def delete_frequent(self, **kwargs) -> dict[str, Any]:
+        return await self._inner.delete_frequent(**kwargs)
 
     async def set_budget(self, **kwargs) -> Any:
         return await self._inner.set_budget(**kwargs)
