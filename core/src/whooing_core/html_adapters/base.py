@@ -63,6 +63,19 @@ async def decrypt_html_with_playwright(
         async with async_playwright() as p:
             browser = await p.chromium.launch(headless=True)
             context = await browser.new_context()
+
+            # 감사 2026-06 §2-A: 명세서 HTML 은 이메일 수신 = 공격자 제어
+            # 가능. 사용자가 방금 입력한 명세서 암호를 악성 JS 가 원격
+            # beacon 하지 못하도록, `file:` 외 모든 요청을 차단(오프라인).
+            async def _block_remote(route):
+                url = route.request.url or ""
+                if url.startswith("file:") or url.startswith("data:") \
+                        or url.startswith("about:"):
+                    await route.continue_()
+                else:
+                    await route.abort()
+            await context.route("**/*", _block_remote)
+
             page = await context.new_page()
 
             async def on_dialog(dialog):

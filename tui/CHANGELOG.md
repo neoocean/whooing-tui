@@ -5,6 +5,20 @@
 > **0.17.x 이전** (CL #51119 ~ #1) 항목은 분량 정리 차원에서
 > [`CHANGELOG-archive-0.17.md`](./CHANGELOG-archive-0.17.md) 로 분리 보존.
 
+## 0.84.1 — 코드 감사 후속 적용 (2026-06-11)
+
+내부 감사 [`docs/internal/code-review-0.84.0-2026-06.md`](../docs/internal/code-review-0.84.0-2026-06.md)
+의 성능·보안 항목 적용 (1차).
+
+- **성능**: 중복 일괄 스캔 `find_duplicate_clusters` 를 `asyncio.to_thread`
+  로 offload — 다년 스캔 중 UI freeze 제거(감사 3-A). `account_flow` ↑/↓
+  분석 전환·`sections` 순서 변경([`/`]`)에 디바운스 — rate-limit 압박 완화.
+  `dupes._day_diff` 의 per-call `datetime` import 를 모듈 레벨로 hoist.
+- **보안**: 공식 MCP 에러 `data` 를 저장 전 `sanitize_for_log` 마스킹(감사
+  2-C, webhook_token 누설 차단). P4 changelist spec 라인 제어문자 scrub
+  (2-B). 신뢰불가 PDF 추출 페이지 수 cap(2-D). 명세서 HTML 렌더 Chromium
+  context 를 `file:` 외 요청 차단(오프라인)으로 — 입력 암호 exfiltrate 방어(2-A).
+
 ## 0.84.0 — 후잉 기능 패리티 확장 (2026-06-11)
 
 [`docs/FEATURE-PARITY-ROADMAP.md`](../docs/FEATURE-PARITY-ROADMAP.md) 로드맵

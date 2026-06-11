@@ -188,6 +188,16 @@ def is_file_in_p4(path: Path) -> bool:
     return proc.returncode == 0
 
 
+def _scrub_spec_line(s: str) -> str:
+    """P4 spec 한 라인에서 제어문자 제거 (탭은 공백 1개로). 개행류는
+    호출 전 `splitlines()` 가 이미 분해. 인쇄 가능 문자 + 공백만 남긴다.
+    """
+    return "".join(
+        " " if ch == "\t" else ch
+        for ch in s if ch == "\t" or (ord(ch) >= 32 and ch != "\x7f")
+    )
+
+
 def _create_numbered_change(
     bin_path: str, description: str, cwd: str,
 ) -> str | None:
@@ -201,8 +211,13 @@ def _create_numbered_change(
     """
     spec_lines = ["Change: new", f"Client: {os.environ.get('P4CLIENT', '')}",
                   "Status: new", "Description:"]
+    # 감사 2026-06 §2-B: description 은 첨부 파일명/태그/메모에서 조립되는
+    # 반(半)신뢰 입력. splitlines() 가 개행류를 분해하고, 각 라인은 제어문자
+    # 를 제거한 뒤 \t 들여쓰기 → 어떤 라인도 컬럼 0 의 P4 form 키워드가 될
+    # 수 없게 한다 (spec 변조 차단).
     for line in description.splitlines() or [""]:
-        spec_lines.append(f"\t{line}" if line else "\t")
+        clean = _scrub_spec_line(line)
+        spec_lines.append(f"\t{clean}" if clean else "\t")
     spec = "\n".join(spec_lines) + "\n"
     proc = subprocess.run(
         [bin_path, "change", "-i"],

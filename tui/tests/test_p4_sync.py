@@ -767,3 +767,14 @@ def test_is_outdated_vs_p4_true_when_sync_would_update(monkeypatch, tmp_path):
     db = tmp_path / "db.sqlite"
     db.write_bytes(b"")
     assert p4_sync.is_outdated_vs_p4(db) is True
+
+
+# ---- 감사 2026-06 §2-B: spec 라인 제어문자 scrub ----------------------
+
+
+def test_scrub_spec_line_strips_control_chars():
+    from whooing_tui.p4_sync import _scrub_spec_line
+    # 개행/캐리지리턴/널 등 제어문자 제거, 탭은 공백으로.
+    assert _scrub_spec_line("Files:\r\n\t//depot") == "Files: //depot"
+    assert _scrub_spec_line("ok\x00\x07text") == "oktext"
+    assert _scrub_spec_line("정상 한글 텍스트") == "정상 한글 텍스트"

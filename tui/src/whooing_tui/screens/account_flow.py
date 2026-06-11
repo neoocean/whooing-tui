@@ -175,6 +175,8 @@ class AccountFlowScreen(ModalScreen[None]):
         self._acc_title = title or account_id
         self.last_status: str = ""
         self._current_type = _ANALYSES[0][0]
+        # ↑/↓ 분석 전환 디바운스 타이머 — 빠른 이동 시 마지막만 fetch.
+        self._fetch_timer: Any = None
 
     def compose(self) -> ComposeResult:
         with Vertical(id="af_frame"):
@@ -216,7 +218,14 @@ class AccountFlowScreen(ModalScreen[None]):
         rtype = event.option.id
         if rtype and rtype != self._current_type:
             self._current_type = rtype
-            self._fetch(rtype)
+            # 디바운스 (감사 2026-06 §2-C 신규): ↑/↓ 홀드로 메뉴를 지나칠 때
+            # 매 highlight 마다 네트워크 fetch 하지 않고 멈춘 뒤 1회만.
+            if self._fetch_timer is not None:
+                self._fetch_timer.stop()
+            self._set_status(f"⏳ … ({rtype})")
+            self._fetch_timer = self.set_timer(
+                0.25, lambda: self._fetch(self._current_type),
+            )
 
     @work(exclusive=True, group="af-fetch", name="fetch")
     async def _fetch(self, rtype: str) -> None:

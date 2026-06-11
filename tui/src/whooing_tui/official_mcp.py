@@ -31,6 +31,8 @@ from typing import Any
 
 import httpx
 
+from whooing_tui.errors import sanitize_for_log
+
 log = logging.getLogger(__name__)
 
 DEFAULT_OFFICIAL_MCP_URL = "https://whooing.com/mcp"
@@ -43,7 +45,9 @@ class OfficialMcpError(Exception):
         self, message: str, *, code: int | None = None, data: Any = None,
     ) -> None:
         self.code = code
-        self.data = data
+        # 감사 2026-06 §3-A: 서버가 webhook_token 등 secret 을 에러 data 에
+        # 반사할 수 있어 저장 전 마스킹 (로그/표면화 누설 방지).
+        self.data = sanitize_for_log(data) if data is not None else None
         super().__init__(message)
 
 

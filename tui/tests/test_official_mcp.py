@@ -175,3 +175,22 @@ async def test_call_tool_request_envelope_is_jsonrpc_tools_call():
     assert body["method"] == "tools/call"
     assert body["params"]["name"] == "report-get"
     assert body["params"]["arguments"] == {"type": "report", "section_id": "s1"}
+
+
+# ---- 감사 2026-06 §3-A: 에러 data sanitize ----------------------------
+
+
+def test_official_mcp_error_masks_secret_in_data():
+    from whooing_tui.official_mcp import OfficialMcpError
+    e = OfficialMcpError(
+        "boom",
+        data={"webhook_token": "s3cr3t", "nested": {"token": "abc"}, "ok": 1},
+    )
+    assert e.data["webhook_token"] == "***masked***"
+    assert e.data["nested"]["token"] == "***masked***"
+    assert e.data["ok"] == 1          # 비밀 아닌 값은 보존.
+
+
+def test_official_mcp_error_none_data_stays_none():
+    from whooing_tui.official_mcp import OfficialMcpError
+    assert OfficialMcpError("x").data is None

@@ -29,6 +29,7 @@ from __future__ import annotations
 import re
 import unicodedata
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Any, Iterable, Literal
 
 Verdict = Literal["identical", "very_likely", "possible", "different"]
@@ -173,7 +174,6 @@ def _day_diff(a: str, b: str) -> int | None:
     if len(a) < 8 or len(b) < 8 or not a[:8].isdigit() or not b[:8].isdigit():
         return None
     try:
-        from datetime import datetime
         da = datetime.strptime(a[:8], "%Y%m%d")
         db = datetime.strptime(b[:8], "%Y%m%d")
         return abs((da - db).days)

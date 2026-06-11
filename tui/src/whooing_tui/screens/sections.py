@@ -94,6 +94,8 @@ class SectionPickerScreen(ModalScreen[tuple[str, str | None] | None]):
         self._sections_by_id: dict[str, dict[str, Any]] = {}
         # 표시 순서대로의 섹션 dict list — 로컬 재정렬/재렌더의 source.
         self._sections: list[dict[str, Any]] = []
+        # 순서 저장 디바운스 타이머 — 연속 이동 시 마지막 1회만 네트워크.
+        self._sort_timer: Any = None
         # 평문 status (테스트 친화).
         self.last_status: str = ""
 
@@ -231,7 +233,12 @@ class SectionPickerScreen(ModalScreen[tuple[str, str | None] | None]):
         )
         # 즉시 로컬 재렌더 (서버 왕복 없이 반응적).
         self._render_options(highlight_sid=moved_sid)
-        self._persist_sort([self._sid_of(s) for s in self._sections])
+        # 저장은 디바운스 (감사 2026-06 §2-F): 연속 [/] 이동 시 매 keypress
+        # round-trip 대신 멈춘 뒤 1회만 sort_sections.
+        if self._sort_timer is not None:
+            self._sort_timer.stop()
+        ids = [self._sid_of(s) for s in self._sections]
+        self._sort_timer = self.set_timer(0.4, lambda: self._persist_sort(ids))
 
     @work(exclusive=True, group="section-mutate", name="sort_sections")
     async def _persist_sort(self, ids: list[str]) -> None:

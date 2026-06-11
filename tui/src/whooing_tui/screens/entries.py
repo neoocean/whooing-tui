@@ -1438,8 +1438,11 @@ class EntriesScreen(MenuBarMixin, Screen):
                 f"거래 {len(entries):,} 건 분석 (blocking + windowing)\n"
                 f"|금액| bucket → ±7일 window → union-find",
             )
-            await asyncio.sleep(0)
-            clusters = find_duplicate_clusters(entries, date_window_days=7)
+            # CPU-bound 스캔을 thread 로 offload — 이벤트 루프 freeze 방지
+            # (감사 2026-06 3-A). 함수는 순수라 thread-safe.
+            clusters = await asyncio.to_thread(
+                find_duplicate_clusters, entries, date_window_days=7,
+            )
             if not clusters:
                 self.set_status(
                     f"✅ 거래 {len(entries):,} 건 검사 완료 — 중복 후보 없음.",

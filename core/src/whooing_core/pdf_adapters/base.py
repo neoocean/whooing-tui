@@ -10,6 +10,11 @@ from dataclasses import dataclass
 
 import pdfplumber
 
+# 감사 2026-06 §2-D: 신뢰불가 PDF(이메일 수신 명세서)의 자원 고갈 방어.
+# 카드 명세서는 수~수십 페이지. 조작된 거대 페이지 수 PDF 로 hang/OOM 하지
+# 않도록 추출 페이지 수를 cap. 초과분은 무시(명세서 dedup 에는 충분).
+MAX_PDF_PAGES = 200
+
 
 @dataclass
 class PDFDetectResult:
@@ -35,7 +40,7 @@ def extract_all_tables(pdf_path: str) -> list[list[list[str]]]:
     """
     out: list[list[list[str]]] = []
     with pdfplumber.open(pdf_path) as pdf:
-        for page in pdf.pages:
+        for page in pdf.pages[:MAX_PDF_PAGES]:
             for table in page.extract_tables():
                 if table:
                     out.append(table)
@@ -46,7 +51,7 @@ def extract_all_text_lines(pdf_path: str) -> list[str]:
     """모든 페이지의 텍스트를 줄 단위로 합친 리스트. 테이블 추출 실패 시 fallback."""
     out: list[str] = []
     with pdfplumber.open(pdf_path) as pdf:
-        for page in pdf.pages:
+        for page in pdf.pages[:MAX_PDF_PAGES]:
             text = page.extract_text() or ""
             out.extend(line for line in text.splitlines() if line.strip())
     return out
