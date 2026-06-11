@@ -119,6 +119,48 @@ def merchant_similar(a: str, b: str) -> bool:
     return na in nb or nb in na
 
 
+# 고도화 (CL #58091+): 금액 근사 허용오차 — 카드 승인 vs 정산 차이, 팁,
+# 환율 반올림처럼 *거의* 같은 금액을 약한 중복 후보로. 보수적으로 — 절대
+# 100원 이내 또는 상대 2% 이내일 때만, 그리고 가맹점 유사 + 계정 일치를 함께
+# 요구해 false positive 차단.
+AMOUNT_ABS_TOL = 100
+AMOUNT_REL_TOL = 0.02
+
+
+# 'N/M' 회차 표기 — "스타벅스 할부 2/6", "(3/12)" 등.
+_INSTALLMENT_SEQ_RE = re.compile(r"(\d+)\s*/\s*(\d+)")
+
+
+def installment_marker(entry: dict[str, Any]) -> str | None:
+    """할부 거래의 회차 식별자 — 할부가 아니면 None.
+
+    "할부" 단어가 item/memo 에 있을 때만 할부로 인정 (보수적 — 'N/M' 만으로는
+    분수 표기와 헷갈릴 수 있음). 회차가 'N/M' 으로 적혀 있으면 그 문자열을,
+    없으면 일반 마커 "할부" 반환.
+
+    같은 카드 할부의 서로 다른 회차(2/6 vs 3/6)는 금액·날짜가 우연히 겹쳐도
+    *별개* 거래다 — `_pair_verdict` 가 이 마커로 두 할부 회차를 구분해 중복
+    오탐을 막는다.
+    """
+    text = f"{entry.get('item') or ''} {entry.get('memo') or ''}"
+    if "할부" not in text:
+        return None
+    m = _INSTALLMENT_SEQ_RE.search(text)
+    if m:
+        n, total = m.group(1), m.group(2)
+        try:
+            if int(total) > 1 and 1 <= int(n) <= int(total):
+                return f"{n}/{total}"
+        except ValueError:  # pragma: no cover — 정규식이 숫자 보장.
+            pass
+    return "할부"
+
+
+def looks_like_installment(entry: dict[str, Any]) -> bool:
+    """할부 거래로 보이는지 — `installment_marker` 의 boolean 편의."""
+    return installment_marker(entry) is not None
+
+
 def _date(v: Any) -> str:
     """entry_date — YYYYMMDD 문자열로. 다른 표기는 그대로 (비교만)."""
     if v is None:
@@ -166,6 +208,13 @@ def _pair_verdict(
     b_memo = _norm_text(b.get("memo"))
 
     reasons: list[str] = []
+
+    # 고도화 (CL #58091+): 두 거래가 모두 할부이고 회차 마커가 다르면 (2/6 vs
+    # 3/6) 금액·날짜가 겹쳐도 *별개* 거래 — 어떤 매칭보다 먼저 차단.
+    inst_a = installment_marker(a)
+    inst_b = installment_marker(b)
+    if inst_a and inst_b and inst_a != inst_b:
+        return ("different", ("할부 회차가 다른 별개 거래",))
 
     # 1. identical — 모든 raw 필드 byte-exact. 정규화 후만 같은 경우는
     # 사용자가 raw 입력의 차이를 인지할 수 있도록 very_likely 로 떨군다.
@@ -264,6 +313,23 @@ def _pair_verdict(
     if same_money and same_date:
         reasons.append("금액·날짜 일치 (계정 다름)")
         return ("possible", tuple(reasons))
+
+    # 고도화 (CL #58091+): 금액이 정확히 같지 않아도 근소하게 다르고(카드
+    # 승인 vs 정산 / 팁 / 환율 반올림) 가맹점 유사 + 같은/근접 날 + 계정
+    # 일치면 약한 중복 후보. 보수적으로 — merchant_similar 와 계정 일치를
+    # 함께 요구해 단순 동금액 우연을 배제.
+    if (
+        a_abs is not None and b_abs is not None and a_abs and b_abs
+        and a_abs != b_abs
+        and same_accounts and (same_date or near_date)
+        and a_item and b_item
+        and merchant_similar(a.get("item") or "", b.get("item") or "")
+    ):
+        diff = abs(a_abs - b_abs)
+        rel = diff / max(a_abs, b_abs)
+        if diff <= AMOUNT_ABS_TOL or rel <= AMOUNT_REL_TOL:
+            reasons.append("금액 근사(승인/정산 차이 가능) + 가맹점 유사 + 계정 일치")
+            return ("possible", tuple(reasons))
 
     return ("different", tuple(reasons))
 
@@ -645,4 +711,6 @@ __all__ = [
     "evaluate_duplicates", "find_duplicate_clusters", "is_duplicate",
     "is_tui_auto_imported", "keep_preference_score",
     "normalize_text", "merchant_similar",
+    "installment_marker", "looks_like_installment",
+    "AMOUNT_ABS_TOL", "AMOUNT_REL_TOL",
 ]
