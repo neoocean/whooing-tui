@@ -289,6 +289,7 @@ class EntriesScreen(MenuBarMixin, Screen):
                     MenuItem("섹션 (s)", "open_sections"),
                     MenuItem("계정과목 (a)", "open_accounts"),
                     MenuItem("보고서 / 통계 (t)", "open_reports"),
+                    MenuItem("사용자 정의 보고서 행…", "open_report_customs"),
                     MenuItem("선택 거래 첨부 (f)", "open_attachments"),
                     MenuItem("해시태그 관리…", "open_tag_management"),
                     MenuItem("휴지통 (삭제 거래 복원)…", "open_trash"),
@@ -892,6 +893,17 @@ class EntriesScreen(MenuBarMixin, Screen):
         self.app.push_screen(
             ReportsScreen(client=self._client, session=session),
         )
+
+    def action_open_report_customs(self) -> None:
+        """0.84.0 (로드맵 P2-C): 사용자 정의 보고서 행 관리(생성/삭제)."""
+        from whooing_tui.screens.report_customs import ReportCustomsScreen
+        session = self.app.session  # type: ignore[attr-defined]
+        if not session.section_id:
+            self.set_status(
+                "활성 섹션이 없습니다 — `s` 로 먼저 선택하세요.", error=True,
+            )
+            return
+        self.app.push_screen(ReportCustomsScreen(self._client, session))
 
     def action_open_trash(self) -> None:
         """화면 메뉴 → 휴지통 (시나리오 11). 소프트삭제 거래 복원/영구삭제."""

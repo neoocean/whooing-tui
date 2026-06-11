@@ -27,6 +27,11 @@
   채워진 새 거래로 사용**(entry_id 없는 prefill → `EntryEditDialog`).
   `client.py` 에 `list_frequent`/`create_frequent`/`delete_frequent`
   (슬롯 평탄화 + slot/section path). (`screens/frequent_entries.py` 신규)
+- **사용자 정의 보고서 행 쓰기** (로드맵 P2-C) — 종전 `reports.py` 는 BS/PL
+  사용자 정의 행을 *읽기만* 했다. 이제 직접 추가/삭제. `보기` 메뉴 →
+  `사용자 정의 보고서 행…`. `t` BS↔PL 전환 · `n` 신규(title+plus/minus
+  항목 참조+addminus 공식) · `d` 삭제. 공식 MCP `report_customs-create`/
+  `report_customs-delete` 위임. (`screens/report_customs.py` 신규)
 
 ## 0.83.0 — 반복 거래 누락 탐지 + 중복 탐지 고도화 (2026-06-11)
 
