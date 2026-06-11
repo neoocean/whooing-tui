@@ -14,6 +14,13 @@
   `get_checkcard` 메서드는 있었으나 보고서 메뉴에 노출 안 돼 닿지 못하던
   것을 `보고서/통계` 메뉴에 추가. `report-get` 의 `type=bill`/`checkcard`
   위임 + 카드 항목별 청구/사용 합계 표(`_render_card`). (`screens/reports.py`)
+- **섹션 CRUD + 순서 변경** (로드맵 P3-C) — 종전 `SectionPickerScreen` 은
+  읽기/선택만 가능했다. 이제 `n` 새 섹션 · `e` 이름 변경 · `d` 삭제(확인
+  모달) · `[`/`]` 순서 이동(로컬 즉시 재렌더 + `sort_sections` 영속화).
+  `client.py` 에 `create_section`/`update_section`/`delete_section`/
+  `sort_sections`/`sort_accounts` REST 메서드 추가 (양 client 표면).
+  계정 항목 순서(`sort_accounts`)는 메서드까지 준비 — Tree 재정렬 UI 는
+  "비활성 항목 id 도 포함" 요구로 후속.
 
 ## 0.83.0 — 반복 거래 누락 탐지 + 중복 탐지 고도화 (2026-06-11)
 

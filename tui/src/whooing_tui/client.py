@@ -686,6 +686,82 @@ class WhooingClient:
         )
         return _coerce_dict(results)
 
+    # ---- sections write + sort (0.84.0, 로드맵 P3-C) ---------------------
+
+    async def create_section(
+        self,
+        *,
+        title: str,
+        currency: str = "KRW",
+        memo: str | None = None,
+    ) -> dict[str, Any]:
+        """`POST /sections.json` — 새 섹션(가계부). 사용자당 최대 9개.
+
+        title 1~30자, currency 필수 (예: KRW / USD).
+        """
+        body: dict[str, Any] = {"title": title, "currency": currency}
+        if memo is not None:
+            body["memo"] = memo
+        return _coerce_dict(await self._post("/sections.json", json_body=body))
+
+    async def update_section(
+        self,
+        *,
+        section_id: str,
+        title: str | None = None,
+        currency: str | None = None,
+        memo: str | None = None,
+    ) -> dict[str, Any]:
+        """`PUT /sections/<id>.json` — 섹션 정보 수정 (변경 필드만 전달)."""
+        body: dict[str, Any] = {}
+        for k, v in (("title", title), ("currency", currency), ("memo", memo)):
+            if v is not None:
+                body[k] = v
+        return _coerce_dict(
+            await self._put(f"/sections/{section_id}.json", json_body=body)
+        )
+
+    async def delete_section(self, *, section_id: str) -> dict[str, Any]:
+        """`DELETE /sections/<id>.json` — 섹션 삭제 (되돌릴 수 없음).
+
+        섹션에 딸린 거래/항목이 함께 사라지므로 호출 전 사용자 확인 필수.
+        """
+        return _coerce_dict(await self._delete(
+            f"/sections/{section_id}.json",
+            params={"section_id": section_id},
+            form_data={"section_id": section_id},
+        ))
+
+    async def sort_sections(self, *, section_ids: list[str]) -> Any:
+        """`PUT /sections/sort.json` — 섹션 표시 순서 변경.
+
+        전체 섹션 id 를 원하는 순서대로 콤마 결합해 전달.
+        """
+        return await self._put(
+            "/sections/sort.json",
+            json_body={"section_ids": ",".join(section_ids)},
+        )
+
+    async def sort_accounts(
+        self,
+        *,
+        section_id: str,
+        account: str,
+        account_ids: list[str],
+    ) -> Any:
+        """`PUT /accounts/<account>/sort.json` — 항목 표시 순서 변경.
+
+        비활성 항목 id 도 모두 포함해야 한다 (후잉 정책). `account` 는
+        대상 계정 타입 (assets/liabilities/capital/expenses/income).
+        """
+        return await self._put(
+            f"/accounts/{account}/sort.json",
+            json_body={
+                "section_id": section_id,
+                "account_ids": ",".join(account_ids),
+            },
+        )
+
     # ---- report / budget / goal endpoints (CL #51117+) -------------------
     #
     # CL #51116 의 첫 시도는 `/reports.json` 단일 endpoint + `type` query
@@ -1259,6 +1335,30 @@ class CachedWhooingClient:
     async def check_account_deletable(self, **kwargs) -> dict[str, Any]:
         # 단순 조회라 캐시 영향 없음 — 그대로 위임.
         return await self._inner.check_account_deletable(**kwargs)
+
+    # ---- sections write + sort (0.84.0) ----------------------------------
+    async def create_section(self, **kwargs) -> dict[str, Any]:
+        return await self._inner.create_section(**kwargs)
+
+    async def update_section(self, **kwargs) -> dict[str, Any]:
+        return await self._inner.update_section(**kwargs)
+
+    async def delete_section(self, **kwargs) -> dict[str, Any]:
+        out = await self._inner.delete_section(**kwargs)
+        # 섹션 삭제 — 해당 섹션 캐시 폐기.
+        sid = kwargs.get("section_id")
+        if sid:
+            self._store.invalidate_accounts(sid)
+            self._store.invalidate_entries(sid)
+        return out
+
+    async def sort_sections(self, **kwargs) -> Any:
+        return await self._inner.sort_sections(**kwargs)
+
+    async def sort_accounts(self, **kwargs) -> Any:
+        out = await self._inner.sort_accounts(**kwargs)
+        self._store.invalidate_accounts(kwargs.get("section_id"))
+        return out
 
     # 보고서 / 예산 / 목표 — CL #51116+ (path 수정 #51117). 모두 단순 조회.
     async def get_report(self, **kwargs) -> Any:

@@ -44,6 +44,33 @@ class FakeClient:
         self.entries_calls.append((section_id, start, end))
         return []
 
+    # ---- 0.84.0 섹션 CRUD/sort (호출 기록) -----------------------------
+    async def create_section(self, *, title, currency="KRW", memo=None):
+        sid = f"s{len(self.sections) + 1}"
+        self.sections.append({"section_id": sid, "title": title})
+        self.created = (title, currency, memo)
+        return {"section_id": sid}
+
+    async def update_section(self, *, section_id, title=None, **kw):
+        for s in self.sections:
+            if s["section_id"] == section_id and title is not None:
+                s["title"] = title
+        self.updated = (section_id, title)
+        return {}
+
+    async def delete_section(self, *, section_id):
+        self.sections = [s for s in self.sections
+                         if s["section_id"] != section_id]
+        self.deleted = section_id
+        return {}
+
+    async def sort_sections(self, *, section_ids):
+        self.sorted_ids = list(section_ids)
+        # 서버가 새 순서를 반영하도록 self.sections 재정렬.
+        by_id = {s["section_id"]: s for s in self.sections}
+        self.sections = [by_id[i] for i in section_ids if i in by_id]
+        return list(section_ids)
+
 
 async def _wait_for(predicate, *, timeout: float = 3.0, interval: float = 0.02):
     deadline = asyncio.get_running_loop().time() + timeout
@@ -183,3 +210,98 @@ async def test_section_picker_empty_sections_shows_error():
         from textual.widgets import OptionList
         opt = app.screen.query_one("#sections-list", OptionList)
         assert opt.option_count == 1  # __empty__
+
+
+# ---- 0.84.0: 섹션 CRUD + 순서 변경 (로드맵 P3-C) ----------------------
+
+
+async def _open_picker(app, pilot) -> SectionPickerScreen:
+    from textual.widgets import OptionList
+    await _wait_for(
+        lambda: isinstance(app.screen, EntriesScreen)
+        and app.session.section_id == "s1", timeout=3.0,
+    )
+    app.screen.action_open_sections()
+    await pilot.pause()
+    await _wait_for(
+        lambda: isinstance(app.screen, SectionPickerScreen)
+        and app.screen.query_one("#sections-list", OptionList).option_count == 2,
+        timeout=2.0,
+    )
+    return app.screen  # type: ignore[return-value]
+
+
+@pytest.mark.asyncio
+async def test_section_reorder_persists_sort():
+    """[ / ] 로 순서 이동 → sort_sections 호출 + 로컬 재정렬."""
+    fake = FakeClient()
+    app = WhooingTuiApp(client=fake)  # type: ignore[arg-type]
+    async with app.run_test() as pilot:
+        picker = await _open_picker(app, pilot)
+        # 첫 항목(s1) 하이라이트 상태에서 아래로 이동.
+        from textual.widgets import OptionList
+        picker.query_one("#sections-list", OptionList).highlighted = 0
+        picker.action_move_down()
+        await pilot.pause()
+        ok = await _wait_for(
+            lambda: getattr(fake, "sorted_ids", None) == ["s2", "s1"],
+            timeout=2.0,
+        )
+        assert ok, getattr(fake, "sorted_ids", None)
+        # 로컬 순서도 즉시 바뀜.
+        assert [s["section_id"] for s in picker._sections] == ["s2", "s1"]
+
+
+@pytest.mark.asyncio
+async def test_section_new_calls_create():
+    """n → 제목 입력 → create_section 호출 + 목록에 추가."""
+    fake = FakeClient()
+    app = WhooingTuiApp(client=fake)  # type: ignore[arg-type]
+    async with app.run_test() as pilot:
+        picker = await _open_picker(app, pilot)
+
+        async def _fake_wait(_modal):
+            return "새 가계부"
+        app.push_screen_wait = _fake_wait  # type: ignore[assignment]
+        picker.action_new_section()
+        ok = await _wait_for(
+            lambda: getattr(fake, "created", None) is not None, timeout=2.0,
+        )
+        assert ok
+        assert fake.created[0] == "새 가계부"
+
+
+@pytest.mark.asyncio
+async def test_section_delete_confirmed_calls_delete():
+    """d → 확인(True) → delete_section 호출."""
+    fake = FakeClient()
+    app = WhooingTuiApp(client=fake)  # type: ignore[arg-type]
+    async with app.run_test() as pilot:
+        picker = await _open_picker(app, pilot)
+        from textual.widgets import OptionList
+        picker.query_one("#sections-list", OptionList).highlighted = 1  # s2
+
+        async def _fake_wait(_modal):
+            return True   # 확인.
+        app.push_screen_wait = _fake_wait  # type: ignore[assignment]
+        picker.action_delete_section()
+        ok = await _wait_for(
+            lambda: getattr(fake, "deleted", None) == "s2", timeout=2.0,
+        )
+        assert ok
+
+
+@pytest.mark.asyncio
+async def test_section_delete_cancelled_skips_delete():
+    fake = FakeClient()
+    app = WhooingTuiApp(client=fake)  # type: ignore[arg-type]
+    async with app.run_test() as pilot:
+        picker = await _open_picker(app, pilot)
+
+        async def _fake_wait(_modal):
+            return False  # 취소.
+        app.push_screen_wait = _fake_wait  # type: ignore[assignment]
+        picker.action_delete_section()
+        await pilot.pause()
+        await _wait_for(lambda: "취소" in picker.last_status, timeout=2.0)
+        assert getattr(fake, "deleted", None) is None

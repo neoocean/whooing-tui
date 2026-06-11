@@ -27,6 +27,8 @@ from textual.widgets.option_list import Option
 from whooing_tui.client import WhooingClient
 from whooing_tui.ime import bind_ko
 from whooing_tui.models import ToolError
+from whooing_tui.widgets.confirm import ConfirmModal
+from whooing_tui.widgets.input_modal import InputModal
 
 log = logging.getLogger(__name__)
 
@@ -71,6 +73,14 @@ class SectionPickerScreen(ModalScreen[tuple[str, str | None] | None]):
         Binding("escape", "cancel", "Cancel", show=True),
         *bind_ko("q", "cancel", "Cancel", show=False),
         *bind_ko("r", "refresh", "Refresh", show=True),
+        # 0.84.0 (로드맵 P3-C): 섹션 CRUD + 순서 변경.
+        *bind_ko("n", "new_section", "New", show=True, priority=True),
+        *bind_ko("e", "rename_section", "Rename", show=True, priority=True),
+        *bind_ko("d", "delete_section", "Delete", show=True, priority=True),
+        Binding("left_square_bracket", "move_up", "↑순서", show=True,
+                priority=True, key_display="["),
+        Binding("right_square_bracket", "move_down", "↓순서", show=True,
+                priority=True, key_display="]"),
     ]
 
     def __init__(
@@ -82,6 +92,8 @@ class SectionPickerScreen(ModalScreen[tuple[str, str | None] | None]):
         self._client = client
         self._current = current_section_id
         self._sections_by_id: dict[str, dict[str, Any]] = {}
+        # 표시 순서대로의 섹션 dict list — 로컬 재정렬/재렌더의 source.
+        self._sections: list[dict[str, Any]] = []
         # 평문 status (테스트 친화).
         self.last_status: str = ""
 
@@ -111,6 +123,129 @@ class SectionPickerScreen(ModalScreen[tuple[str, str | None] | None]):
         self.set_status("재로드 중…")
         self.refresh_sections()
 
+    # ---- CRUD actions (0.84.0) ----------------------------------------
+
+    def action_new_section(self) -> None:
+        self._new_section_flow()
+
+    def action_rename_section(self) -> None:
+        sid = self._highlighted_sid()
+        if not sid:
+            self.set_status("선택된 섹션이 없습니다.", error=True)
+            return
+        self._rename_section_flow(sid)
+
+    def action_delete_section(self) -> None:
+        sid = self._highlighted_sid()
+        if not sid:
+            self.set_status("선택된 섹션이 없습니다.", error=True)
+            return
+        self._delete_section_flow(sid)
+
+    def action_move_up(self) -> None:
+        self._reorder(-1)
+
+    def action_move_down(self) -> None:
+        self._reorder(+1)
+
+    @work(exclusive=True, group="section-mutate", name="new_section")
+    async def _new_section_flow(self) -> None:
+        title = await self.app.push_screen_wait(InputModal(
+            title="새 섹션", prompt="섹션 제목 (1~30자):",
+            placeholder="예: 가계부 2026",
+        ))
+        if not title:
+            self.set_status("섹션 생성 취소됨.")
+            return
+        try:
+            await self._client.create_section(title=title)
+        except ToolError as e:
+            self.set_status(f"섹션 생성 실패 [{e.kind}] {e.message}", error=True)
+            return
+        except Exception as e:  # pragma: no cover
+            log.exception("create_section failed")
+            self.set_status(f"섹션 생성 실패 (INTERNAL): {e}", error=True)
+            return
+        self.set_status(f"섹션 추가 완료 ({title}). 재로드 중…")
+        self.refresh_sections()
+
+    @work(exclusive=True, group="section-mutate", name="rename_section")
+    async def _rename_section_flow(self, sid: str) -> None:
+        cur = self._sections_by_id.get(sid, {}).get("title") or ""
+        title = await self.app.push_screen_wait(InputModal(
+            title="섹션 이름 변경", prompt="새 제목 (1~30자):", initial=cur,
+        ))
+        if not title or title == cur:
+            self.set_status("이름 변경 취소됨.")
+            return
+        try:
+            await self._client.update_section(section_id=sid, title=title)
+        except ToolError as e:
+            self.set_status(f"이름 변경 실패 [{e.kind}] {e.message}", error=True)
+            return
+        except Exception as e:  # pragma: no cover
+            log.exception("update_section failed")
+            self.set_status(f"이름 변경 실패 (INTERNAL): {e}", error=True)
+            return
+        self.set_status(f"섹션 이름 변경 완료 ({title}). 재로드 중…")
+        self.refresh_sections()
+
+    @work(exclusive=True, group="section-mutate", name="delete_section")
+    async def _delete_section_flow(self, sid: str) -> None:
+        title = self._sections_by_id.get(sid, {}).get("title") or sid
+        warn = "" if sid != self._current else (
+            "\n\n[bold red]⚠ 현재 활성 섹션입니다.[/bold red]"
+        )
+        ok = await self.app.push_screen_wait(ConfirmModal(
+            f"섹션 '{title}' ({sid}) 을(를) 삭제할까요?\n"
+            f"딸린 거래·항목이 함께 삭제되며 되돌릴 수 없습니다.{warn}",
+            title="섹션 삭제",
+        ))
+        if not ok:
+            self.set_status("삭제 취소됨.")
+            return
+        try:
+            await self._client.delete_section(section_id=sid)
+        except ToolError as e:
+            self.set_status(f"섹션 삭제 실패 [{e.kind}] {e.message}", error=True)
+            return
+        except Exception as e:  # pragma: no cover
+            log.exception("delete_section failed")
+            self.set_status(f"섹션 삭제 실패 (INTERNAL): {e}", error=True)
+            return
+        self.set_status(f"섹션 삭제 완료 ({title}). 재로드 중…")
+        self.refresh_sections()
+
+    def _reorder(self, delta: int) -> None:
+        """하이라이트 섹션을 delta 만큼 이동 + 로컬 재렌더 + 서버 영속화."""
+        opt = self.query_one("#sections-list", OptionList)
+        idx = opt.highlighted
+        if idx is None or not self._sections:
+            return
+        j = idx + delta
+        if j < 0 or j >= len(self._sections):
+            return
+        moved_sid = self._sid_of(self._sections[idx])
+        self._sections[idx], self._sections[j] = (
+            self._sections[j], self._sections[idx],
+        )
+        # 즉시 로컬 재렌더 (서버 왕복 없이 반응적).
+        self._render_options(highlight_sid=moved_sid)
+        self._persist_sort([self._sid_of(s) for s in self._sections])
+
+    @work(exclusive=True, group="section-mutate", name="sort_sections")
+    async def _persist_sort(self, ids: list[str]) -> None:
+        try:
+            await self._client.sort_sections(section_ids=ids)
+        except ToolError as e:
+            self.set_status(f"순서 저장 실패 [{e.kind}] {e.message}", error=True)
+            return
+        except Exception as e:  # pragma: no cover
+            log.exception("sort_sections failed")
+            self.set_status(f"순서 저장 실패 (INTERNAL): {e}", error=True)
+            return
+        self.set_status("섹션 순서 저장됨.")
+
     # ---- worker -------------------------------------------------------
 
     @work(exclusive=True, group="picker", name="refresh_sections")
@@ -125,31 +260,48 @@ class SectionPickerScreen(ModalScreen[tuple[str, str | None] | None]):
             self.set_status(f"섹션 로드 실패 (INTERNAL): {e}", error=True)
             return
 
+        self._sections = list(sections)
         self._sections_by_id = {
             str(s.get("section_id") or s.get("id")): s for s in sections
         }
+        self._render_options(highlight_sid=self._current)
+        if sections:
+            self.set_status(
+                f"섹션 {len(sections)}개. Enter 선택 · n 새로 · e 이름 · "
+                "d 삭제 · [ ] 순서."
+            )
+
+    def _sid_of(self, s: dict[str, Any]) -> str:
+        return str(s.get("section_id") or s.get("id"))
+
+    def _render_options(self, *, highlight_sid: str | None = None) -> None:
+        """`self._sections` (현재 순서) 로 OptionList 재구성."""
         opt = self.query_one("#sections-list", OptionList)
         opt.clear_options()
-
-        if not sections:
+        if not self._sections:
             opt.add_option(Option("(섹션 없음)", disabled=True, id="__empty__"))
             self.set_status(
-                "후잉 계정에 섹션이 없습니다 — whooing.com 에서 먼저 생성하세요.",
+                "후잉 계정에 섹션이 없습니다 — n 으로 새 섹션을 만들거나 "
+                "whooing.com 에서 생성하세요.",
                 error=True,
             )
             return
-
-        # 현재 활성 섹션은 라벨 앞에 ▶ 인디케이터.
         highlight_idx = 0
-        for i, s in enumerate(sections):
-            sid = str(s.get("section_id") or s.get("id"))
+        for i, s in enumerate(self._sections):
+            sid = self._sid_of(s)
             title = s.get("title") or "(no title)"
             mark = "▶ " if sid == self._current else "  "
             opt.add_option(Option(f"{mark}{title}  [dim]{sid}[/dim]", id=sid))
-            if sid == self._current:
+            if sid == highlight_sid:
                 highlight_idx = i
         opt.highlighted = highlight_idx
-        self.set_status(f"섹션 {len(sections)}개. Enter 선택 / Esc 취소.")
+
+    def _highlighted_sid(self) -> str | None:
+        opt = self.query_one("#sections-list", OptionList)
+        idx = opt.highlighted
+        if idx is None or idx < 0 or idx >= len(self._sections):
+            return None
+        return self._sid_of(self._sections[idx])
 
     # ---- option list 이벤트 -------------------------------------------
 
