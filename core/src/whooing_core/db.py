@@ -16,6 +16,8 @@ Schema version (CL #51155+ — review C1):
   v9 (CL #52989): + dupe_scan_clusters 테이블 (중복 스캔 영구화).
   v10 (시나리오 11): + entry_revisions / entry_head — 거래 수정 이력 +
        소프트삭제(안 B: 후잉 실삭제 + logical_id 동일성 추적) + 복원/되돌리기.
+  v11 (반복거래누락탐지): + recurring_scan_series — 반복 시리즈 누락 스캔
+       결과 영구화 (dupe_scan_clusters 와 대칭).
 
 `_apply_lightweight_migrations` 가 try/except 로 멱등 — 어떤 이전 버전에서
 init 해도 최신까지 자동 적용. wrapper / 다른 도구가 `current_version()` 으로
@@ -33,7 +35,7 @@ from typing import Any, Iterator
 from whooing_core.dates import KST
 from datetime import datetime
 
-SCHEMA_VERSION = 10
+SCHEMA_VERSION = 11
 
 
 # ---- 연결 + schema -----------------------------------------------------
@@ -268,6 +270,45 @@ def _apply_lightweight_migrations(conn: sqlite3.Connection) -> None:
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_head_deleted "
             "ON entry_head(is_deleted, section_id)"
+        )
+    except sqlite3.OperationalError:  # pragma: no cover
+        pass
+
+    # 반복거래누락탐지 (schema v11): recurring_scan_series — 반복 시리즈의
+    # 누락 스캔 결과 영구화. dupe_scan_clusters 와 대칭 구조.
+    #
+    # 한 row = 반복 시리즈 1개 + 그 시리즈에서 빠진 회차(missing_json).
+    # status: 'pending' (검토 필요) | 'handled' (누락분 입력 / 처리함) |
+    # 'dismissed' (실제 반복 아님 / 의도적 중단). handled·dismissed 둘 다
+    # 다음 스캔에서 재등장 안 함. 동일 (section_id, range) 의 pending 이
+    # 하나라도 있으면 worker 가 cache hit — 후잉 API 안 부름.
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS recurring_scan_series (
+            id                 INTEGER PRIMARY KEY AUTOINCREMENT,
+            section_id         TEXT NOT NULL,
+            scan_range_start   TEXT NOT NULL,   -- YYYYMMDD
+            scan_range_end     TEXT NOT NULL,   -- YYYYMMDD
+            scanned_at         TEXT NOT NULL,   -- ISO8601 KST
+            l_account_id       TEXT,
+            r_account_id       TEXT,
+            item               TEXT,
+            cadence            TEXT NOT NULL,   -- weekly|biweekly|monthly|quarterly|yearly
+            typical_money      INTEGER,
+            occurrences        INTEGER,
+            last_date          TEXT,            -- 마지막 실제 회차 YYYYMMDD
+            missing_json       TEXT NOT NULL,   -- JSON list[{expected_date, kind}]
+            series_json        TEXT NOT NULL,   -- JSON RecurringSeries 스냅샷 (sample 등)
+            status             TEXT NOT NULL DEFAULT 'pending',
+            resolved_at        TEXT             -- status != pending 인 순간 ISO8601.
+        )
+        """
+    )
+    try:
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_recurring_scan_range "
+            "ON recurring_scan_series(section_id, scan_range_start, "
+            "scan_range_end, status)"
         )
     except sqlite3.OperationalError:  # pragma: no cover
         pass
