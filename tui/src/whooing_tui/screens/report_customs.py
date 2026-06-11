@@ -32,6 +32,7 @@ from whooing_tui.widgets import (
     ConfirmModal as _ConfirmModal,
     MenuBar, MenuBarMixin, MenuItem, MenuSpec, menubar_bindings,
 )
+from whooing_tui.widgets.list_crud import ListCrudMixin
 
 log = logging.getLogger(__name__)
 
@@ -120,10 +121,26 @@ class _ReportCustomEditModal(ModalScreen[dict | None]):
             self.action_cancel()
 
 
-class ReportCustomsScreen(StatusBarMixin, MenuBarMixin, ModalScreen[None]):
+class ReportCustomsScreen(
+    ListCrudMixin, StatusBarMixin, MenuBarMixin, ModalScreen[None],
+):
     """사용자 정의 보고서 행 list + 추가/삭제 + BS/PL 전환."""
 
     STATUS_ID = "#rc_status"
+    TABLE_ID = "#rc_table"
+
+    def _row_id(self, r: dict) -> str:
+        return str(r.get("id") or "")
+
+    def _row_cells(self, r: dict):
+        return (
+            self._row_id(r),
+            str(r.get("title") or "")[:24],
+            ", ".join(r.get("plus") or [])[:28],
+            ", ".join(r.get("minus") or [])[:20],
+            str(r.get("addminus") or "x"),
+        )
+
     BINDINGS = [
         *menubar_bindings(),
         *bind_ko("q", "back", "Back", show=True),
@@ -225,18 +242,7 @@ class ReportCustomsScreen(StatusBarMixin, MenuBarMixin, ModalScreen[None]):
             return
         rows = res.get("rows") if isinstance(res, dict) else res
         self._rows = [r for r in (rows or []) if isinstance(r, dict)]
-        table = self.query_one("#rc_table", DataTable)
-        table.clear()
-        for r in self._rows:
-            rid = str(r.get("id") or "")
-            table.add_row(
-                rid,
-                str(r.get("title") or "")[:24],
-                ", ".join(r.get("plus") or [])[:28],
-                ", ".join(r.get("minus") or [])[:20],
-                str(r.get("addminus") or "x"),
-                key=rid,
-            )
+        self._render_rows()
         label = _REPORT_KR[self._report]
         if self._rows:
             self._set_status(
@@ -278,19 +284,11 @@ class ReportCustomsScreen(StatusBarMixin, MenuBarMixin, ModalScreen[None]):
 
     @work(exclusive=True, group="rc-delete", name="delete")
     async def _delete_worker(self) -> None:
-        table = self.query_one("#rc_table", DataTable)
-        if not table.row_count:
+        match = self._cursor_row()
+        if match is None:
             self._set_status("선택할 행이 없습니다.", warn=True)
             return
-        try:
-            row_key = table.coordinate_to_cell_key(table.cursor_coordinate).row_key
-            rid = str(row_key.value)
-        except (AttributeError, TypeError, ValueError):
-            return
-        match = next((r for r in self._rows if str(r.get("id")) == rid), None)
-        if not match:
-            self._set_status(f"id={rid} 찾을 수 없음.", warn=True)
-            return
+        rid = self._row_id(match)
         ok = await self.app.push_screen_wait(_ConfirmModal(
             f"사용자 정의 행 '{match.get('title') or rid}' (id={rid}) 을(를) "
             f"삭제할까요?\n\n되돌릴 수 없습니다."

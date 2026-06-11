@@ -167,12 +167,15 @@ class _MonthlyEditModal(ModalScreen[dict | None]):
 # CL #51156+ (review C6): `_ConfirmModal` → `widgets.ConfirmModal` 사용.
 
 from whooing_tui.widgets import ConfirmModal as _ConfirmModal  # 호환 alias.
+from whooing_tui.widgets.list_crud import ListCrudMixin
 
 
 # ---- Main screen --------------------------------------------------------
 
 
-class MonthlyEntriesScreen(StatusBarMixin, MenuBarMixin, ModalScreen[None]):
+class MonthlyEntriesScreen(
+    ListCrudMixin, StatusBarMixin, MenuBarMixin, ModalScreen[None],
+):
     """매월 입력 거래 list + 추가/삭제.
 
     CL #52896+: 사용자 요청 — 전체 화면 Screen → ModalScreen 으로 변경.
@@ -180,6 +183,7 @@ class MonthlyEntriesScreen(StatusBarMixin, MenuBarMixin, ModalScreen[None]):
     """
 
     STATUS_ID = "#m_status"
+    TABLE_ID = "#m_table"
     BINDINGS = [
         *menubar_bindings(),
         *bind_ko("q", "back", "Back", show=True),
@@ -305,24 +309,26 @@ class MonthlyEntriesScreen(StatusBarMixin, MenuBarMixin, ModalScreen[None]):
             self._set_status(f"매월거래 조회 실패: {ex}", error=True)
             return
         self._rows = list(rows or [])
-        table = self.query_one("#m_table", DataTable)
-        table.clear()
-        for r in self._rows:
-            l_id = str(r.get("l_account_id") or "")
-            r_id = str(r.get("r_account_id") or "")
-            l_name = self._session.title_of(l_id) if l_id else ""
-            r_name = self._session.title_of(r_id) if r_id else ""
-            table.add_row(
-                str(r.get("monthly_id") or r.get("id") or ""),
-                str(r.get("target_day") or ""),
-                l_name or l_id,
-                r_name or r_id,
-                _fmt_money(r.get("money")),
-                str(r.get("item") or "")[:30],
-                key=str(r.get("monthly_id") or r.get("id") or ""),
-            )
+        self._render_rows()
         self._set_status(
             f"{len(self._rows)} 건 — n=신규 / d=삭제 / r=새로고침 / q=뒤로"
+        )
+
+    def _row_id(self, r: dict) -> str:
+        return str(r.get("monthly_id") or r.get("id") or "")
+
+    def _row_cells(self, r: dict):
+        l_id = str(r.get("l_account_id") or "")
+        r_id = str(r.get("r_account_id") or "")
+        l_name = self._session.title_of(l_id) if l_id else ""
+        r_name = self._session.title_of(r_id) if r_id else ""
+        return (
+            self._row_id(r),
+            str(r.get("target_day") or ""),
+            l_name or l_id,
+            r_name or r_id,
+            _fmt_money(r.get("money")),
+            str(r.get("item") or "")[:30],
         )
 
     def action_new_entry(self) -> None:
@@ -355,20 +361,11 @@ class MonthlyEntriesScreen(StatusBarMixin, MenuBarMixin, ModalScreen[None]):
 
     @work(exclusive=True, group="monthly-delete", name="delete")
     async def _delete_worker(self) -> None:
-        table = self.query_one("#m_table", DataTable)
-        if not table.row_count:
+        match = self._cursor_row()
+        if match is None:
             self._set_status("선택할 매월거래가 없습니다.", warn=True)
             return
-        try:
-            row_key = table.coordinate_to_cell_key(table.cursor_coordinate).row_key
-            mid = str(row_key.value)
-        except (AttributeError, TypeError, ValueError):
-            return
-        match = next((r for r in self._rows if str(
-            r.get("monthly_id") or r.get("id") or "") == mid), None)
-        if not match:
-            self._set_status(f"id={mid} 찾을 수 없음.", warn=True)
-            return
+        mid = self._row_id(match)
         ok = await self.app.push_screen_wait(_ConfirmModal(
             f"매월거래 {mid} (day={match.get('target_day')}, "
             f"item={match.get('item') or ''}) 를 삭제할까요?\n\n"

@@ -35,6 +35,7 @@ from whooing_tui.models import ToolError
 from whooing_tui.screens.account_picker import AccountPickerScreen
 from whooing_tui.screens.edit_entry import _AccountButton
 from whooing_tui.state import SessionState
+from whooing_tui.widgets.list_crud import ListCrudMixin
 from whooing_tui.widgets import (
     StatusBarMixin,
     ConfirmModal as _ConfirmModal,
@@ -166,10 +167,13 @@ class _FrequentEditModal(ModalScreen[dict | None]):
 # ---- Main screen --------------------------------------------------------
 
 
-class FrequentItemsScreen(StatusBarMixin, MenuBarMixin, ModalScreen[dict | None]):
+class FrequentItemsScreen(
+    ListCrudMixin, StatusBarMixin, MenuBarMixin, ModalScreen[dict | None],
+):
     """자주입력 거래 list + 추가/삭제 + Enter 로 새 거래 사용."""
 
     STATUS_ID = "#f_status"
+    TABLE_ID = "#f_table"
     BINDINGS = [
         *menubar_bindings(),
         *bind_ko("q", "back", "Back", show=True),
@@ -271,23 +275,7 @@ class FrequentItemsScreen(StatusBarMixin, MenuBarMixin, ModalScreen[dict | None]
             self._set_status(f"자주입력 조회 실패: {ex}", error=True)
             return
         self._rows = list(rows or [])
-        table = self.query_one("#f_table", DataTable)
-        table.clear()
-        for r in self._rows:
-            fid = str(r.get("item_id") or r.get("id") or "")
-            l_id = str(r.get("l_account_id") or "")
-            r_id = str(r.get("r_account_id") or "")
-            l_name = self._session.title_of(l_id) if l_id else ""
-            r_name = self._session.title_of(r_id) if r_id else ""
-            table.add_row(
-                fid,
-                str(r.get("slot") or ""),
-                l_name or l_id,
-                r_name or r_id,
-                _fmt_money(r.get("money")),
-                str(r.get("item") or "")[:30],
-                key=fid,
-            )
+        self._render_rows()
         if self._rows:
             self._set_status(
                 f"{len(self._rows)} 건 — Enter 사용 / n 신규 / d 삭제 / q 뒤로"
@@ -297,18 +285,21 @@ class FrequentItemsScreen(StatusBarMixin, MenuBarMixin, ModalScreen[dict | None]
                 "자주입력 거래가 없습니다 — n 으로 등록하세요.", warn=True,
             )
 
-    def _cursor_row(self) -> dict[str, Any] | None:
-        table = self.query_one("#f_table", DataTable)
-        if not table.row_count:
-            return None
-        try:
-            row_key = table.coordinate_to_cell_key(table.cursor_coordinate).row_key
-            fid = str(row_key.value)
-        except (AttributeError, TypeError, ValueError):
-            return None
-        return next(
-            (r for r in self._rows
-             if str(r.get("item_id") or r.get("id") or "") == fid), None,
+    def _row_id(self, r: dict) -> str:
+        return str(r.get("item_id") or r.get("id") or "")
+
+    def _row_cells(self, r: dict):
+        l_id = str(r.get("l_account_id") or "")
+        r_id = str(r.get("r_account_id") or "")
+        l_name = self._session.title_of(l_id) if l_id else ""
+        r_name = self._session.title_of(r_id) if r_id else ""
+        return (
+            self._row_id(r),
+            str(r.get("slot") or ""),
+            l_name or l_id,
+            r_name or r_id,
+            _fmt_money(r.get("money")),
+            str(r.get("item") or "")[:30],
         )
 
     def action_use_item(self) -> None:

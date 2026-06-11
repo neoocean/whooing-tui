@@ -18,6 +18,11 @@
   에서 `[`/`]` 로 같은 타입 그룹 안 항목 표시 순서 변경 → 로컬 즉시 재렌더
   + 디바운스 `sort_accounts` 영속화. 정렬은 표시 순서만(거래 무관). 0.84.0
   에서 메서드만 준비됐던 것을 UI 까지 완성.
+- **`ListCrudMixin` 추출** (감사 1-C 부분) — `monthly`/`frequent`/`report_customs`
+  가 각자 복제하던 cursor→행 dict 해석(`_cursor_row`, 3벌)과 테이블 clear+
+  add_row 루프를 `widgets/list_crud.py` 한 곳으로. 서브클래스는 `TABLE_ID` +
+  `_row_id`/`_row_cells` 만 지정. compose/CSS/worker 골격은 화면별 특수성으로
+  유지(전체 베이스 추출은 4번째 유사 화면 전까지 보류 — 감사 문서).
 
 ## 0.84.1 — 코드 감사 후속 적용 (2026-06-11)
 
