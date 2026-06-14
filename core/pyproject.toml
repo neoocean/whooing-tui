@@ -13,6 +13,7 @@ authors = [{ name = "Woojin Kim", email = "me@woojinkim.org" }]
 dependencies = [
     "beautifulsoup4>=4.12",
     "pdfplumber>=0.11",
+    "pikepdf>=8",
     "playwright>=1.40",
     "lxml>=5",
 ]

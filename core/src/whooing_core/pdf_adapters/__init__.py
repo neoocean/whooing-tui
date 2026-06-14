@@ -14,6 +14,23 @@ from whooing_core.pdf_adapters.base import (
     PDFDetectResult,
     extract_first_page_text,
 )
+from whooing_core.pdf_adapters.decrypt import (
+    PdfDecryptError,
+    decrypt_pdf,
+    is_encrypted,
+)
+
+__all__ = [
+    "CSVRow",
+    "PDFDetectResult",
+    "PdfDecryptError",
+    "decrypt_pdf",
+    "detect",
+    "extract_first_page_text",
+    "is_encrypted",
+    "known_issuers",
+    "parse",
+]
 
 # (issuer_id, score_text_fn, parse_fn)
 _REGISTRY: list[tuple[
