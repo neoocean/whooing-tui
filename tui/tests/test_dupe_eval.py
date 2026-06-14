@@ -52,7 +52,9 @@ class FakeClient:
     async def list_entries(self, section_id, start_date, end_date):
         return list(self._entries)
 
-    async def delete_entry(self, *, section_id, entry_id) -> dict[str, Any]:
+    async def delete_entry(
+        self, *, section_id, entry_id, entry_date=None,
+    ) -> dict[str, Any]:
         if self.delete_error is not None:
             raise self.delete_error
         self.delete_calls.append({"section_id": section_id, "entry_id": entry_id})

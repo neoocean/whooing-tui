@@ -40,6 +40,7 @@ from __future__ import annotations
 
 import logging
 import os
+from collections.abc import Iterable
 from datetime import datetime, timedelta
 from typing import Any
 
@@ -322,6 +323,7 @@ class EntriesScreen(ScanMixin, MenuBarMixin, Screen):
                     MenuItem("자주입력 거래…", "open_frequent"),
                     MenuItem("중복 거래 검사…", "scan_duplicates"),
                     MenuItem("반복 거래 누락 검사…", "scan_recurring"),
+                    MenuItem("외부입력(임시저장소) 조회…", "scan_outside"),
                 ),
             ),
             MenuSpec(
@@ -972,6 +974,33 @@ class EntriesScreen(ScanMixin, MenuBarMixin, Screen):
             return
         self.app.push_screen(ReportCustomsScreen(self._client, session))
 
+    def action_scan_outside(self) -> None:
+        """입력 메뉴 → 외부입력(임시저장소) 조회·확정·삭제 (시나리오 14).
+
+        후잉이 SMS/웹훅으로 받아둔 미확정 항목을 TUI 에서 처리한다. 후잉
+        비공식 내부 엔드포인트(`outside.py`)를 쓰므로 실패는 graceful.
+        """
+        from whooing_tui.outside import OutsideClient
+        from whooing_tui.screens.outside_inbox import OutsideInboxScreen
+        session = self.app.session  # type: ignore[attr-defined]
+        if not session.section_id:
+            self.set_status(
+                "활성 섹션이 없습니다 — `s` 로 먼저 선택하세요.", error=True,
+            )
+            return
+        try:
+            auth = self._client.auth
+        except Exception:  # pragma: no cover — 방어
+            self.set_status("인증 정보를 찾을 수 없습니다.", error=True)
+            return
+        self.app.push_screen(
+            OutsideInboxScreen(
+                OutsideClient(auth),
+                section_id=session.section_id,
+                session=session,
+            )
+        )
+
     def action_open_trash(self) -> None:
         """화면 메뉴 → 휴지통 (시나리오 11). 소프트삭제 거래 복원/영구삭제."""
         from whooing_tui.screens.trash import TrashScreen
@@ -1043,13 +1072,18 @@ class EntriesScreen(ScanMixin, MenuBarMixin, Screen):
         else:
             self._selected_entry_ids.add(eid)
         n = len(self._selected_entry_ids)
-        # 화면 즉시 갱신 — selection prefix / 색반전 반영.
+        # 화면 즉시 갱신 — selection prefix / 색반전 반영. 감사 §3-B:
+        # 전체 재렌더 대신 토글된 단일 row 만 갱신 (cursor 는 그대로).
         try:
             table = self.query_one("#entries-table", DataTable)
-            cur_row = table.cursor_row
+            changed_idx = self._entry_index_for_row(table.cursor_row)
         except Exception:  # pragma: no cover
-            cur_row = None
-        self._render_table(self._entries, target_cursor=cur_row)
+            changed_idx = None
+        if changed_idx is None:
+            # 변환 실패 (드묾) — 안전하게 전체 재렌더 fallback.
+            self._render_table(self._entries)
+        else:
+            self._refresh_selection_display([changed_idx])
         self.set_status(
             f"선택 {n}건. space=토글 / m=메뉴 / #=일괄 태그 / Esc=해제"
         )
@@ -1093,8 +1127,8 @@ class EntriesScreen(ScanMixin, MenuBarMixin, Screen):
         except Exception as ex:
             self.set_status(f"일괄 태그 실패: {ex}", error=True)
             return
-        from whooing_tui import p4_sync
-        p4_sync.submit_db_to_p4(
+        from whooing_tui import sync
+        sync.submit_db(
             tui_data.db_path(),
             f"[whooing-tui] batch tag add #{tag}: {added}/{len(eids)} entries "
             f"(section={session.section_id})",
@@ -1141,6 +1175,13 @@ class EntriesScreen(ScanMixin, MenuBarMixin, Screen):
             )
             return
 
+        # 감사 §3-D: 선택 entry 의 entry_date 를 알고 있으므로 삭제 시
+        # 넘겨 해당 윈도우만 캐시 무효화 (bulk 삭제 캐시 폭파 방지).
+        date_by_id = {
+            str(e.get("entry_id") or ""): (e.get("entry_date") or None)
+            for e in targets
+        }
+
         async def _delete_many(eids: list[str]) -> tuple[int, list[str]]:
             """후잉 삭제 + 로컬 db 정리 — dedup 화면이 호출."""
             deleted = 0
@@ -1149,6 +1190,7 @@ class EntriesScreen(ScanMixin, MenuBarMixin, Screen):
                 try:
                     await self._client.delete_entry(
                         section_id=session.section_id, entry_id=eid,
+                        entry_date=date_by_id.get(eid),
                     )
                     deleted += 1
                     try:
@@ -1465,19 +1507,21 @@ class EntriesScreen(ScanMixin, MenuBarMixin, Screen):
             self._selection_anchor = table.cursor_row
         anchor = self._selection_anchor
         lo, hi = sorted((anchor, target_row))
+        # 감사 §3-B: anchor~target 범위에서 *새로* 선택된 row index 만
+        # 모은다. selection 은 union(추가)이라 reverse 방향이어도 해제는
+        # 없으므로 새로 추가된 row 만 다시 그리면 충분 — Shift 홀드 스텝당
+        # 전체 재렌더(O(N))를 O(Δ) 로 낮춘다.
+        changed: list[int] = []
         for r in range(lo, hi + 1):
             idx = self._entry_index_for_row(r)
             if idx is None or idx < 0 or idx >= len(self._entries):
                 continue
             eid = str(self._entries[idx].get("entry_id") or "")
-            if eid:
+            if eid and eid not in self._selected_entry_ids:
                 self._selected_entry_ids.add(eid)
-        try:
-            table.move_cursor(row=target_row, animate=False)
-        except Exception:  # pragma: no cover
-            pass
-        # 행을 다시 그려 ▣ 표시 반영.
-        self._render_table(self._entries, target_cursor=target_row)
+                changed.append(idx)
+        # 바뀐 row 만 다시 그리고 cursor 를 target 으로 (▣/색반전 반영).
+        self._refresh_selection_display(changed, new_cursor_row=target_row)
         self.set_status(
             f"선택: {len(self._selected_entry_ids)}건 "
             f"(Shift+navigation 으로 범위 확장 / m 또는 # 으로 일괄 태그)",
@@ -2124,10 +2168,39 @@ class EntriesScreen(ScanMixin, MenuBarMixin, Screen):
             out.append(e)
             if eid:
                 seen.add(eid)
-        out.sort(
-            key=lambda e: (e.get("entry_date") or "", str(e.get("entry_id") or "")),
-            reverse=True,
-        )
+        out.sort(key=self._filter_sort_key, reverse=True)
+        return out
+
+    @staticmethod
+    def _filter_sort_key(e: dict[str, Any]) -> tuple[str, str]:
+        """필터 결과 정렬 키 — entry_date 우선, tie 는 entry_id (안정)."""
+        return (e.get("entry_date") or "", str(e.get("entry_id") or ""))
+
+    @classmethod
+    def _merge_desc(
+        cls,
+        a: list[dict[str, Any]],
+        b: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        """desc 정렬된 두 리스트를 정렬 유지하며 병합 (entry_id 중복 없음 가정).
+
+        감사 §3-E: 필터 과거 확장이 step 마다 누적 전체를 재정렬(O(M log M))
+        하던 것을, 이미 정렬된 누적 + 새 매치를 O(M+Δ) 로 병합해 대체.
+        """
+        out: list[dict[str, Any]] = []
+        i = j = 0
+        na, nb = len(a), len(b)
+        while i < na and j < nb:
+            if cls._filter_sort_key(a[i]) >= cls._filter_sort_key(b[j]):
+                out.append(a[i])
+                i += 1
+            else:
+                out.append(b[j])
+                j += 1
+        if i < na:
+            out.extend(a[i:])
+        if j < nb:
+            out.extend(b[j:])
         return out
 
     @work(exclusive=True, group="filter_expand", name="expand_filter")
@@ -2171,6 +2244,12 @@ class EntriesScreen(ScanMixin, MenuBarMixin, Screen):
         # 시작점 — _all_entries 의 가장 오래된 날짜.
         window_oldest = self._window_oldest_yyyymmdd() or today_yyyymmdd()
 
+        # 감사 §3-E: window 매칭은 루프 동안 불변 → 한 번만 필터(종전엔 step
+        # 마다 _all_entries 전체를 재필터). 누적 결과는 정렬 유지로 관리해
+        # step 마다 전체 재정렬(O(M log M))을 병합(O(M+Δ))으로 대체.
+        window_filtered = filter_entries(self._all_entries, column, target)
+        combined = self._combine_filter_results(window_filtered, self._filter_extra)
+
         for months in steps:
             if epoch != self._filter_epoch:
                 return  # 사용자가 필터 변경 — 폐기.
@@ -2205,14 +2284,12 @@ class EntriesScreen(ScanMixin, MenuBarMixin, Screen):
                 if str(e.get("entry_id") or "") not in current_ids
             ]
             if new_matches:
+                # 새 매치를 정렬해 누적(combined)에 병합 — current_ids 가
+                # _all_entries ∪ _filter_extra 를 이미 배제하므로 combined 와
+                # 중복 없음(window_filtered ⊆ _all_entries).
+                new_matches.sort(key=self._filter_sort_key, reverse=True)
                 self._filter_extra.extend(new_matches)
-                # 화면 갱신.
-                window_filtered = filter_entries(
-                    self._all_entries, column, target,
-                )
-                combined = self._combine_filter_results(
-                    window_filtered, self._filter_extra,
-                )
+                combined = self._merge_desc(combined, new_matches)
                 self._entries = combined
                 self._render_table(combined)
             label = self._filter_label(column, target)
@@ -2315,6 +2392,67 @@ class EntriesScreen(ScanMixin, MenuBarMixin, Screen):
         if idx >= len(self._entries):
             return None
         return idx
+
+    def _row_for_entry_index(self, idx: int) -> int:
+        """`_entries` index → DataTable row index. `_entry_index_for_row` 역.
+
+        sentinel 가시 시 +1 shift. (선택 토글 시 해당 row 만 갱신하기 위함.)
+        """
+        return idx + 1 if self._show_sentinel else idx
+
+    def _refresh_selection_display(
+        self,
+        changed_indices: Iterable[int | None],
+        *,
+        new_cursor_row: int | None = None,
+    ) -> None:
+        """선택 상태가 바뀐 entry row 들만 cell 단위로 다시 그린다.
+
+        감사 2026-06 §3-B: 종전엔 space 토글 / Shift-범위선택마다
+        `_render_table` 이 전 N행을 재빌드 (`_format_cell` ×6컬럼 ×N행) →
+        1000행 창에서 per-keystroke O(N), Shift 홀드는 O(N²). 여기서는
+        멤버십이 바뀐 row 들 + (있다면) 직전 컬럼-marker row 만
+        `update_cell_at` 으로 갱신해 O(Δ) 로 낮춘다.
+
+        컬럼 marker(`_marked_cell`) 는 일단 모두 지운 뒤 repaint 하고
+        `_update_active_cell_marker` 로 현재 cursor 셀에 재적용 —
+        `_render_table` 의 마무리와 동일한 순서라 marker/선택 표시가
+        깨지지 않는다.
+        """
+        table = self.query_one("#entries-table", DataTable)
+        n_cols = len(self._COLUMN_NAMES)
+        rows_to_paint: set[int] = set()
+        for idx in changed_indices:
+            if idx is not None and 0 <= idx < len(self._entries):
+                rows_to_paint.add(self._row_for_entry_index(idx))
+        # 직전 marker 가 걸린 row 도 plain 으로 복원되도록 포함.
+        if self._marked_cell is not None:
+            rows_to_paint.add(self._marked_cell[0])
+        self._marked_cell = None
+        for row in rows_to_paint:
+            entry_idx = self._entry_index_for_row(row)
+            if entry_idx is None:
+                continue
+            e = self._entries[entry_idx]
+            eid = str(e.get("entry_id") or "")
+            selected = bool(eid) and eid in self._selected_entry_ids
+            for col in range(n_cols):
+                cell = self._format_cell(e, col)
+                if selected:
+                    cell = self._highlight_selected_cell(cell)
+                try:
+                    table.update_cell_at(
+                        Coordinate(row, col), cell, update_width=False,
+                    )
+                except Exception:  # pragma: no cover — coordinate stale
+                    pass
+        if new_cursor_row is not None:
+            try:
+                table.move_cursor(row=new_cursor_row, animate=False)
+            except Exception:  # pragma: no cover
+                pass
+        self._update_active_cell_marker()
+        self._update_sentinel_cursor_class()
 
     def _selected_entry(self) -> dict[str, Any] | None:
         """현재 DataTable cursor 가 가리키는 entry. sentinel row 또는
@@ -2594,6 +2732,8 @@ class EntriesScreen(ScanMixin, MenuBarMixin, Screen):
         try:
             await self._client.delete_entry(
                 section_id=session.section_id, entry_id=str(eid),
+                # 감사 §3-D: 날짜를 넘겨 해당 윈도우만 캐시 무효화.
+                entry_date=(target.get("entry_date") or None),
             )
         except ToolError as e:
             self.set_status(f"거래 삭제 실패 [{e.kind}] {e.message}", error=True)

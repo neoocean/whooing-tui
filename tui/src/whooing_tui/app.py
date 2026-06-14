@@ -144,14 +144,14 @@ class _ShutdownModal(ModalScreen[None]):
         except Exception:  # pragma: no cover — worker API 변경 보호
             log.debug("worker enumeration failed", exc_info=True)
 
-        # 2) P4 submit threads — pending_count.
+        # 2) 동기화 백엔드의 진행 중 제출 — pending_count (백엔드 없으면 0).
         try:
-            from whooing_tui import p4_sync
-            n_p4 = p4_sync.pending_count()
-            if n_p4 > 0:
-                lines.append(f"  • P4 submit {n_p4}건 대기 중")
+            from whooing_tui import sync
+            n_sync = sync.pending_count()
+            if n_sync > 0:
+                lines.append(f"  • 동기화 submit {n_sync}건 대기 중")
         except Exception:  # pragma: no cover
-            log.debug("p4 pending count failed", exc_info=True)
+            log.debug("sync pending count failed", exc_info=True)
 
         # 테스트 친화 — 마지막 라벨 list 노출.
         self.last_task_labels = [s.strip("• ").strip() for s in lines]
@@ -178,8 +178,8 @@ class _StartupCheckScreen(ModalScreen[bool]):
          - 오래됨 → 에러 메시지 + 닫기 버튼 → dismiss(False) → 앱 종료.
          - 최신 → dismiss(True) → app 이 EntriesScreen push.
 
-    `WHOOING_DATA_DIR` 가 명시 set 되면 (테스트 격리) 모든 검사 skip — 즉시
-    dismiss(True). P4 환경 부재 / db 가 workspace 매핑 외인 경우도 silent skip.
+    동기화 백엔드가 'none'(기본) 이면 모든 검사 skip — 즉시 dismiss(True).
+    P4 환경 부재 / db 가 workspace 매핑 외인 경우도 silent skip.
 
     종료 시퀀스처럼 *취소 불가* — Esc / q / ctrl+c noop.
     """
@@ -278,19 +278,19 @@ class _StartupCheckScreen(ModalScreen[bool]):
 
     @work(exclusive=True, group="startup", name="startup_check")
     async def _run_check(self) -> None:
-        """blocking p4 작업은 thread executor 로 — main loop 차단 방지."""
+        """blocking 동기화 작업은 thread executor 로 — main loop 차단 방지."""
         import asyncio
-        import os
 
-        # 테스트 격리: WHOOING_DATA_DIR set → 모두 skip.
-        if os.getenv("WHOOING_DATA_DIR") is not None:
+        from whooing_tui import sync
+
+        # 동기화 백엔드가 'none'(기본) 이면 검사 자체가 무의미 — 즉시 통과.
+        if not sync.is_enabled():
             self.stage = "skipped"
             self.dismiss(True)
             return
 
         try:
             from whooing_tui import data as tui_data
-            from whooing_tui import p4_sync
             db_path = tui_data.db_path()
         except Exception:
             log.exception("startup check: db_path lookup failed")
@@ -303,38 +303,38 @@ class _StartupCheckScreen(ModalScreen[bool]):
         self.stage = "checking"
         try:
             has_pending = await loop.run_in_executor(
-                None, p4_sync.has_pending_local_changes, db_path,
+                None, sync.startup_has_pending, db_path,
             )
         except Exception:
-            log.exception("startup: reconcile -n failed")
+            log.exception("startup: pending check failed")
             has_pending = False
 
         if has_pending:
             self.stage = "submitting"
             self._set_status(
-                "로컬 변경 사항이 있어 먼저 P4 에 submit 합니다…\n"
+                "로컬 변경 사항이 있어 먼저 동기화에 submit 합니다…\n"
                 "[dim]잠시만 기다려 주세요.[/dim]",
             )
-            # CL #52853+: pending 처리 path 는 flush_on_exit 의 새 short-
-            # circuit (세션 mutation 없으면 skip) 을 우회해야 한다. 본
-            # caller 가 *바로 지금* mutation 처리 의도가 있으므로 명시 mark.
-            p4_sync.mark_session_mutated()
+            # CL #52853+: pending 처리 path 는 flush_on_exit 의 short-circuit
+            # (세션 mutation 없으면 skip) 을 우회해야 한다. 본 caller 가
+            # *바로 지금* mutation 처리 의도가 있으므로 명시 mark.
+            sync.mark_session_mutated()
             try:
                 await loop.run_in_executor(
-                    None, p4_sync.flush_on_exit, db_path,
+                    None, sync.flush_on_exit, db_path,
                 )
             except Exception:
                 log.exception("startup: submit failed")
                 # 실패해도 진행 — 다음 단계의 outdated 검사가 막을 수 있음.
 
-        # 2) P4 head 와 비교 → outdated 면 종료.
-        self._set_status("P4 head 와 비교 중…")
+        # 2) 원격 head 와 비교 → outdated 면 종료.
+        self._set_status("원격 head 와 비교 중…")
         try:
             outdated = await loop.run_in_executor(
-                None, p4_sync.is_outdated_vs_p4, db_path,
+                None, sync.startup_is_outdated, db_path,
             )
         except Exception:
-            log.exception("startup: sync -n failed")
+            log.exception("startup: outdated check failed")
             outdated = False
 
         if outdated:
@@ -395,6 +395,13 @@ class WhooingTuiApp(App):
 
     def on_mount(self) -> None:
         cfg = load_config()
+        # 동기화 백엔드 결정 (env > config > 기본 'none') — 시작/종료/mutation
+        # 의 모든 sync 호출이 본 설정을 따른다. 기본 'none' 이면 P4 완전 무시.
+        try:
+            from whooing_tui import sync
+            sync.configure(sync.resolve(cfg))
+        except Exception:  # pragma: no cover
+            log.debug("sync backend 결정 실패 — 기본(none)", exc_info=True)
         try:
             self.theme = cfg.theme
         except Exception:
@@ -435,28 +442,24 @@ class WhooingTuiApp(App):
         self.exit()
 
     def on_unmount(self) -> None:
-        """App 종료 직전 — 진행 중인 P4 sync submit 들을 끝까지 기다린 뒤,
-        추가로 한 번 더 reconcile + submit (마지막 안전망).
+        """App 종료 직전 — 진행 중인 동기화 submit 들을 끝까지 기다린 뒤,
+        추가로 한 번 더 flush (마지막 안전망). 백엔드 'none' 이면 전부 no-op.
 
         CL #51118+: 0.15.0~0.15.1 까지의 daemon thread 가 main thread 종료
         시 같이 죽어 마지막 mutation 의 자동 submit 이 미완료로 끝남.
         `wait_for_pending` 으로 모든 활성 submit join.
         CL #51119+ (사용자 요청): 추가로 종료 시점에 `flush_on_exit` 한 번
-        더 — race / 누락 케이스에서도 마지막 변경이 P4 에 반영되도록.
-        `WHOOING_DATA_DIR` env 이 명시 set 이면 (테스트 격리) skip.
+        더 — race / 누락 케이스에서도 마지막 변경이 반영되도록.
         """
         try:
-            import os
             from whooing_tui import data as tui_data
-            from whooing_tui import p4_sync
-            if os.getenv("WHOOING_DATA_DIR") is not None:
-                # 테스트 / 명시 override — flush 자체가 사용자 실 db 를
-                # 건드리지 않게 wait 만.
-                p4_sync.wait_for_pending()
+            from whooing_tui import sync
+            if not sync.is_enabled():
                 return
-            p4_sync.flush_on_exit(tui_data.db_path())
+            sync.wait_for_pending()
+            sync.flush_on_exit(tui_data.db_path())
         except Exception:  # pragma: no cover — 종료 흐름은 절대 막지 않음
-            log.debug("p4 sync flush failed at unmount", exc_info=True)
+            log.debug("sync flush failed at unmount", exc_info=True)
 
     def action_graceful_quit(self) -> None:
         """CL #52761+: q / ㅂ 종료 — 모달 표시 + flush 작업 → 자동 exit.
@@ -479,23 +482,17 @@ class WhooingTuiApp(App):
 
     @work(exclusive=True, group="shutdown", name="shutdown_flush")
     async def _shutdown_worker(self) -> None:
-        """blocking flush 를 thread 로 보내고, 끝나면 exit."""
+        """blocking flush 를 thread 로 보내고, 끝나면 exit. 백엔드 없으면 즉시 exit."""
         import asyncio
-        import os
 
         try:
-            if os.getenv("WHOOING_DATA_DIR") is not None:
-                # 테스트 격리 — wait_for_pending 만.
-                from whooing_tui import p4_sync
-                loop = asyncio.get_running_loop()
-                await loop.run_in_executor(None, p4_sync.wait_for_pending)
-            else:
+            from whooing_tui import sync
+            if sync.is_enabled():
                 from whooing_tui import data as tui_data
-                from whooing_tui import p4_sync
                 db_path = tui_data.db_path()
                 loop = asyncio.get_running_loop()
                 await loop.run_in_executor(
-                    None, p4_sync.flush_on_exit, db_path,
+                    None, sync.flush_on_exit, db_path,
                 )
         except Exception:  # pragma: no cover — 종료 흐름은 절대 막지 않음
             log.debug("graceful shutdown flush failed", exc_info=True)

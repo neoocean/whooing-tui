@@ -1401,7 +1401,14 @@ class CachedWhooingClient:
 
     async def delete_entry(self, **kwargs) -> dict[str, Any]:
         out = await self._inner.delete_entry(**kwargs)
-        self._store.invalidate_entries(kwargs.get("section_id"))
+        # 감사 2026-06 §3-D: delete 는 entry_date 가 *바뀌지 않으므로*
+        # (create 와 달리) 호출자가 날짜를 주면 그 윈도우만 선택 무효화한다 —
+        # bulk dedup 이 20~60건 순차 삭제 시 캐시 전체를 매번 폭파하던 것을
+        # 방지. 날짜 미제공이면 종전대로 섹션 전체 무효화(안전한 기본값).
+        self._store.invalidate_entries(
+            kwargs.get("section_id"),
+            entry_date=(kwargs.get("entry_date") or None),
+        )
         return out
 
     # accounts CRUD — accounts 캐시 + entries 캐시 둘 다 invalidate.

@@ -158,10 +158,10 @@ class EntryRepository:
         except Exception:  # pragma: no cover
             log.exception("EntryRepository.persist failed")
             return
-        from whooing_tui import p4_sync
-        p4_sync.submit_db_to_p4(
+        from whooing_tui import sync
+        sync.submit_db(
             tui_data.db_path(),
-            p4_sync.describe_annotation(
+            sync.describe_annotation(
                 entry_id=str(entry_id),
                 memo_changed=bool(memo),
                 tags=list(tags or []),
@@ -196,8 +196,8 @@ class EntryRepository:
         except Exception:  # pragma: no cover
             log.exception("EntryRepository.migrate_local failed")
             return
-        from whooing_tui import p4_sync
-        p4_sync.submit_db_to_p4(
+        from whooing_tui import sync
+        sync.submit_db(
             tui_data.db_path(),
             f"[whooing-tui] entry {old_entry_id}→{new_entry_id} 로컬 메타 "
             f"재키잉 (복원)",
@@ -226,11 +226,11 @@ class EntryRepository:
         except Exception:  # pragma: no cover
             log.exception("EntryRepository.purge failed")
             return
-        from whooing_tui import p4_sync
+        from whooing_tui import sync
         paths = [tui_data.db_path(), *deleted_files]
-        p4_sync.submit_files_to_p4(
+        sync.submit_files(
             paths,
-            p4_sync.describe_annotation(
+            sync.describe_annotation(
                 entry_id=str(entry_id),
                 memo_changed=False, tags=None, deleted=True,
             ),

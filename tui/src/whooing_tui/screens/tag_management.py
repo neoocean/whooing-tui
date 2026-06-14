@@ -235,9 +235,9 @@ class TagManagementScreen(MenuBarMixin, ModalScreen[None]):
             self._set_status(f"이름 변경 실패: {ex}", error=True)
             return
         # P4 자동 submit.
-        from whooing_tui import p4_sync
+        from whooing_tui import sync
         scope = f" section={self.section_id}" if self.section_id else ""
-        p4_sync.submit_db_to_p4(
+        sync.submit_db(
             tui_data.db_path(),
             f"[whooing-tui] hashtag rename {old} → {new}{scope}: "
             f"renamed={result['renamed']} merged={result['merged_into_existing']}",
@@ -298,8 +298,8 @@ class TagManagementScreen(MenuBarMixin, ModalScreen[None]):
         except Exception as ex:
             self._set_status(f"삭제 실패: {ex}", error=True)
             return
-        from whooing_tui import p4_sync
-        p4_sync.submit_db_to_p4(
+        from whooing_tui import sync
+        sync.submit_db(
             tui_data.db_path(),
             f"[whooing-tui] hashtag delete {tag}{scope}: {deleted} rows",
         )
@@ -346,10 +346,10 @@ class TagManagementScreen(MenuBarMixin, ModalScreen[None]):
         except Exception as ex:
             self._set_status(f"색 설정 실패: {ex}", error=True)
             return
-        from whooing_tui import p4_sync
+        from whooing_tui import sync
         scope = f" section={self.section_id}" if self.section_id else ""
         action = "set" if new else "clear"
-        p4_sync.submit_db_to_p4(
+        sync.submit_db(
             tui_data.db_path(),
             f"[whooing-tui] tag {tag} color {action} {new or ''}{scope}",
         )

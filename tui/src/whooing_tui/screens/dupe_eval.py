@@ -448,10 +448,17 @@ class DuplicateEvalScreen(ModalScreen[bool | None]):
         """fallback — delete_callback 없이 client 만 사용. 실패한 eid 모음."""
         deleted = 0
         failed: list[str] = []
+        # 감사 §3-D: 평가 대상 entry 의 날짜를 알고 있으므로 넘겨 해당
+        # 윈도우만 캐시 무효화.
+        date_by_id = {
+            str(e.get("entry_id") or ""): (e.get("entry_date") or None)
+            for e in self._entries
+        }
         for eid in entry_ids:
             try:
                 await self._client.delete_entry(
                     section_id=self._session.section_id, entry_id=eid,
+                    entry_date=date_by_id.get(eid),
                 )
                 deleted += 1
             except ToolError as e:

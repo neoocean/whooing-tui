@@ -206,6 +206,62 @@ async def test_create_entry_outside_window_keeps_cache():
 
 
 @respx.mock
+async def test_delete_entry_invalidates_only_matching_window():
+    """감사 3-D: delete 가 entry_date 를 넘기면 그 날짜를 포함하는 윈도우만
+    무효화 — bulk dedup 이 캐시 전체를 매번 폭파하던 것을 방지."""
+    respx.get("https://whooing.com/api/entries.json").mock(
+        return_value=Response(
+            200, json={"code": 200, "results": {"reports": [], "rows": []}},
+        )
+    )
+    # delete 는 공식 MCP 위임 — 성공 응답.
+    respx.post("https://whooing.com/mcp").mock(
+        return_value=Response(
+            200,
+            json={
+                "jsonrpc": "2.0", "id": 1,
+                "result": {"structuredContent": {"deleted": True}},
+            },
+        )
+    )
+    cc, store = _make_cached()
+    # 두 윈도우 캐시: 5월 / 6월.
+    await cc.list_entries("s1", "20260501", "20260510")
+    await cc.list_entries("s1", "20260601", "20260610")
+    assert store.stats()["entries_rows"] == 2
+    # 5월 거래 삭제 — 5월 윈도우만 무효화, 6월 윈도우 유지.
+    await cc.delete_entry(
+        section_id="s1", entry_id="e1", entry_date="20260505",
+    )
+    assert store.stats()["entries_rows"] == 1
+
+
+@respx.mock
+async def test_delete_entry_without_date_clears_section():
+    """감사 3-D: 날짜 미제공이면 종전대로 섹션 전체 무효화 (안전한 기본값)."""
+    respx.get("https://whooing.com/api/entries.json").mock(
+        return_value=Response(
+            200, json={"code": 200, "results": {"reports": [], "rows": []}},
+        )
+    )
+    respx.post("https://whooing.com/mcp").mock(
+        return_value=Response(
+            200,
+            json={
+                "jsonrpc": "2.0", "id": 1,
+                "result": {"structuredContent": {"deleted": True}},
+            },
+        )
+    )
+    cc, store = _make_cached()
+    await cc.list_entries("s1", "20260501", "20260510")
+    await cc.list_entries("s1", "20260601", "20260610")
+    assert store.stats()["entries_rows"] == 2
+    await cc.delete_entry(section_id="s1", entry_id="e1")
+    assert store.stats()["entries_rows"] == 0
+
+
+@respx.mock
 async def test_invalidate_section_clears_both_accounts_and_entries():
     respx.get("https://whooing.com/api/accounts.json").mock(
         return_value=Response(200, json={"code": 200, "results": {"assets": []}}),

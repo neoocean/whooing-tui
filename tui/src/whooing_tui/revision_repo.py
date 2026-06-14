@@ -232,17 +232,17 @@ class EntryRevisionRepository:
         self, op: str, logical_id: str, entry_id: str | None,
         revision_no: int | None, summary: str | None,
     ) -> None:
-        from whooing_tui import p4_sync
+        from whooing_tui import sync
         try:
-            p4_sync.submit_db_to_p4(
+            sync.submit_db(
                 tui_data.db_path(),
-                p4_sync.describe_revision(
+                sync.describe_revision(
                     op=op, logical_id=logical_id, entry_id=entry_id,
                     revision_no=revision_no, summary=summary,
                 ),
             )
         except Exception:  # pragma: no cover
-            log.debug("revision P4 submit enqueue failed (silent)", exc_info=True)
+            log.debug("revision sync submit enqueue failed (silent)", exc_info=True)
 
 
 __all__ = ["EntryRevisionRepository"]

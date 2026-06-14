@@ -470,7 +470,9 @@ async def test_startup_check_dismisses_false_when_outdated(monkeypatch, tmp_path
     )
     fake_p4.chmod(0o755)
     monkeypatch.setenv("WHOOING_P4_BIN", str(fake_p4))
-    # DATA_DIR 은 set 하지 않음 (set 하면 startup check 가 통째 skip).
+    # 동기화 백엔드를 p4 로 opt-in — 기본 'none' 이면 startup check 가 통째 skip.
+    monkeypatch.setenv("WHOOING_SYNC_BACKEND", "p4")
+    # DATA_DIR 은 set 하지 않음 (startup check 가 db_path 를 실제 검사하도록).
     monkeypatch.delenv("WHOOING_DATA_DIR", raising=False)
     # db_path() 를 존재하는 tmp 파일로 — 기본 user dir 은 CI 등에서 부재할
     # 수 있고, is_outdated_vs_p4 의 `p4 sync -n` 이 cwd=db.parent 로 실행되어

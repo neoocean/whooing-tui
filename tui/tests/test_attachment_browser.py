@@ -116,9 +116,12 @@ def p4_spy(monkeypatch):
             "on_complete": on_complete,
         })
 
-    from whooing_tui import p4_sync
+    from whooing_tui import p4_sync, sync
     monkeypatch.setattr(p4_sync, "submit_files_to_p4", _fake)
-    return calls
+    # sync facade 가 p4 백엔드로 위임하도록 opt-in — 기본은 'none'(no-op).
+    sync.configure("p4")
+    yield calls
+    sync.reset()
 
 
 def test_add_attachment_submits_db_and_file_to_p4(isolated, src_file, p4_spy):

@@ -22,6 +22,11 @@ def _isolated_user_state(monkeypatch, tmp_path):
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "xdg"))
     monkeypatch.setenv("WHOOING_DATA_DIR", str(tmp_path / "whooing"))
     monkeypatch.delenv("WHOOING_SECTION_ID", raising=False)
+    # 동기화 백엔드는 테스트에서 항상 'none' (env 가 config 보다 우선) — 개발
+    # 머신의 실 `tui/whooing-tui.toml`(backend="p4")이 테스트에 새지 않도록.
+    # P4 동작을 검사하는 테스트는 sync.configure("p4") 또는 이 env 를 직접
+    # 덮어써 opt-in 한다.
+    monkeypatch.setenv("WHOOING_SYNC_BACKEND", "none")
     yield
 
 
@@ -38,7 +43,10 @@ def _isolate_p4_pending():
     """
     # 시작 전 — 이전 테스트의 잔여 thread + dirty 플래그 정리.
     try:
-        from whooing_tui import p4_sync
+        from whooing_tui import p4_sync, sync
+        # 동기화 백엔드 명시 설정도 격리 — 기본 'none'(env-only 해석)로 복귀.
+        # P4 동작을 검사하는 테스트는 자체적으로 backend='p4' 를 opt-in.
+        sync.reset()
         # 빠르게 join (default 30s 는 너무 길어 명시 1s).
         p4_sync.wait_for_pending(timeout_per_thread=1.0)
         with p4_sync._PENDING_LOCK:
@@ -53,10 +61,11 @@ def _isolate_p4_pending():
     yield
     # 종료 후 — 이 테스트가 spawn 한 thread 정리.
     try:
-        from whooing_tui import p4_sync
+        from whooing_tui import p4_sync, sync
         p4_sync.wait_for_pending(timeout_per_thread=1.0)
         with p4_sync._PENDING_LOCK:
             p4_sync._PENDING.clear()
         p4_sync.reset_session_mutated()
+        sync.reset()
     except Exception:  # pragma: no cover
         pass

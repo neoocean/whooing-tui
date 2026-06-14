@@ -409,10 +409,10 @@ class ReceiptAttachScreen(Screen):
                     conn, entry_id, list(tags or []),
                     section_id=section_id or None,
                 )
-            from whooing_tui import p4_sync
-            p4_sync.submit_db_to_p4(
+            from whooing_tui import sync
+            sync.submit_db(
                 tui_data.db_path(),
-                p4_sync.describe_annotation(
+                sync.describe_annotation(
                     entry_id=entry_id,
                     memo_changed=bool(memo),
                     tags=list(tags or []),

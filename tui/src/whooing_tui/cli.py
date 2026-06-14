@@ -298,7 +298,7 @@ async def _cmd_gc_attachments(args: argparse.Namespace) -> int:
     from datetime import datetime, timedelta
     from whooing_core import attachments as core_attach
     from whooing_tui import data as tui_data
-    from whooing_tui import p4_sync
+    from whooing_tui import sync
     from whooing_tui.auth import load_auth_from_env
     from whooing_tui.client import WhooingClient
 
@@ -352,9 +352,9 @@ async def _cmd_gc_attachments(args: argparse.Namespace) -> int:
     if len(result["orphans"]) > 10:
         print(f"  ... +{len(result['orphans']) - 10} more")
 
-    # 4. P4 submit (실 삭제 시만).
+    # 4. 동기화 submit (실 삭제 시만, 백엔드 활성 시). 'none' 이면 no-op.
     if not args.dry_run and result["rows_deleted"] > 0:
-        p4_sync.submit_files_to_p4(
+        sync.submit_files(
             [tui_data.db_path(), *deleted_paths],
             f"[whooing-tui] gc-attachments: orphan {result['rows_deleted']} rows + "
             f"{result['files_deleted']} files (section={section_id})",
@@ -458,6 +458,15 @@ def main(argv: list[str] | None = None) -> int:
     parser = _build_parser()
     args = parser.parse_args(argv)
     _setup_logging(args.verbose)
+
+    # 동기화 백엔드 결정 (env > config > 기본 'none'). 서브커맨드의 sync
+    # 호출(gc-attachments 등)이 본 설정을 따른다. TUI 경로는 app.on_mount
+    # 가 다시 configure 하지만 idempotent.
+    try:
+        from whooing_tui import sync
+        sync.configure(sync.resolve(load_config()))
+    except Exception:  # pragma: no cover
+        log.debug("sync backend 결정 실패 — 기본(none)", exc_info=True)
 
     # No subcommand → TUI launch.
     if args.command is None:

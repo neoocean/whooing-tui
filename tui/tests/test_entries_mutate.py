@@ -84,7 +84,9 @@ class FakeClient:
                 return e
         return {}
 
-    async def delete_entry(self, *, section_id, entry_id) -> dict[str, Any]:
+    async def delete_entry(
+        self, *, section_id, entry_id, entry_date=None,
+    ) -> dict[str, Any]:
         if self.delete_error is not None:
             raise self.delete_error
         self.delete_calls.append({"section_id": section_id, "entry_id": entry_id})
@@ -726,6 +728,41 @@ async def test_clear_filter_bumps_epoch_and_clears_extras():
         assert es._filter_epoch == after_epoch + 1
         assert es._filter_extra == []
         assert es._active_filter is None
+
+
+def test_merge_desc_keeps_sorted_order():
+    """감사 3-E: 정렬된 두 리스트를 desc 정렬 유지하며 병합."""
+    from whooing_tui.screens.entries import EntriesScreen
+    a = [
+        {"entry_id": "e3", "entry_date": "20260610"},
+        {"entry_id": "e2", "entry_date": "20260520"},
+    ]
+    b = [
+        {"entry_id": "e4", "entry_date": "20260601"},  # a 사이에 끼어듦.
+        {"entry_id": "e1", "entry_date": "20260101"},  # 맨 끝.
+    ]
+    out = EntriesScreen._merge_desc(a, b)
+    dates = [e["entry_date"] for e in out]
+    assert dates == ["20260610", "20260601", "20260520", "20260101"]
+    # 입력 리스트는 변형하지 않음 (새 리스트 반환).
+    assert len(a) == 2 and len(b) == 2
+
+
+def test_merge_desc_empty_inputs():
+    from whooing_tui.screens.entries import EntriesScreen
+    a = [{"entry_id": "e1", "entry_date": "20260101"}]
+    assert EntriesScreen._merge_desc(a, []) == a
+    assert EntriesScreen._merge_desc([], a) == a
+    assert EntriesScreen._merge_desc([], []) == []
+
+
+def test_merge_desc_tie_breaks_by_entry_id():
+    """같은 날짜는 entry_id 로 안정 정렬 (desc)."""
+    from whooing_tui.screens.entries import EntriesScreen
+    a = [{"entry_id": "e9", "entry_date": "20260101"}]
+    b = [{"entry_id": "e1", "entry_date": "20260101"}]
+    out = EntriesScreen._merge_desc(a, b)
+    assert [e["entry_id"] for e in out] == ["e9", "e1"]
 
 
 def test_yesterday_of_helper():

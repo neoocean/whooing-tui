@@ -5,6 +5,48 @@
 > **0.17.x 이전** (CL #51119 ~ #1) 항목은 분량 정리 차원에서
 > [`CHANGELOG-archive-0.17.md`](./CHANGELOG-archive-0.17.md) 로 분리 보존.
 
+## 0.85.0 — 동기화 백엔드 분리(opt-in) + 성능 잔여 (2026-06-13)
+
+### 동기화 백엔드를 facade 로 분리 — P4 는 이제 opt-in (사용자 요청)
+
+Perforce 를 일상에서 쓸 수 있는 사용자가 적어, **모든 P4 지원을 코어에서
+분리**하고 설정으로 켜고 끄게 했다. 코어(app/data/repository/revision_repo/
+screens/cli)는 새 **`sync.py` facade** 만 호출하고 `p4_sync` 를 직접 import
+하지 않는다.
+
+- **백엔드 선택**: `[sync] backend = "none" | "p4"` (또는 env
+  `WHOOING_SYNC_BACKEND`, env 우선). **기본 `none`** — 미설정 시 P4 완전 무시.
+  auto-detect 안 함(p4 가 우연히 설치돼 있어도 명시 opt-in 전엔 안 켜짐).
+- **`none` 이면 완전 무시**: 시작 시 P4 검사 splash 안 뜸, 종료 시 flush 없음,
+  mutation 후 submit·알림 전부 no-op. 단일 기계 로컬 사용은 100% 정상.
+- **`p4` 면 종전과 동일**: `sync.*` 가 `p4_sync` 로 위임 — 시작 sync/검사,
+  종료 flush, mutation enqueue 모두 기존 동작.
+- 종전 `WHOOING_DATA_DIR` 가 겸하던 "P4 skip" 역할을 제거 — 그 env 는 이제
+  데이터 격리만 담당하고, P4 활성 여부는 백엔드 설정으로만 결정.
+- 새 백엔드(예: folder)는 facade 함수에 분기만 추가하면 되고 코어 호출부 불변.
+  (시나리오 [12](../docs/scenarios/12-no-perforce-and-multi-machine-sync.md) §0 참조.)
+
+### 성능 (감사 3-B/3-D/3-E)
+
+- **선택 toggle 타깃 재렌더** (3-B) — space 토글 / Shift-범위선택이 `_render_table`
+  로 전 N행을 재빌드하던 것을, 멤버십이 바뀐 row 만 `update_cell_at` 으로 갱신
+  (`_refresh_selection_display`). per-keystroke O(N)→O(Δ), Shift 홀드 O(N²)→O(N).
+- **삭제 선택적 캐시 무효화 확장** (3-D) — `delete_entry` 가 `entry_date` 를
+  넘기면 그 윈도우만 무효화(create 한정이던 2-E 를 delete 로 확대). dedup 일괄
+  삭제(`m`/스캔/평가)·단건 삭제 호출처에서 날짜 전달. update 는 날짜 변경 가능성
+  으로 섹션 전체 무효화 유지(보수적).
+- **필터 과거 확장 정렬 최적화** (3-E) — `_expand_filter_in_past` 가 step 마다
+  window 전체 재필터 + 누적 full-sort 하던 것을, window 필터는 루프 1회로 hoist
+  하고 누적은 정렬 유지 병합(`_merge_desc`, O(M+Δ))으로.
+
+### 외부입력(임시저장소) 메뉴 wiring (시나리오 14)
+
+- "입력" 메뉴에 `외부입력(임시저장소) 조회…` 항목 + `action_scan_outside`
+  추가 — `OutsideInboxScreen` 진입. 기능 모듈/테스트는 별도 제출(CL 58817:
+  `outside.py`, `screens/outside_inbox.py`, 시나리오 14). 본 마무리 CL 은
+  진입점만 포함 — `entries.py` 가 동기화 facade 변경과 같은 파일이라 함께
+  제출된다.
+
 ## 0.84.2 — 감사 잔여 항목 적용 (2026-06-12)
 
 내부/공개 감사의 잔여 백로그를 순차 적용.

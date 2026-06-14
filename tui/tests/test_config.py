@@ -17,12 +17,16 @@ def _reset_cache():
 
 
 def test_default_when_no_file(tmp_path, monkeypatch):
-    # 후보 경로 모두 존재하지 않게 강제
-    monkeypatch.setenv("WHOOING_TUI_CONFIG", str(tmp_path / "missing.toml"))
+    # 후보 경로 모두 존재하지 않게 강제 — 개발 머신의 실 project-root
+    # `tui/whooing-tui.toml` 로 fall-through 하지 않도록 후보 목록 자체를 격리.
+    monkeypatch.setattr(
+        config_mod, "_candidate_paths", lambda: [tmp_path / "missing.toml"],
+    )
     cfg = config_mod.load_config(force_reload=True)
     assert cfg.theme == "textual-dark"
     assert cfg.entries_page_size == 50
     assert cfg.default_window_days == 30
+    assert cfg.sync_backend == "none"
 
 
 def test_full_override(tmp_path, monkeypatch):

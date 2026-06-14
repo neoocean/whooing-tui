@@ -34,3 +34,11 @@ enabled = true
 accounts_ttl_sec = 3600
 # entries 캐시 TTL — mutation 가능성이 있어 짧게.
 entries_ttl_sec = 300
+
+[sync]
+# 머신 간 로컬 데이터(메모/태그/첨부/수정이력) 동기화 백엔드.
+#   "none" (기본) — 동기화 안 함. P4 등 모든 동기화 기능 완전 무시.
+#                   단일 기계 로컬 사용은 100% 정상. 대부분의 사용자는 이대로.
+#   "p4"          — Perforce 자동 submit/sync (p4 CLI + workspace 필요).
+# 환경변수 WHOOING_SYNC_BACKEND 가 있으면 그쪽이 우선한다.
+backend = "none"

@@ -14,6 +14,13 @@
 
   [entries]
   default_window_days = 30
+
+  [sync]
+  # 머신 간 로컬 데이터(메모/태그/첨부) 동기화 백엔드.
+  #   "none" (기본) — 동기화 안 함. P4 등 모든 동기화 기능 완전 무시.
+  #   "p4"          — Perforce 자동 submit/sync (p4 CLI + workspace 필요).
+  # 환경변수 WHOOING_SYNC_BACKEND 가 있으면 그쪽이 우선한다.
+  backend = "none"
 """
 
 from __future__ import annotations
@@ -39,12 +46,16 @@ class Config:
     cache_enabled: bool = True
     cache_accounts_ttl_sec: int = 3600
     cache_entries_ttl_sec: int = 300
+    # 동기화 백엔드 — `[sync] backend`. 기본 "none"(동기화 안 함). "p4" 면
+    # Perforce. env WHOOING_SYNC_BACKEND 가 우선(해석은 sync.resolve()).
+    sync_backend: str = "none"
 
     @classmethod
     def from_dict(cls, data: dict) -> "Config":
         ui = data.get("ui") or {}
         en = data.get("entries") or {}
         ca = data.get("cache") or {}
+        sy = data.get("sync") or {}
         return cls(
             theme=str(ui.get("theme") or "textual-dark"),
             entries_page_size=int(ui.get("entries_page_size") or 50),
@@ -53,6 +64,7 @@ class Config:
             cache_enabled=bool(ca.get("enabled", True)),
             cache_accounts_ttl_sec=int(ca.get("accounts_ttl_sec") or 3600),
             cache_entries_ttl_sec=int(ca.get("entries_ttl_sec") or 300),
+            sync_backend=str(sy.get("backend") or "none").strip().lower(),
         )
 
 
