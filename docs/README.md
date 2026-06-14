@@ -27,6 +27,7 @@
 | 11 | [거래 수정 이력·소프트 삭제·복원](scenarios/11-edit-history-and-soft-delete.md) | `e`/`d`/`H` + 휴지통 | `revision_repo.py`, `core/revisions.py`, `screens/trash.py`, `screens/revision_history.py` |
 | 12 | [Perforce 없는 환경·외부 SCM 없이 다중 기계 동기화](scenarios/12-no-perforce-and-multi-machine-sync.md) | (설계 문서) env `WHOOING_DATA_DIR` | `p4_sync.py`, `data.py`, `config.py` |
 | 13 | [반복 거래 누락 탐지](scenarios/13-recurring-omission-detection.md) | 입력 메뉴 → 반복 거래 누락 검사 | `core/recurring.py`, `screens/recurring_scan.py`, `recurring_scan_repo.py` |
+| 14 | [외부입력(임시저장소) 조회·확정](scenarios/14-external-input-staging.md) | 입력 메뉴 → 외부입력 조회 (Enter/c 입력 · d 삭제) | `outside.py`, `screens/outside_inbox.py` (메뉴 wiring 은 0.85.0 후 정식 배선) |
 
 ## 부속 문서
 
