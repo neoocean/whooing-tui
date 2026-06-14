@@ -542,6 +542,8 @@ class AttachmentBrowserScreen(ModalScreen[None]):
         # CL #51143+ (A9): note 사후 편집 — 'e' (edit note).
         *bind_ko("e", "edit_note", "Note 편집"),
         *bind_ko("r", "refresh", "새로고침"),
+        # 후잉 서버 첨부(거래의 attachments[])를 받아 로컬로 가져오기.
+        *bind_ko("i", "import_server", "후잉 첨부 가져오기"),
     ]
 
     DEFAULT_CSS = """
@@ -569,10 +571,18 @@ class AttachmentBrowserScreen(ModalScreen[None]):
     }
     """
 
-    def __init__(self, entry_id: str, section_id: str | None = None) -> None:
+    def __init__(
+        self,
+        entry_id: str,
+        section_id: str | None = None,
+        *,
+        server_attachments: list[dict[str, Any]] | None = None,
+    ) -> None:
         super().__init__()
         self.entry_id = entry_id
         self.section_id = section_id
+        # 후잉 거래의 attachments[](서버 첨부 메타) — `i` 로 로컬에 가져오기.
+        self.server_attachments = list(server_attachments or [])
 
     def compose(self) -> ComposeResult:
         with Vertical(id="ab_frame"):
@@ -611,7 +621,74 @@ class AttachmentBrowserScreen(ModalScreen[None]):
                 "\n   • [b]p[/b] 키 — 절대 경로 직접 입력"
                 "\n   • [b]cmd+v[/b] — 파일 경로를 paste 하면 자동 첨부"
             )
+        from whooing_tui import server_attachments as _srv
+        pending = _srv.pending_imports(self.server_attachments, rows)
+        if pending:
+            names = ", ".join((a.get("filename") or "?") for a in pending[:3])
+            more = f" 외 {len(pending) - 3}" if len(pending) > 3 else ""
+            msg += (
+                f"\n📥 후잉 서버 첨부 {len(pending)}개 가져올 수 있음 "
+                f"([b]i[/b] 키): {names}{more}"
+            )
         self.query_one("#ab_status", Static).update(msg)
+
+    @work(exclusive=True, group="attach", name="import_server")
+    async def action_import_server(self) -> None:
+        """후잉 서버 첨부(거래의 attachments[])를 받아 로컬 첨부로 저장.
+
+        `src`(static.whooing.com/get/<uuid>)를 다운로드해 임시파일로 쓴 뒤
+        `add_attachment` 로 로컬 store(sqlite + attachment/ + sha256 dedup + P4)
+        에 넣는다. 이미 같은 파일명이 로컬에 있으면 건너뛴다. uuid 가
+        capability 라 인증 불필요지만 토큰이 있으면 붙인다.
+        """
+        import os
+        import tempfile
+
+        from whooing_tui import server_attachments as srv
+
+        local = list_for(self.entry_id, section_id=self.section_id)
+        pending = srv.pending_imports(self.server_attachments, local)
+        if not pending:
+            self.query_one("#ab_status", Static).update(
+                f"Entry {self.entry_id} — 가져올 후잉 서버 첨부가 없습니다."
+            )
+            return
+
+        token = None
+        try:
+            token = self.app._client.auth.token  # type: ignore[attr-defined]
+        except Exception:  # pragma: no cover — 토큰 없어도 다운로드 됨
+            token = None
+
+        ok = 0
+        errs: list[str] = []
+        for a in pending:
+            fn = (a.get("filename") or a.get("uuid") or "attachment").strip()
+            self.query_one("#ab_status", Static).update(
+                f"📥 가져오는 중… {fn} ({ok + 1}/{len(pending)})"
+            )
+            try:
+                data = await srv.download(a["src"], token=token)
+                tmpdir = tempfile.mkdtemp(prefix="whooing-srv-")
+                path = os.path.join(tmpdir, fn)
+                with open(path, "wb") as f:
+                    f.write(data)
+                add_attachment(
+                    entry_id=self.entry_id,
+                    src_path=path,
+                    note=f"후잉 서버 첨부 (uuid {str(a.get('uuid') or '')[:10]})",
+                    section_id=self.section_id,
+                )
+                ok += 1
+            except Exception as e:  # noqa: BLE001
+                log.exception("server attachment import failed: %s", fn)
+                errs.append(f"{fn}: {e}")
+
+        self.action_refresh()
+        tail = f" · 실패 {len(errs)}: {'; '.join(errs)[:120]}" if errs else ""
+        self.query_one("#ab_status", Static).update(
+            f"✅ 후잉 서버 첨부 {ok}개 가져옴{tail}"
+        )
 
     @work(exclusive=True, group="attach", name="add")
     async def action_add(self) -> None:

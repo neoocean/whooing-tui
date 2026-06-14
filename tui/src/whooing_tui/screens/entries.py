@@ -1350,6 +1350,8 @@ class EntriesScreen(ScanMixin, MenuBarMixin, Screen):
             AttachmentBrowserScreen(
                 entry_id=str(eid),
                 section_id=session.section_id,
+                # 후잉 거래에 달린 서버 첨부 메타 — `i` 로 로컬에 가져오기.
+                server_attachments=target.get("attachments") or [],
             ),
         )
 

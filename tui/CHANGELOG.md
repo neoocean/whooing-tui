@@ -5,6 +5,21 @@
 > **0.17.x 이전** (CL #51119 ~ #1) 항목은 분량 정리 차원에서
 > [`CHANGELOG-archive-0.17.md`](./CHANGELOG-archive-0.17.md) 로 분리 보존.
 
+## 0.85.1 — 후잉 서버 첨부 가져오기 (2026-06-14)
+
+후잉 거래에 달린 **서버 첨부**(`attachments[].src` = `static.whooing.com/get/
+<uuid>`)를 받아 whooing-tui **로컬 첨부**(sqlite + `attachment/` + sha256 dedup
++ P4)로 가져온다. 첨부 브라우저(`f`)에서 **`i` 키**.
+
+- `server_attachments.py` (신규): `download(src, token=)` — uuid 가 capability
+  라 인증 불필요(토큰 있으면 X-API-Key) + `pending_imports`(이미 로컬에 있는
+  같은 filename 제외 → 재실행해도 중복 안 만듦).
+- `AttachmentBrowserScreen`: `i` = `action_import_server` worker — 서버 첨부 중
+  로컬에 없는 것만 다운로드 → 임시파일 → `add_attachment`. 상태줄에 가져올 수
+  있는 개수/이름 표시.
+- `entries.py`: 첨부 화면 진입 시 거래의 `attachments[]` 메타 전달.
+- 테스트 +8 (`test_server_attachments.py`, `test_attachment_import.py`).
+
 ## 0.85.0 — 동기화 백엔드 분리(opt-in) + 성능 잔여 (2026-06-13)
 
 ### 동기화 백엔드를 facade 로 분리 — P4 는 이제 opt-in (사용자 요청)
