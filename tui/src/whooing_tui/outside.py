@@ -29,8 +29,8 @@ log = logging.getLogger(__name__)
 DEFAULT_BASE = "https://whooing.com/api"
 DEFAULT_TIMEOUT = 20.0
 
-# 한 번에 받는 임시저장소 페이지 크기(웹 UI 와 동일하게 ~100 가정).
-PAGE_SAFE_MAX = 100
+# 페이지네이션 무한루프 방지 상한(서버 페이지 크기는 ~10).
+MAX_PAGES = 500
 
 
 class OutsideError(Exception):
@@ -147,38 +147,53 @@ class OutsideClient:
         오버로드 POST: `rows=""` (빈 값 = 읽기). `omax_id` 에 직전 페이지의
         마지막 `out_id` 를 넣어 다음 페이지를 받는다(없으면 첫 페이지).
         """
-        body = await self._request(
-            "POST", "/entries/outside.json",
-            data={
-                "section_id": section_id,
-                "rows": "",          # 빈 값 = 조회(읽기)
-                "ids": "out_id",
-                "omax_id": omax_id,
-                "m": "n",
-            },
-        )
+        try:
+            body = await self._request(
+                "POST", "/entries/outside.json",
+                data={
+                    "section_id": section_id,
+                    "rows": "",          # 빈 값 = 조회(읽기)
+                    "ids": "out_id",
+                    "omax_id": omax_id,
+                    "m": "n",
+                },
+            )
+        except OutsideError as e:
+            # 임시저장소가 비었거나(첫 페이지) cursor 가 끝을 지나면 후잉이
+            # `400 "Some parameters are invalid." results:[]` 로 응답한다 →
+            # 에러가 아니라 "더 없음"(빈 페이지)으로 취급.
+            if "invalid" in str(e).lower():
+                return []
+            raise
         results = body.get("results") or {}
         outdata = results.get("outdata") or []
         return list(outdata) if isinstance(outdata, list) else []
 
     async def list_all(
-        self, section_id: str, *, max_pages: int = 50,
+        self, section_id: str, *, max_pages: int = MAX_PAGES,
     ) -> list[dict[str, Any]]:
         """임시저장소 전체를 페이지네이션으로 모아서 반환.
 
-        `out_id` 정렬 기준 마지막 id 를 `omax_id` 로 넘기며 한 페이지(~100)씩.
-        한 페이지가 PAGE_SAFE_MAX 미만이면 마지막 페이지로 보고 종료.
+        `out_id` 정렬 기준 마지막 id 를 `omax_id` 로 넘기며 한 페이지(~10)씩
+        받는다. 서버는 cursor 가 끝을 지나면 `400 "Some parameters are invalid"`
+        로 응답하므로, 이미 받은 게 있으면 그 400 을 *끝* 으로 보고 멈춘다
+        (첫 페이지부터 실패면 진짜 에러로 재발생).
         """
         acc: list[dict[str, Any]] = []
         seen: set[str] = set()
         omax = ""
         for _ in range(max_pages):
-            page = await self.list(section_id, omax_id=omax)
+            try:
+                page = await self.list(section_id, omax_id=omax)
+            except OutsideError:
+                if acc:
+                    break          # cursor 초과 = 더 없음
+                raise              # 첫 페이지부터 실패 = 진짜 에러
             fresh = [r for r in page if str(r.get("out_id")) not in seen]
             for r in fresh:
                 seen.add(str(r.get("out_id")))
             acc.extend(fresh)
-            if len(page) < PAGE_SAFE_MAX or not fresh:
+            if not fresh:          # 빈 페이지 / 전부 중복 = 끝
                 break
             omax = str(page[-1].get("out_id") or "")
             if not omax:

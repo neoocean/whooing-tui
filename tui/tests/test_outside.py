@@ -113,6 +113,31 @@ async def test_list_all_single_page_stops():
 
 
 @respx.mock
+async def test_list_all_paginates_until_cursor_400():
+    # 서버 페이지 크기 ~10 이라 omax_id 로 여러 페이지를 받아야 하고,
+    # cursor 가 끝을 지나면 code=400 으로 끝난다.
+    respx.post(f"{BASE}/entries/outside.json").mock(side_effect=[
+        Response(200, json={"code": 200, "results": {"outdata": [_row("1"), _row("2")]}}),
+        Response(200, json={"code": 200, "results": {"outdata": [_row("3"), _row("4")]}}),
+        Response(200, json={"code": 400, "message": "Some parameters are invalid."}),
+    ])
+    rows = await _client().list_all("s9046")
+    assert [r["out_id"] for r in rows] == ["1", "2", "3", "4"]
+
+
+@respx.mock
+async def test_list_all_first_page_error_raises():
+    respx.post(f"{BASE}/entries/outside.json").mock(
+        return_value=Response(200, json={"code": 401, "message": "auth"}),
+    )
+    try:
+        await _client().list_all("s9046")
+        assert False, "expected OutsideError"
+    except OutsideError:
+        pass
+
+
+@respx.mock
 async def test_confirm_posts_entries_and_del_ids():
     route = respx.post(f"{BASE}/entries.json").mock(
         return_value=Response(200, json={"code": 200, "results": {"cnt": 1}}),
@@ -144,6 +169,21 @@ async def test_empty_calls_empty_outside():
     )
     await _client().empty("s9046")
     assert _form(route.calls.last.request)["section_id"] == "s9046"
+
+
+@respx.mock
+async def test_empty_staging_returns_empty():
+    # 빈 임시저장소는 400 "Some parameters are invalid." results:[] 로 응답 →
+    # 에러가 아니라 빈 목록으로.
+    respx.post(f"{BASE}/entries/outside.json").mock(
+        return_value=Response(
+            200,
+            json={"code": 400, "message": "Some parameters are invalid.",
+                  "results": []},
+        ),
+    )
+    assert await _client().list("s9046") == []
+    assert await _client().list_all("s9046") == []
 
 
 @respx.mock
